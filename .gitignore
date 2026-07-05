@@ -1,5 +1,8 @@
 /data/
 
+# Extracted Tyrian 2.1 game data
+/tyrian21/
+
 opentyrian.cfg
 tyrian.cfg
 tyrian.sav
@@ -34,3 +37,7 @@ tyrian.sav
 
 # Doxygen output
 /doc/doxygen/
+
+# Generated HD asset preview (regenerate via tools/hd_extract.py)
+/tools/title_preview.png
+/doc/remaster_title_verified.png

@@ -3270,6 +3270,13 @@ bool titleScreen(void)
 
 			JE_loadPic(VGAScreen, 4, false);
 
+			if (hd_mode)
+			{
+				JE_clr256(VGAScreen);  // wipe the classic backdrop to index 0 (transparent); keep colors[] palette
+				hd_title_active = true;
+				hd_title_fade = 0;
+			}
+
 			drawFontHvShadow(VGAScreen, 2, 192, opentyrian_version, FONT_SMALL, 15, 0, false, 1);
 
 			if (moveTyrianLogoUp)
@@ -3278,7 +3285,19 @@ bool titleScreen(void)
 
 				blit_sprite(VGAScreenSeg, 11, 62, PLANET_SHAPES, 146); // tyrian logo
 
-				fade_palette(colors, 10, 0, 255 - 16);
+				if (hd_mode)
+				{
+					set_palette(colors, 0, 255);  // set live palette to full immediately (overlay colors correct)
+					for (int s = 1; s <= 10; ++s)
+					{
+						setFrameCount(1);
+						hd_title_fade = 255 * s / 10;
+						JE_showVGA();
+						waitUntilElapsed();
+					}
+				}
+				else
+					fade_palette(colors, 10, 0, 255 - 16);
 
 				for (int y = 60; y >= 4; y -= 2)
 				{
@@ -3299,7 +3318,19 @@ bool titleScreen(void)
 			{
 				blit_sprite(VGAScreenSeg, 11, 4, PLANET_SHAPES, 146); // tyrian logo
 
-				fade_palette(colors, 10, 0, 255 - 16);
+				if (hd_mode)
+				{
+					set_palette(colors, 0, 255);  // set live palette to full immediately (overlay colors correct)
+					for (int s = 1; s <= 10; ++s)
+					{
+						setFrameCount(1);
+						hd_title_fade = 255 * s / 10;
+						JE_showVGA();
+						waitUntilElapsed();
+					}
+				}
+				else
+					fade_palette(colors, 10, 0, 255 - 16);
 			}
 
 			// Draw menu items.
@@ -3323,7 +3354,10 @@ bool titleScreen(void)
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
 			// Fade in menu items.
-			fade_palette(colors, 20, 255 - 16 + 1, 255);
+			if (hd_mode)
+				set_palette(colors, 255 - 16 + 1, 255);
+			else
+				fade_palette(colors, 20, 255 - 16 + 1, 255);
 
 			restart = false;
 		}
@@ -3347,6 +3381,7 @@ bool titleScreen(void)
 				fade_black(15);
 
 				play_demo = true;
+				hd_title_active = false;
 				return true;
 			}
 
@@ -3461,6 +3496,7 @@ bool titleScreen(void)
 						fade_black(10);
 
 						loadDestruct = true;
+						hd_title_active = false;
 						return true;
 					}
 					else if (i + 1 == SA_ENGAGE)
@@ -3471,6 +3507,7 @@ bool titleScreen(void)
 						set_colors((SDL_Color) { 0, 0, 0 }, 0, 255);
 
 						newSuperTyrianGame();
+						hd_title_active = false;
 						return true;
 					}
 					else
@@ -3478,7 +3515,10 @@ bool titleScreen(void)
 						fade_black(10);
 
 						if (newSuperArcadeGame(i))
+						{
+							hd_title_active = false;
 							return true;
+						}
 
 						restart = true;
 					}
@@ -3497,7 +3537,10 @@ bool titleScreen(void)
 				fade_black(15);
 
 				if (newGame())
+				{
+					hd_title_active = false;
 					return true;
+				}
 
 				restart = true;
 				break;
@@ -3507,7 +3550,10 @@ bool titleScreen(void)
 				fade_black(15);
 
 				if (JE_loadScreen())
+				{
+					hd_title_active = false;
 					return true;
+				}
 
 				restart = true;
 				break;
@@ -3544,12 +3590,14 @@ bool titleScreen(void)
 				fade_black(15);
 
 				play_demo = true;
+				hd_title_active = false;
 				return true;
 			}
 			case MENU_ITEM_QUIT:
 			{
 				fade_black(15);
 
+				hd_title_active = false;
 				return false;
 			}
 			default:
@@ -3561,6 +3609,7 @@ bool titleScreen(void)
 		{
 			fade_black(15);
 
+			hd_title_active = false;
 			return false;
 		}
 	}

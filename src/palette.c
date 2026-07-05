@@ -86,6 +86,12 @@ void set_colors(SDL_Color color, unsigned int first_color, unsigned int last_col
 	}
 }
 
+/** Returns the current live (post-fade) palette, as maintained by set_palette/step_fade_palette. */
+SDL_Color *get_live_palette(void)
+{
+	return palette;
+}
+
 void init_step_fade_palette(int diff[256][3], Palette colors, unsigned int first_color, unsigned int last_color)
 {
 	for (unsigned int i = first_color; i <= last_color; i++)

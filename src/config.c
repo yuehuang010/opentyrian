@@ -258,6 +258,7 @@ bool load_opentyrian_config(void)
 {
 	// defaults
 	fullscreen_display = -1;
+	hd_mode = true;
 	set_scaler_by_name("Scale2x");
 	memcpy(keySettings, defaultKeySettings, sizeof(keySettings));
 	
@@ -280,7 +281,9 @@ bool load_opentyrian_config(void)
 	if (section != NULL)
 	{
 		config_get_int_option(section, "fullscreen", &fullscreen_display);
-		
+
+		config_get_bool_option(section, "hd", &hd_mode);
+
 		const char *scaler;
 		if (config_get_string_option(section, "scaler", &scaler))
 			set_scaler_by_name(scaler);
@@ -321,7 +324,9 @@ bool save_opentyrian_config(void)
 		exit(EXIT_FAILURE);  // out of memory
 	
 	config_set_int_option(section, "fullscreen", fullscreen_display);
-	
+
+	config_set_bool_option(section, "hd", hd_mode, FALSE_TRUE);
+
 	config_set_string_option(section, "scaler", scalers[scaler].name);
 	
 	config_set_string_option(section, "scaling_mode", scaling_mode_names[scaling_mode]);

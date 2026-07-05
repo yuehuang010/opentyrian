@@ -39,6 +39,10 @@ extern const char *const scaling_mode_names[ScalingMode_MAX];
 extern int fullscreen_display; // -1 means windowed
 extern ScalingMode scaling_mode;
 
+extern bool hd_mode;          // master HD-remaster toggle
+extern bool hd_title_active;  // set while the title screen is showing
+extern int hd_title_fade;     // 0..255, drives the HD title fade-in
+
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;
 extern SDL_Surface *game_screen;
 extern SDL_Surface *VGAScreen2;

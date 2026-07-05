@@ -18,6 +18,7 @@
  */
 #include "video.h"
 
+#include "file.h"
 #include "keyboard.h"
 #include "opentyr.h"
 #include "palette.h"
@@ -40,6 +41,13 @@ int fullscreen_display;
 ScalingMode scaling_mode = SCALE_INTEGER;
 static SDL_Rect last_output_rect = { 0, 0, vga_width, vga_height };
 
+bool hd_mode = true;
+bool hd_title_active = false;
+int hd_title_fade = 0;
+
+static SDL_Texture *hd_title_texture = NULL;
+static bool hd_title_load_failed = false;
+
 SDL_Surface *VGAScreen, *VGAScreenSeg;
 SDL_Surface *VGAScreen2;
 SDL_Surface *game_screen;
@@ -60,6 +68,7 @@ static int window_get_display_index(void);
 static void window_center_in_display(int display_index);
 static void calc_dst_render_rect(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void scale_and_flip(SDL_Surface *);
+static bool load_hd_title(void);
 
 void init_video(void)
 {
@@ -90,7 +99,7 @@ void init_video(void)
 	// scaler and find the true window size
 	main_window = SDL_CreateWindow("OpenTyrian",
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-		vga_width, vga_height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+		vga_width, vga_height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_ALLOW_HIGHDPI);
 
 	if (main_window == NULL)
 	{
@@ -126,6 +135,8 @@ void deinit_video(void)
 
 static void init_renderer(void)
 {
+	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+
 	main_window_renderer = SDL_CreateRenderer(main_window, -1, 0);
 
 	if (main_window_renderer == NULL)
@@ -322,7 +333,7 @@ static void calc_dst_render_rect(SDL_Surface *const src_surface, SDL_Rect *const
 	// in the window.
 
 	int win_w, win_h;
-	SDL_GetWindowSize(main_window, &win_w, &win_h);
+	SDL_GetRendererOutputSize(main_window_renderer, &win_w, &win_h);
 
 	int maxh_width, maxw_height;
 
@@ -379,9 +390,114 @@ static void calc_dst_render_rect(SDL_Surface *const src_surface, SDL_Rect *const
 	dst_rect->y = (win_h - dst_rect->h) / 2;
 }
 
+/**
+ * Lazily loads the HD title backdrop asset ("hdtitle.dat") into hd_title_texture.
+ * Returns true if the texture is ready to use. Missing/malformed assets degrade
+ * gracefully (HD compositing is simply skipped) rather than crashing; the warning
+ * is only ever printed once.
+ */
+static bool load_hd_title(void)
+{
+	if (hd_title_texture != NULL)
+		return true;
+
+	if (hd_title_load_failed)
+		return false;
+
+	bool ok = false;
+
+	FILE *f = dir_fopen(data_dir(), "hdtitle.dat", "rb");
+	if (f != NULL)
+	{
+		Uint8 magic[4];
+		Uint8 dims[8];
+		Uint8 *pixels = NULL;
+
+		if (fread(magic, 1, 4, f) == 4 &&
+		    memcmp(magic, "HDPX", 4) == 0 &&
+		    fread(dims, 1, 8, f) == 8)
+		{
+			Uint32 width, height;
+			memcpy(&width, &dims[0], 4);
+			memcpy(&height, &dims[4], 4);
+			width = SDL_SwapLE32(width);
+			height = SDL_SwapLE32(height);
+
+			if (width > 0 && height > 0 && width <= 8192 && height <= 8192)
+			{
+				size_t pixel_bytes = (size_t)width * height * 4;
+				pixels = malloc(pixel_bytes);
+
+				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
+				{
+					SDL_Texture *tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+						SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
+
+					if (tex != NULL)
+					{
+						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
+						{
+							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+							hd_title_texture = tex;
+							ok = true;
+						}
+						else
+						{
+							SDL_DestroyTexture(tex);
+						}
+					}
+				}
+			}
+		}
+
+		free(pixels);
+		fclose(f);
+	}
+
+	if (!ok)
+	{
+		fprintf(stderr, "warning: HD title asset unavailable; falling back\n");
+		hd_title_load_failed = true;
+	}
+
+	return ok;
+}
+
 static void scale_and_flip(SDL_Surface *src_surface)
 {
 	assert(src_surface->format->BitsPerPixel == 8);
+
+	if (hd_mode && hd_title_active && load_hd_title())
+	{
+		SDL_Rect dst_rect;
+		calc_dst_render_rect(src_surface, &dst_rect);
+
+		SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
+		SDL_RenderClear(main_window_renderer);
+
+		Uint8 f = (Uint8)(hd_title_fade < 0 ? 0 : hd_title_fade > 255 ? 255 : hd_title_fade);
+
+		// HD backdrop (behind)
+		SDL_SetTextureColorMod(hd_title_texture, f, f, f);
+		SDL_RenderCopy(main_window_renderer, hd_title_texture, NULL, &dst_rect);
+
+		// Indexed overlay (logo/version/menu) on top, with palette index 0 keyed transparent.
+		// src_surface is the 8-bit VGAScreen. Give it the live palette, key color 0, make a texture.
+		SDL_SetPaletteColors(src_surface->format->palette, get_live_palette(), 0, 256);
+		SDL_SetColorKey(src_surface, SDL_TRUE, 0);
+		SDL_Texture *overlay = SDL_CreateTextureFromSurface(main_window_renderer, src_surface);
+		SDL_SetColorKey(src_surface, SDL_FALSE, 0);
+		if (overlay != NULL)
+		{
+			SDL_SetTextureColorMod(overlay, f, f, f);
+			SDL_RenderCopy(main_window_renderer, overlay, NULL, &dst_rect);
+			SDL_DestroyTexture(overlay);
+		}
+
+		SDL_RenderPresent(main_window_renderer);
+		last_output_rect = dst_rect;
+		return;
+	}
 
 	// Do software scaling
 	assert(scaler_function != NULL);
@@ -400,23 +516,59 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	last_output_rect = dst_rect;
 }
 
+/**
+ * Fetches the window size (in POINTS) and renderer output size (in PIXELS) so that
+ * mouse coordinates (which SDL delivers in points) can be reconciled with
+ * last_output_rect (which is computed in the renderer's pixel space, see
+ * calc_dst_render_rect). Falls back to a 1:1 mapping if either size is unavailable
+ * (e.g. very early in startup).
+ */
+static void get_window_and_output_size(int *win_w, int *win_h, int *out_w, int *out_h)
+{
+	SDL_GetWindowSize(main_window, win_w, win_h);
+	SDL_GetRendererOutputSize(main_window_renderer, out_w, out_h);
+
+	if (*win_w <= 0 || *win_h <= 0 || *out_w <= 0 || *out_h <= 0)
+	{
+		*win_w = *win_h = *out_w = *out_h = 1;
+	}
+}
+
 /** Maps a specified point in game screen coordinates to window coordinates. */
 void mapScreenPointToWindow(Sint32 *const inout_x, Sint32 *const inout_y)
 {
-	*inout_x = (2 * *inout_x + 1) * last_output_rect.w / (2 * VGAScreen->w) + last_output_rect.x;
-	*inout_y = (2 * *inout_y + 1) * last_output_rect.h / (2 * VGAScreen->h) + last_output_rect.y;
+	int win_w, win_h, out_w, out_h;
+	get_window_and_output_size(&win_w, &win_h, &out_w, &out_h);
+
+	long px = (2L * *inout_x + 1) * last_output_rect.w / (2 * VGAScreen->w) + last_output_rect.x;
+	long py = (2L * *inout_y + 1) * last_output_rect.h / (2 * VGAScreen->h) + last_output_rect.y;
+
+	*inout_x = px * win_w / out_w;
+	*inout_y = py * win_h / out_h;
 }
 
 /** Maps a specified point in window coordinates to game screen coordinates. */
 void mapWindowPointToScreen(Sint32 *const inout_x, Sint32 *const inout_y)
 {
-	*inout_x = (2 * (*inout_x - last_output_rect.x) + 1) * VGAScreen->w / (2 * last_output_rect.w);
-	*inout_y = (2 * (*inout_y - last_output_rect.y) + 1) * VGAScreen->h / (2 * last_output_rect.h);
+	int win_w, win_h, out_w, out_h;
+	get_window_and_output_size(&win_w, &win_h, &out_w, &out_h);
+
+	long px = (long)*inout_x * out_w / win_w;
+	long py = (long)*inout_y * out_h / win_h;
+
+	*inout_x = (2 * (px - last_output_rect.x) + 1) * VGAScreen->w / (2 * last_output_rect.w);
+	*inout_y = (2 * (py - last_output_rect.y) + 1) * VGAScreen->h / (2 * last_output_rect.h);
 }
 
 /** Scales a distance in window coordinates to game screen coordinates. */
 void scaleWindowDistanceToScreen(Sint32 *const inout_x, Sint32 *const inout_y)
 {
-	*inout_x = (2 * *inout_x + 1) * VGAScreen->w / (2 * last_output_rect.w);
-	*inout_y = (2 * *inout_y + 1) * VGAScreen->h / (2 * last_output_rect.h);
+	int win_w, win_h, out_w, out_h;
+	get_window_and_output_size(&win_w, &win_h, &out_w, &out_h);
+
+	long px = (long)*inout_x * out_w / win_w;
+	long py = (long)*inout_y * out_h / win_h;
+
+	*inout_x = (2 * px + 1) * VGAScreen->w / (2 * last_output_rect.w);
+	*inout_y = (2 * py + 1) * VGAScreen->h / (2 * last_output_rect.h);
 }
