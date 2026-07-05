@@ -39,9 +39,13 @@ extern const char *const scaling_mode_names[ScalingMode_MAX];
 extern int fullscreen_display; // -1 means windowed
 extern ScalingMode scaling_mode;
 
-extern bool hd_mode;          // master HD-remaster toggle
-extern bool hd_title_active;  // set while the title screen is showing
-extern int hd_title_fade;     // 0..255, drives the HD title fade-in
+extern bool hd_mode;             // master HD-remaster toggle
+extern bool hd_backdrop_active;  // set while an HD backdrop should composite
+extern int  hd_backdrop_id;      // which PIC (1..13) is the active HD backdrop
+extern int  hd_backdrop_fade;    // 0..255, drives the HD backdrop fade-in
+
+void hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num; resets fade to 0
+void hd_clear_backdrop(void);       // stop HD compositing (revert to classic)
 
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;
 extern SDL_Surface *game_screen;

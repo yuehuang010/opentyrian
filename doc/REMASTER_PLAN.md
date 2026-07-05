@@ -6,8 +6,13 @@
 > always A/B against the original.
 
 Status: **Phase 0 + Phase 1 complete and verified** (title-screen vertical slice;
-Go/No-Go gate = **GO**). Target approach: *HD skin, gameplay-identical*. Phases
-2–4 remain. Regenerate the HD title asset with `python3 tools/hd_extract.py`.
+Go/No-Go gate = **GO**). **Phase 2 spine landed**: the asset pipeline now extracts
+& upscales *all 13* full-screen backdrops, and the compositor is a per-PIC HD
+*registry* (any backdrop screen is one `hd_set_backdrop(n)` call away from HD).
+Remaining Phase 2 work is wiring individual screens (screen-by-screen, each visually
+QA'd) and swapping the placeholder Lanczos upscaler for a real AI model. Phases
+3–4 remain. Target approach: *HD skin, gameplay-identical*. Regenerate all HD
+backdrop assets with `python3 tools/hd_extract.py` (or a subset via `--pics 4,6`).
 
 ---
 
@@ -70,7 +75,7 @@ it's a separate future project because it *does* require touching gameplay bound
 |------:|------|------|:------:|:----:|:------:|
 | **0** | Presentation polish | Retina-sharp, correct-aspect output on today's pipeline | S | Low | ✅ done |
 | **1** | Truecolor engine | Replace indexed present path with a truecolor GPU compositor; reimplement fade | **L** | **High** | ✅ done (title slice) |
-| **2** | HD asset pipeline | Extract → AI-upscale → repackage → composite HD backgrounds & sprites | M | Med | next |
+| **2** | HD asset pipeline | Extract → AI-upscale → repackage → composite HD backgrounds & sprites | M | Med | 🔨 spine done; wiring screens |
 | **3** | Palette-effect parity | Reimplement recoloring & cycling as GPU tint/shader so HD art matches classic behavior | M–L | High | — |
 | **4** | Text, UI & polish | Redrawn fonts/menus, optional shaders (bloom/CRT), cutscene handling | M | Low | — |
 
@@ -182,6 +187,32 @@ Pipeline:
 
 **Exit criteria:** backgrounds and the main sprite set render from HD assets,
 with automatic fallback to upscaled classic pixels for anything not yet done.
+
+**Spine (done).** The full-screen-backdrop half of this is now generalized:
+
+- *Pipeline:* `tools/hd_extract.py` extracts, colorizes (via `pcxpal[]`), and 4×
+  Lanczos-upscales **all 13** `tyrian.pic` images to `hdpicNN.dat` (NN = 1-based
+  PIC number, e.g. `hdpic04.dat`) in the `HDPX` format (`"HDPX"` + u32 LE w + u32
+  LE h + RGBA rows). `--pics 4,6` regenerates a subset; `--no-preview` skips the
+  human-inspect PNGs (`tools/hdpic_previews/`, gitignored). Lanczos is still the
+  **placeholder** for a real AI upscaler — swapping it is a tooling-only change,
+  no engine impact.
+- *Compositor:* `video.c` holds a per-PIC texture cache `hd_backdrop_tex[1..13]`
+  with per-id lazy load + graceful fallback (missing asset → classic path, warns
+  once). State: `hd_backdrop_active` / `hd_backdrop_id` / `hd_backdrop_fade`.
+- *Wiring a screen* is now one line. A screen that does
+  `JE_loadPic(VGAScreen, N, …)` then draws its dynamic layer (text/sprites) on
+  top becomes HD by, inside `if (hd_mode)`: `JE_clr256(VGAScreen);` (wipe the
+  classic backdrop to the transparent index so the HD asset shows behind the
+  keyed overlay) + `hd_set_backdrop(N);`, ramp `hd_backdrop_fade` 0→255 over the
+  screen's existing fade step count, and `hd_clear_backdrop();` on every exit
+  path. The title screen (PIC 4) is the reference implementation in
+  `titleScreen()`.
+
+*Caveat when wiring:* only screens whose foreground is drawn over a *static* PIC
+convert cleanly. Screens that redraw the PIC every frame in a loop, or draw
+opaque panels expected to sit on the classic backdrop, need per-screen handling
+(don't `clr256` blindly) — hence screen-by-screen with visual A/B each time.
 
 ---
 

@@ -42,11 +42,13 @@ ScalingMode scaling_mode = SCALE_INTEGER;
 static SDL_Rect last_output_rect = { 0, 0, vga_width, vga_height };
 
 bool hd_mode = true;
-bool hd_title_active = false;
-int hd_title_fade = 0;
+bool hd_backdrop_active = false;
+int hd_backdrop_id = 0;
+int hd_backdrop_fade = 0;
 
-static SDL_Texture *hd_title_texture = NULL;
-static bool hd_title_load_failed = false;
+#define HD_BACKDROP_COUNT 13 // matches PCX_NUM (src/pcxmast.h); PIC numbers are 1-based
+static SDL_Texture *hd_backdrop_tex[HD_BACKDROP_COUNT + 1];        // [0] unused
+static bool hd_backdrop_load_failed[HD_BACKDROP_COUNT + 1];
 
 SDL_Surface *VGAScreen, *VGAScreenSeg;
 SDL_Surface *VGAScreen2;
@@ -68,7 +70,7 @@ static int window_get_display_index(void);
 static void window_center_in_display(int display_index);
 static void calc_dst_render_rect(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void scale_and_flip(SDL_Surface *);
-static bool load_hd_title(void);
+static bool load_hd_backdrop(int pic_num);
 
 void init_video(void)
 {
@@ -391,22 +393,29 @@ static void calc_dst_render_rect(SDL_Surface *const src_surface, SDL_Rect *const
 }
 
 /**
- * Lazily loads the HD title backdrop asset ("hdtitle.dat") into hd_title_texture.
- * Returns true if the texture is ready to use. Missing/malformed assets degrade
- * gracefully (HD compositing is simply skipped) rather than crashing; the warning
- * is only ever printed once.
+ * Lazily loads the HD backdrop asset ("hdpicNN.dat") for the given 1-based PIC
+ * number into hd_backdrop_tex[pic_num]. Returns true if the texture is ready
+ * to use. Missing/malformed assets degrade gracefully (HD compositing is
+ * simply skipped) rather than crashing; the warning is only ever printed once
+ * per PIC.
  */
-static bool load_hd_title(void)
+static bool load_hd_backdrop(int pic_num)
 {
-	if (hd_title_texture != NULL)
+	if (pic_num < 1 || pic_num > HD_BACKDROP_COUNT)
+		return false;
+
+	if (hd_backdrop_tex[pic_num] != NULL)
 		return true;
 
-	if (hd_title_load_failed)
+	if (hd_backdrop_load_failed[pic_num])
 		return false;
 
 	bool ok = false;
 
-	FILE *f = dir_fopen(data_dir(), "hdtitle.dat", "rb");
+	char name[16];
+	snprintf(name, sizeof name, "hdpic%02d.dat", pic_num);
+
+	FILE *f = dir_fopen(data_dir(), name, "rb");
 	if (f != NULL)
 	{
 		Uint8 magic[4];
@@ -438,7 +447,7 @@ static bool load_hd_title(void)
 						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
 						{
 							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-							hd_title_texture = tex;
+							hd_backdrop_tex[pic_num] = tex;
 							ok = true;
 						}
 						else
@@ -456,18 +465,30 @@ static bool load_hd_title(void)
 
 	if (!ok)
 	{
-		fprintf(stderr, "warning: HD title asset unavailable; falling back\n");
-		hd_title_load_failed = true;
+		fprintf(stderr, "warning: HD backdrop hdpic%02d.dat unavailable; falling back\n", pic_num);
+		hd_backdrop_load_failed[pic_num] = true;
 	}
 
 	return ok;
+}
+
+void hd_set_backdrop(int pic_num)
+{
+	hd_backdrop_id = pic_num;
+	hd_backdrop_active = true;
+	hd_backdrop_fade = 0;
+}
+
+void hd_clear_backdrop(void)
+{
+	hd_backdrop_active = false;
 }
 
 static void scale_and_flip(SDL_Surface *src_surface)
 {
 	assert(src_surface->format->BitsPerPixel == 8);
 
-	if (hd_mode && hd_title_active && load_hd_title())
+	if (hd_mode && hd_backdrop_active && load_hd_backdrop(hd_backdrop_id))
 	{
 		SDL_Rect dst_rect;
 		calc_dst_render_rect(src_surface, &dst_rect);
@@ -475,11 +496,12 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
 		SDL_RenderClear(main_window_renderer);
 
-		Uint8 f = (Uint8)(hd_title_fade < 0 ? 0 : hd_title_fade > 255 ? 255 : hd_title_fade);
+		Uint8 f = (Uint8)(hd_backdrop_fade < 0 ? 0 : hd_backdrop_fade > 255 ? 255 : hd_backdrop_fade);
 
 		// HD backdrop (behind)
-		SDL_SetTextureColorMod(hd_title_texture, f, f, f);
-		SDL_RenderCopy(main_window_renderer, hd_title_texture, NULL, &dst_rect);
+		SDL_Texture *hd_tex = hd_backdrop_tex[hd_backdrop_id];
+		SDL_SetTextureColorMod(hd_tex, f, f, f);
+		SDL_RenderCopy(main_window_renderer, hd_tex, NULL, &dst_rect);
 
 		// Indexed overlay (logo/version/menu) on top, with palette index 0 keyed transparent.
 		// src_surface is the 8-bit VGAScreen. Give it the live palette, key color 0, make a texture.

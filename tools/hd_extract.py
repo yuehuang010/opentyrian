@@ -2,23 +2,42 @@
 """
 hd_extract.py -- Offline HD asset extraction tool for OpenTyrian.
 
-Extracts the Tyrian title-screen backdrop (image #4 in tyrian.pic, using
-palette #8 from palette.dat), upscales it 4x (320x200 -> 1280x800) using a
-separable Lanczos-3 resampler, and writes:
+Extracts full-screen backdrops from tyrian.pic (any/all of the PCX_NUM=13
+1-based images), colorizes each with its matching palette from palette.dat
+(per the pcxpal table in src/pcxmast.c), upscales 4x (320x200 -> 1280x800)
+using a separable Lanczos-3 resampler [PLACEHOLDER for a real AI upscaler --
+see NOTE below], and writes:
 
-  1. tyrian21/hdtitle.dat  -- a simple raw RGBA asset for the game engine
-     to load (magic "HDPX", width, height, then RGBA8888 pixel data).
-  2. tools/title_preview.png -- a PNG so a human can visually inspect the
-     upscaled result.
+  1. tyrian21/hdpicNN.dat -- a simple raw RGBA asset for the game engine to
+     load (magic "HDPX", width, height, then RGBA8888 pixel data), one per
+     processed image, NN = 1-based image number zero-padded to 2 digits.
+  2. tools/hdpic_previews/hdpicNN.png -- a PNG per processed image so a
+     human can visually inspect the upscaled result (skip with
+     --no-preview).
+
+For backward compatibility with the current engine build, image #4 (the
+title-screen backdrop) is ALSO written to tyrian21/hdtitle.dat, identical
+bytes to hdpic04.dat.
+
+NOTE: the Lanczos-3 resample is a PLACEHOLDER for a real AI upscaler; it
+just cleanly enlarges the original pixel art without hallucinating detail.
 
 Standard library only (no Pillow/numpy/ImageMagick). Tested against
 python3.9.
 
+Usage:
+  hd_extract.py [--pics N[,N...]] [--no-preview]
+
+  --pics N[,N...]  1-based image numbers to process (default: all 1..13).
+  --no-preview     skip writing PNG previews (faster).
+
 Format references:
   - src/palette.c JE_loadPals() (palette.dat layout, 6-bit -> 8-bit scaling)
   - src/picload.c JE_loadPic() (tyrian.pic layout, PCX-style RLE decoding)
+  - src/pcxmast.c (pcxpal table: which palette index goes with which image)
 """
 
+import argparse
 import math
 import os
 import struct
@@ -33,16 +52,19 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(REPO_ROOT, "tyrian21")
 PALETTE_PATH = os.path.join(DATA_DIR, "palette.dat")
 PIC_PATH = os.path.join(DATA_DIR, "tyrian.pic")
-OUT_ASSET_PATH = os.path.join(DATA_DIR, "hdtitle.dat")
-OUT_PREVIEW_PATH = os.path.join(REPO_ROOT, "tools", "title_preview.png")
+OUT_TITLE_ASSET_PATH = os.path.join(DATA_DIR, "hdtitle.dat")
+PREVIEW_DIR = os.path.join(REPO_ROOT, "tools", "hdpic_previews")
 
 SRC_W, SRC_H = 320, 200
 SCALE = 4
 DST_W, DST_H = SRC_W * SCALE, SRC_H * SCALE
 
-PALETTE_INDEX = 8       # 0-based palette index to use
-PIC_NUMBER_1BASED = 4   # 1-based image number (matches JE_loadPic's PCXnumber)
+PIC_NUMBER_1BASED = 4   # legacy title-screen image number (for hdtitle.dat)
 PCX_NUM = 13            # number of images in tyrian.pic (see pcxmast.h)
+
+# 0-based index into this list = image number - 1; value = palette index to
+# use for that image (see src/pcxmast.c).
+PCXPAL = [0, 7, 5, 8, 10, 5, 18, 19, 19, 20, 21, 22, 5]
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +347,72 @@ def write_png(path, rgb, width, height):
 # main
 # ---------------------------------------------------------------------------
 
+def process_pic(n, palette_cache, want_preview):
+    """
+    Process one 1-based image number n: decode, colorize, upscale, and write
+    the engine asset (plus optional PNG preview and, for image #4, the
+    legacy hdtitle.dat). Returns True on success, False on failure (errors
+    are printed but not raised, so callers can continue with other images).
+    """
+    try:
+        pal_index = PCXPAL[n - 1]
+
+        out_asset_path = os.path.join(DATA_DIR, "hdpic%02d.dat" % n)
+        print("Image %d/%d: palette %d -> %s ..." % (n, PCX_NUM, pal_index, out_asset_path))
+
+        palette = palette_cache.get(pal_index)
+        if palette is None:
+            palette = load_palette(PALETTE_PATH, pal_index)
+            palette_cache[pal_index] = palette
+
+        indices = load_pic_indices(PIC_PATH, n)
+        rgb = colorize(indices, palette)
+        upscaled = lanczos_upscale(rgb, SRC_W, SRC_H, DST_W, DST_H, a=3)
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+        write_hdpx_asset(out_asset_path, upscaled, DST_W, DST_H)
+
+        if n == PIC_NUMBER_1BASED:
+            write_hdpx_asset(OUT_TITLE_ASSET_PATH, upscaled, DST_W, DST_H)
+            print("  also wrote legacy asset %s" % OUT_TITLE_ASSET_PATH)
+
+        if want_preview:
+            os.makedirs(PREVIEW_DIR, exist_ok=True)
+            preview_path = os.path.join(PREVIEW_DIR, "hdpic%02d.png" % n)
+            write_png(preview_path, upscaled, DST_W, DST_H)
+
+        return True
+    except Exception as e:
+        print("error: failed to process image %d: %s" % (n, e), file=sys.stderr)
+        return False
+
+
+def parse_pics_arg(value):
+    result = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        num = int(part)
+        if not (1 <= num <= PCX_NUM):
+            raise argparse.ArgumentTypeError(
+                "image number %d out of range (1..%d)" % (num, PCX_NUM))
+        result.append(num)
+    if not result:
+        raise argparse.ArgumentTypeError("no image numbers given")
+    return result
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Extract HD assets from Tyrian data files.")
+    parser.add_argument(
+        "--pics", type=parse_pics_arg, default=list(range(1, PCX_NUM + 1)),
+        help="comma-separated 1-based image numbers to process (default: all 1..%d)" % PCX_NUM)
+    parser.add_argument(
+        "--no-preview", action="store_true",
+        help="skip writing PNG previews (faster)")
+    args = parser.parse_args()
+
     if not os.path.isfile(PALETTE_PATH):
         print("error: palette.dat not found at %s" % PALETTE_PATH, file=sys.stderr)
         return 1
@@ -333,27 +420,17 @@ def main():
         print("error: tyrian.pic not found at %s" % PIC_PATH, file=sys.stderr)
         return 1
 
-    print("Loading palette #%d from %s ..." % (PALETTE_INDEX, PALETTE_PATH))
-    palette = load_palette(PALETTE_PATH, PALETTE_INDEX)
+    palette_cache = {}
+    failed = []
+    for n in args.pics:
+        ok = process_pic(n, palette_cache, want_preview=not args.no_preview)
+        if not ok:
+            failed.append(n)
 
-    print("Decoding image #%d from %s ..." % (PIC_NUMBER_1BASED, PIC_PATH))
-    indices = load_pic_indices(PIC_PATH, PIC_NUMBER_1BASED)
-
-    print("Colorizing %dx%d indexed image ..." % (SRC_W, SRC_H))
-    rgb = colorize(indices, palette)
-
-    print("Upscaling %dx%d -> %dx%d with separable Lanczos-3 (this may take a bit) ..."
-          % (SRC_W, SRC_H, DST_W, DST_H))
-    upscaled = lanczos_upscale(rgb, SRC_W, SRC_H, DST_W, DST_H, a=3)
-
-    os.makedirs(os.path.dirname(OUT_ASSET_PATH), exist_ok=True)
-    os.makedirs(os.path.dirname(OUT_PREVIEW_PATH), exist_ok=True)
-
-    print("Writing engine asset to %s ..." % OUT_ASSET_PATH)
-    write_hdpx_asset(OUT_ASSET_PATH, upscaled, DST_W, DST_H)
-
-    print("Writing PNG preview to %s ..." % OUT_PREVIEW_PATH)
-    write_png(OUT_PREVIEW_PATH, upscaled, DST_W, DST_H)
+    if failed:
+        print("Done with errors. Failed images: %s" % ", ".join(str(n) for n in failed),
+              file=sys.stderr)
+        return 1
 
     print("Done.")
     return 0

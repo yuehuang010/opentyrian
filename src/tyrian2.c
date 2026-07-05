@@ -3273,8 +3273,7 @@ bool titleScreen(void)
 			if (hd_mode)
 			{
 				JE_clr256(VGAScreen);  // wipe the classic backdrop to index 0 (transparent); keep colors[] palette
-				hd_title_active = true;
-				hd_title_fade = 0;
+				hd_set_backdrop(4);
 			}
 
 			drawFontHvShadow(VGAScreen, 2, 192, opentyrian_version, FONT_SMALL, 15, 0, false, 1);
@@ -3291,7 +3290,7 @@ bool titleScreen(void)
 					for (int s = 1; s <= 10; ++s)
 					{
 						setFrameCount(1);
-						hd_title_fade = 255 * s / 10;
+						hd_backdrop_fade = 255 * s / 10;
 						JE_showVGA();
 						waitUntilElapsed();
 					}
@@ -3324,7 +3323,7 @@ bool titleScreen(void)
 					for (int s = 1; s <= 10; ++s)
 					{
 						setFrameCount(1);
-						hd_title_fade = 255 * s / 10;
+						hd_backdrop_fade = 255 * s / 10;
 						JE_showVGA();
 						waitUntilElapsed();
 					}
@@ -3381,7 +3380,7 @@ bool titleScreen(void)
 				fade_black(15);
 
 				play_demo = true;
-				hd_title_active = false;
+				hd_clear_backdrop();
 				return true;
 			}
 
@@ -3496,7 +3495,7 @@ bool titleScreen(void)
 						fade_black(10);
 
 						loadDestruct = true;
-						hd_title_active = false;
+						hd_clear_backdrop();
 						return true;
 					}
 					else if (i + 1 == SA_ENGAGE)
@@ -3507,7 +3506,7 @@ bool titleScreen(void)
 						set_colors((SDL_Color) { 0, 0, 0 }, 0, 255);
 
 						newSuperTyrianGame();
-						hd_title_active = false;
+						hd_clear_backdrop();
 						return true;
 					}
 					else
@@ -3516,7 +3515,7 @@ bool titleScreen(void)
 
 						if (newSuperArcadeGame(i))
 						{
-							hd_title_active = false;
+							hd_clear_backdrop();
 							return true;
 						}
 
@@ -3538,7 +3537,7 @@ bool titleScreen(void)
 
 				if (newGame())
 				{
-					hd_title_active = false;
+					hd_clear_backdrop();
 					return true;
 				}
 
@@ -3551,7 +3550,7 @@ bool titleScreen(void)
 
 				if (JE_loadScreen())
 				{
-					hd_title_active = false;
+					hd_clear_backdrop();
 					return true;
 				}
 
@@ -3590,14 +3589,14 @@ bool titleScreen(void)
 				fade_black(15);
 
 				play_demo = true;
-				hd_title_active = false;
+				hd_clear_backdrop();
 				return true;
 			}
 			case MENU_ITEM_QUIT:
 			{
 				fade_black(15);
 
-				hd_title_active = false;
+				hd_clear_backdrop();
 				return false;
 			}
 			default:
@@ -3609,7 +3608,7 @@ bool titleScreen(void)
 		{
 			fade_black(15);
 
-			hd_title_active = false;
+			hd_clear_backdrop();
 			return false;
 		}
 	}

@@ -38,6 +38,7 @@ tyrian.sav
 # Doxygen output
 /doc/doxygen/
 
-# Generated HD asset preview (regenerate via tools/hd_extract.py)
+# Generated HD asset previews (regenerate via tools/hd_extract.py)
 /tools/title_preview.png
+/tools/hdpic_previews/
 /doc/remaster_title_verified.png
