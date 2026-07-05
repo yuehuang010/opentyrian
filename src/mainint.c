@@ -214,12 +214,18 @@ void JE_helpSystem(JE_byte startTopic)
 			play_song(SONG_MAPVIEW);
 
 			JE_loadPic(VGAScreen2, 2, false);
+
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
 		}
 
 		if (topic > 1)
 		{
 			if (!helpSystemPage(&topic, &restart))
+			{
+				hd_clear_backdrop();
 				return;
+			}
 
 			selectedIndex = (size_t)topic - 1;
 			topic = 1;
@@ -360,6 +366,7 @@ void JE_helpSystem(JE_byte startTopic)
 		{
 			fade_black(15);
 
+			hd_clear_backdrop();
 			return;
 		}
 	}
@@ -645,6 +652,10 @@ bool JE_loadScreen(void)
 		if (restart)
 		{
 			JE_loadPic(VGAScreen2, 2, false);
+
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
+
 			fill_rectangle_wh(VGAScreen2, 0, 192, 320, 8, 0);
 		}
 
@@ -882,6 +893,7 @@ bool JE_loadScreen(void)
 
 					fade_black(15);
 
+					hd_clear_backdrop();
 					return gameLoaded;
 				}
 			}
@@ -891,6 +903,7 @@ bool JE_loadScreen(void)
 		{
 			fade_black(15);
 
+			hd_clear_backdrop();
 			return false;
 		}
 	}
@@ -1094,6 +1107,10 @@ void JE_highScoreScreen(void)
 		if (restart)
 		{
 			JE_loadPic(VGAScreen2, 2, false);
+
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
+
 			fill_rectangle_wh(VGAScreen2, 0, 192, 320, 8, 0);
 
 			// Draw header.
@@ -1276,6 +1293,7 @@ void JE_highScoreScreen(void)
 		{
 			fade_black(15);
 
+			hd_clear_backdrop();
 			return;
 		}
 	}
@@ -2109,6 +2127,9 @@ void JE_highScoreCheck(void)
 				fade_black(15);
 				JE_loadPic(VGAScreen, 2, false);
 
+				if (hd_mode && hd_set_backdrop(2))
+					JE_clr256(VGAScreen);
+
 				JE_dString(VGAScreen, JE_fontCenter(miscText[50], FONT_SHAPES), 10, miscText[50], FONT_SHAPES);
 				JE_dString(VGAScreen, JE_fontCenter(episode_name[episodeNum], SMALL_FONT_SHAPES), 35, episode_name[episodeNum], SMALL_FONT_SHAPES);
 
@@ -2144,6 +2165,8 @@ void JE_highScoreCheck(void)
 					waitUntilGetInput();
 
 				fade_black(15);
+
+				hd_clear_backdrop();
 			}
 
 		}

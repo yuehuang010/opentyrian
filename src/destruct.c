@@ -703,6 +703,10 @@ static void JE_destructMain(void)
 	enum de_state_t curState;
 
 	JE_loadPic(VGAScreen, 11, false);
+
+	if (hd_mode && hd_set_backdrop(11))
+		JE_clr256(VGAScreen);
+
 	JE_introScreen();
 
 	DE_ResetPlayers();
@@ -757,6 +761,9 @@ static void JE_introScreen(void)
 	}
 
 	fade_black(15);
+
+	hd_clear_backdrop();
+
 	memcpy(VGAScreen->pixels, VGAScreen2->pixels, VGAScreen->h * VGAScreen->pitch);
 	JE_showVGA();
 }

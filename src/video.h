@@ -44,7 +44,9 @@ extern bool hd_backdrop_active;  // set while an HD backdrop should composite
 extern int  hd_backdrop_id;      // which PIC (1..13) is the active HD backdrop
 extern int  hd_backdrop_fade;    // 0..255, drives the HD backdrop fade-in
 
-void hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num; resets fade to 0
+extern bool crt_mode;            // optional CRT scanline + vignette post-process
+
+bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if its HD asset loads; returns success
 void hd_clear_backdrop(void);       // stop HD compositing (revert to classic)
 
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;

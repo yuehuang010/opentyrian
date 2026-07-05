@@ -25,6 +25,7 @@
 #include "video_scale.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +46,13 @@ bool hd_mode = true;
 bool hd_backdrop_active = false;
 int hd_backdrop_id = 0;
 int hd_backdrop_fade = 0;
+
+bool crt_mode = false;
+
+static SDL_Texture *crt_scanline_tex = NULL;
+static SDL_Texture *crt_vignette_tex = NULL;
+static int crt_built_w = 0;
+static int crt_built_h = 0;
 
 #define HD_BACKDROP_COUNT 13 // matches PCX_NUM (src/pcxmast.h); PIC numbers are 1-based
 static SDL_Texture *hd_backdrop_tex[HD_BACKDROP_COUNT + 1];        // [0] unused
@@ -71,6 +79,9 @@ static void window_center_in_display(int display_index);
 static void calc_dst_render_rect(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void scale_and_flip(SDL_Surface *);
 static bool load_hd_backdrop(int pic_num);
+static void deinit_crt_overlay(void);
+static bool build_crt_overlay(int out_w, int out_h);
+static void apply_crt_overlay(const SDL_Rect *dst_rect);
 
 void init_video(void)
 {
@@ -150,6 +161,8 @@ static void init_renderer(void)
 
 static void deinit_renderer(void)
 {
+	deinit_crt_overlay();
+
 	if (main_window_renderer != NULL)
 	{
 		SDL_DestroyRenderer(main_window_renderer);
@@ -472,16 +485,184 @@ static bool load_hd_backdrop(int pic_num)
 	return ok;
 }
 
-void hd_set_backdrop(int pic_num)
+bool hd_set_backdrop(int pic_num)
 {
+	// Only begin HD compositing if the HD asset actually loads. This lets callers
+	// gate the destructive JE_clr256() on the return value, so a missing/broken HD
+	// asset falls back to the classic backdrop pixels rather than a wiped black one.
+	if (!load_hd_backdrop(pic_num))
+	{
+		hd_backdrop_active = false;
+		return false;
+	}
+
 	hd_backdrop_id = pic_num;
 	hd_backdrop_active = true;
 	hd_backdrop_fade = 0;
+	return true;
 }
 
 void hd_clear_backdrop(void)
 {
 	hd_backdrop_active = false;
+}
+
+static void deinit_crt_overlay(void)
+{
+	if (crt_scanline_tex != NULL)
+	{
+		SDL_DestroyTexture(crt_scanline_tex);
+		crt_scanline_tex = NULL;
+	}
+	if (crt_vignette_tex != NULL)
+	{
+		SDL_DestroyTexture(crt_vignette_tex);
+		crt_vignette_tex = NULL;
+	}
+	crt_built_w = crt_built_h = 0;
+}
+
+/**
+ * Builds the scanline and vignette overlay textures for the given renderer output
+ * size (in pixels). Returns false (leaving the overlay textures untouched/absent)
+ * if either texture fails to build, so the caller can just skip the overlay.
+ */
+static bool build_crt_overlay(int out_w, int out_h)
+{
+	deinit_crt_overlay();
+
+	if (out_w <= 0 || out_h <= 0)
+		return false;
+
+	// --- Scanlines: one dark row per ~2 logical (400-line-doubled) output rows ---
+	int period = out_h / 400;
+	if (period < 2)
+		period = 2;
+
+	// SDL_PIXELFORMAT_RGBA32 is endian-normalized: bytes in memory are always R,G,B,A.
+	Uint8 *scanline_pixels = malloc((size_t)out_w * (size_t)out_h * 4);
+	if (scanline_pixels == NULL)
+		return false;
+
+	for (int y = 0; y < out_h; ++y)
+	{
+		bool dark_row = (y % period) < (period / 2);
+		Uint8 alpha = dark_row ? 60 : 0;
+		Uint8 *row = scanline_pixels + (size_t)y * out_w * 4;
+		for (int x = 0; x < out_w; ++x)
+		{
+			row[x * 4 + 0] = 0;
+			row[x * 4 + 1] = 0;
+			row[x * 4 + 2] = 0;
+			row[x * 4 + 3] = alpha;
+		}
+	}
+
+	crt_scanline_tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+		SDL_TEXTUREACCESS_STATIC, out_w, out_h);
+	if (crt_scanline_tex != NULL)
+	{
+		if (SDL_UpdateTexture(crt_scanline_tex, NULL, scanline_pixels, out_w * 4) != 0)
+		{
+			SDL_DestroyTexture(crt_scanline_tex);
+			crt_scanline_tex = NULL;
+		}
+		else
+		{
+			SDL_SetTextureBlendMode(crt_scanline_tex, SDL_BLENDMODE_BLEND);
+		}
+	}
+	free(scanline_pixels);
+
+	if (crt_scanline_tex == NULL)
+	{
+		deinit_crt_overlay();
+		return false;
+	}
+
+	// --- Vignette: small radial-darkening texture, stretched over the output ---
+	const int vig_size = 256;
+	Uint8 *vignette_pixels = malloc((size_t)vig_size * (size_t)vig_size * 4);
+	if (vignette_pixels == NULL)
+	{
+		deinit_crt_overlay();
+		return false;
+	}
+
+	const float center = (vig_size - 1) / 2.0f;
+	const float max_dist = sqrtf(center * center + center * center);
+	const Uint8 max_alpha = 90;
+
+	for (int y = 0; y < vig_size; ++y)
+	{
+		Uint8 *row = vignette_pixels + (size_t)y * vig_size * 4;
+		for (int x = 0; x < vig_size; ++x)
+		{
+			float dx = x - center;
+			float dy = y - center;
+			float dist = sqrtf(dx * dx + dy * dy) / max_dist; // 0 at center, 1 at corners
+			if (dist > 1.0f)
+				dist = 1.0f;
+			Uint8 alpha = (Uint8)(dist * dist * max_alpha);
+			row[x * 4 + 0] = 0;
+			row[x * 4 + 1] = 0;
+			row[x * 4 + 2] = 0;
+			row[x * 4 + 3] = alpha;
+		}
+	}
+
+	crt_vignette_tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+		SDL_TEXTUREACCESS_STATIC, vig_size, vig_size);
+	if (crt_vignette_tex != NULL)
+	{
+		if (SDL_UpdateTexture(crt_vignette_tex, NULL, vignette_pixels, vig_size * 4) != 0)
+		{
+			SDL_DestroyTexture(crt_vignette_tex);
+			crt_vignette_tex = NULL;
+		}
+		else
+		{
+			SDL_SetTextureBlendMode(crt_vignette_tex, SDL_BLENDMODE_BLEND);
+		}
+	}
+	free(vignette_pixels);
+
+	if (crt_vignette_tex == NULL)
+	{
+		deinit_crt_overlay();
+		return false;
+	}
+
+	crt_built_w = out_w;
+	crt_built_h = out_h;
+	return true;
+}
+
+/**
+ * If crt_mode is enabled, draws the cached scanline + vignette overlays over
+ * dst_rect. Rebuilds the cached textures if the renderer output size changed
+ * since they were last built. Does nothing (and never fails loudly) if crt_mode
+ * is off or the overlay textures can't be built.
+ */
+static void apply_crt_overlay(const SDL_Rect *dst_rect)
+{
+	if (!crt_mode)
+		return;
+
+	int out_w, out_h;
+	SDL_GetRendererOutputSize(main_window_renderer, &out_w, &out_h);
+
+	if (out_w != crt_built_w || out_h != crt_built_h)
+	{
+		if (!build_crt_overlay(out_w, out_h))
+			return;
+	}
+
+	if (crt_scanline_tex == NULL || crt_vignette_tex == NULL)
+		return;
+
+	SDL_RenderCopy(main_window_renderer, crt_scanline_tex, NULL, dst_rect);
+	SDL_RenderCopy(main_window_renderer, crt_vignette_tex, NULL, dst_rect);
 }
 
 static void scale_and_flip(SDL_Surface *src_surface)
@@ -504,8 +685,11 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		SDL_RenderCopy(main_window_renderer, hd_tex, NULL, &dst_rect);
 
 		// Indexed overlay (logo/version/menu) on top, with palette index 0 keyed transparent.
-		// src_surface is the 8-bit VGAScreen. Give it the live palette, key color 0, make a texture.
-		SDL_SetPaletteColors(src_surface->format->palette, get_live_palette(), 0, 256);
+		// src_surface is the 8-bit VGAScreen. Colour it with the *full* target palette
+		// (not the live, mid-fade one) so the overlay dims only via the colour-mod `f`
+		// below — dimming it by both the fading palette and `f` would fade it quadratically,
+		// lagging behind the linearly-fading backdrop.
+		SDL_SetPaletteColors(src_surface->format->palette, colors, 0, 256);
 		SDL_SetColorKey(src_surface, SDL_TRUE, 0);
 		SDL_Texture *overlay = SDL_CreateTextureFromSurface(main_window_renderer, src_surface);
 		SDL_SetColorKey(src_surface, SDL_FALSE, 0);
@@ -515,6 +699,8 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_RenderCopy(main_window_renderer, overlay, NULL, &dst_rect);
 			SDL_DestroyTexture(overlay);
 		}
+
+		apply_crt_overlay(&dst_rect);
 
 		SDL_RenderPresent(main_window_renderer);
 		last_output_rect = dst_rect;
@@ -532,6 +718,7 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
 	SDL_RenderClear(main_window_renderer);
 	SDL_RenderCopy(main_window_renderer, main_window_texture, NULL, &dst_rect);
+	apply_crt_overlay(&dst_rect);
 	SDL_RenderPresent(main_window_renderer);
 
 	// Save output rect to be used by mouse functions

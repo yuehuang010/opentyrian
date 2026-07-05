@@ -136,18 +136,25 @@ void step_fade_palette(int diff[256][3], int steps, unsigned int first_color, un
 void fade_palette(Palette colors, int steps, unsigned int first_color, unsigned int last_color)
 {
 	assert(steps > 0);
-	
+
 	static int diff[256][3];
 	init_step_fade_palette(diff, colors, first_color, last_color);
-	
+
+	// When an HD backdrop is active, ramp its brightness in lock-step with this
+	// palette fade-in so a wired screen never has to touch its own fade loop.
+	const int total_steps = steps;
+
 	for (; steps > 0; steps--)
 	{
 		setFrameCount(1);
-		
+
 		step_fade_palette(diff, steps, first_color, last_color);
-		
+
+		if (hd_backdrop_active)
+			hd_backdrop_fade = 255 * (total_steps - steps + 1) / total_steps;
+
 		JE_showVGA();
-		
+
 		waitUntilElapsed();
 	}
 
@@ -159,18 +166,27 @@ void fade_palette(Palette colors, int steps, unsigned int first_color, unsigned 
 void fade_solid(SDL_Color color, int steps, unsigned int first_color, unsigned int last_color)
 {
 	assert(steps > 0);
-	
+
 	static int diff[256][3];
 	init_step_fade_solid(diff, color, first_color, last_color);
-	
+
+	// Fades to black darken any active HD backdrop in lock-step (matching the
+	// classic fade-out). Fades to a non-black solid (e.g. white flashes) leave
+	// the HD backdrop untouched rather than incorrectly darkening it.
+	const int total_steps = steps;
+	const bool fade_to_black = (color.r == 0 && color.g == 0 && color.b == 0);
+
 	for (; steps > 0; steps--)
 	{
 		setFrameCount(1);
-		
+
 		step_fade_palette(diff, steps, first_color, last_color);
-		
+
+		if (hd_backdrop_active && fade_to_black)
+			hd_backdrop_fade = 255 * (steps - 1) / total_steps;
+
 		JE_showVGA();
-		
+
 		waitUntilElapsed();
 	}
 

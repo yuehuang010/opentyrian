@@ -9,10 +9,17 @@ Status: **Phase 0 + Phase 1 complete and verified** (title-screen vertical slice
 Go/No-Go gate = **GO**). **Phase 2 spine landed**: the asset pipeline now extracts
 & upscales *all 13* full-screen backdrops, and the compositor is a per-PIC HD
 *registry* (any backdrop screen is one `hd_set_backdrop(n)` call away from HD).
-Remaining Phase 2 work is wiring individual screens (screen-by-screen, each visually
-QA'd) and swapping the placeholder Lanczos upscaler for a real AI model. Phases
-3–4 remain. Target approach: *HD skin, gameplay-identical*. Regenerate all HD
-backdrop assets with `python3 tools/hd_extract.py` (or a subset via `--pics 4,6`).
+**All full-screen backdrops are now wired** to HD (title, episode/difficulty/
+gameplay selects, setup, instructions, load-game, high-score table + entry,
+destruct intro) with an *automatic* fade (the palette fade functions drive the HD
+backdrop brightness, so wiring a screen is just `clr256` + `hd_set_backdrop(N)` +
+`hd_clear_backdrop()` on exit). **Phase 4 CRT/scanline mode landed** (`[video]
+crt`, default off). Remaining: HD *sprites* (Phase 2) and palette-effect parity
+(Phase 3) — the in-game truecolor mountain — plus swapping the placeholder
+Lanczos upscaler for a real AI model. Two new phases were added: **5** (free
+scaling & fullscreen) and **6** (60 fps+ retune). Target approach: *HD skin,
+gameplay-identical*. Regenerate all HD backdrop assets with `python3
+tools/hd_extract.py` (or a subset via `--pics 4,6`).
 
 ---
 
@@ -75,9 +82,11 @@ it's a separate future project because it *does* require touching gameplay bound
 |------:|------|------|:------:|:----:|:------:|
 | **0** | Presentation polish | Retina-sharp, correct-aspect output on today's pipeline | S | Low | ✅ done |
 | **1** | Truecolor engine | Replace indexed present path with a truecolor GPU compositor; reimplement fade | **L** | **High** | ✅ done (title slice) |
-| **2** | HD asset pipeline | Extract → AI-upscale → repackage → composite HD backgrounds & sprites | M | Med | 🔨 spine done; wiring screens |
+| **2** | HD asset pipeline | Extract → AI-upscale → repackage → composite HD backgrounds & sprites | M | Med | 🔨 backdrops done; sprites pending |
 | **3** | Palette-effect parity | Reimplement recoloring & cycling as GPU tint/shader so HD art matches classic behavior | M–L | High | — |
-| **4** | Text, UI & polish | Redrawn fonts/menus, optional shaders (bloom/CRT), cutscene handling | M | Low | — |
+| **4** | Text, UI & polish | Redrawn fonts/menus, optional shaders (bloom/CRT), cutscene handling | M | Low | 🔨 CRT/scanline done |
+| **5** | Free scaling & fullscreen | Any window size + real fullscreen, aspect-correct, no gameplay-space change | S–M | Low–Med | — |
+| **6** | High-framerate retune | Decouple sim tick from 60/70 Hz origin; smooth 60 fps+ without altering game speed/balance | **L** | **High** | — |
 
 **Phase 0/1 verification (done):** built clean on macOS/arm64; the title screen
 composites a 4× Lanczos-upscaled backdrop (`hdtitle.dat`, via
@@ -238,8 +247,78 @@ subtle. Build a side-by-side harness (classic vs HD) for each effect.
 - **Menus/HUD** re-laid out crisply on the HD layer (still driven by 320×200
   logical positions).
 - **Optional shaders**: bloom, subtle lighting, optional CRT/scanline mode for
-  purists.
+  purists. **(done — scanline + vignette CRT mode, `[video] crt`, default off,
+  cached overlay textures at the present choke point; no gameplay/image change.)**
 - **Cutscenes** (`.anm`): upscale frames or apply a runtime upscaler.
+
+---
+
+### Phase 5 — Free scaling & fullscreen
+
+Today the window opens at a fixed integer multiple and the render rect is
+computed in `calc_dst_render_rect` (`video.c`). Goal: the player can resize the
+window to *any* size and toggle real fullscreen, always aspect-correct, with the
+image sharp and the mouse mapping intact — **without touching the 320×200 logical
+gameplay space** (Invariant #3).
+
+- **Resizable window:** add `SDL_WINDOW_RESIZABLE`; handle `SDL_WINDOWEVENT_
+  SIZE_CHANGED` by recomputing the destination rect (the letterbox math already
+  lives in `calc_dst_render_rect`, which uses the renderer *output* size post
+  Phase 0 — so most of this is enabling the flag + reacting to the event).
+- **Fullscreen:** `SDL_WINDOW_FULLSCREEN_DESKTOP` toggle (there's an existing
+  fullscreen path/keybind to reconcile), aspect-preserved with letterbox/pillar
+  bars. Persist the choice + last window size in config (`[video]`).
+- **Aspect policy:** keep the 4:3 correction from Phase 0 as the default; offer
+  integer-scale and pixel-perfect options. The HD backdrop textures already
+  scale continuously (they're drawn into `dst_rect`), so free scaling is nearly
+  free for the HD path; the classic scaler path stays on its `scalers[]` steps.
+- **Mouse mapping:** the window-point ↔ render-pixel reconciliation added in
+  Phase 0 (`mapScreenPointToWindow` et al.) must be re-verified at arbitrary
+  sizes and in fullscreen; this is the main correctness risk.
+
+**Exit criteria:** drag-resize to any size and toggle fullscreen with a correct,
+sharp, aspect-right image and accurate mouse hit-testing; gameplay unaffected.
+Low risk because it's presentation-layer only — the hard part (decoupling render
+resolution from logical space) was already done in Phases 0–1.
+
+---
+
+### Phase 6 — High-framerate retune (60 fps+)
+
+The original is locked to the DOS/VGA cadence (~70 Hz via `setFrameCount`/
+`waitUntilElapsed` in `nortsong.c`; much game logic assumes "one tick = one
+frame"). Goal: render and update smoothly at 60 fps and above **without changing
+how fast the game actually plays or its balance** (Invariant #3 again — speed and
+spawn timing are gameplay).
+
+The crux: **separate the simulation tick from the display refresh.** Options,
+cheapest-safest first:
+
+1. **Fixed-timestep sim + rendered interpolation** *(recommended).* Keep the sim
+   running at the original tick rate (so all `mt_rand` sequences, spawn cadence,
+   and per-tick movement math stay byte-identical), but decouple presentation:
+   run the sim in fixed steps off a real-time accumulator and interpolate sprite
+   positions between the previous and current tick when drawing. Yields smooth
+   60/120/144 fps with **zero** balance change. Needs prev/curr position state
+   for everything drawn (players, shots, enemies, powerups) and an interpolation
+   pass at draw time.
+2. **Higher sim tick + rescaled constants.** Raise the actual tick rate and
+   divide every per-tick delta/timer accordingly. Simpler, but **high risk**: it
+   changes the integer-step movement and RNG cadence the game was tuned around,
+   so hitboxes/patterns can drift. Requires the Phase-3-style A/B harness on
+   gameplay, not just visuals.
+3. **Hybrid** — interpolate (1) now; selectively raise tick rate later only where
+   it's provably balance-neutral.
+
+Why **L / High**: unlike everything above it, this reaches into *gameplay* timing
+— the one thing the remaster has so far promised not to touch. It's kept as a
+distinct, opt-in phase precisely so the "plays identical" guarantee holds for
+everyone who doesn't want it. Recommended path is (1): identical simulation,
+smoother presentation.
+
+**Exit criteria:** smooth ≥60 fps with a frame-time-independent feel, and a
+side-by-side confirming the *simulation* (positions per tick, RNG, deaths) is
+unchanged from the classic cadence.
 
 ---
 
@@ -253,6 +332,8 @@ subtle. Build a side-by-side harness (classic vs HD) for each effect.
 | Sprite transparency bleeds when upscaled | Alpha-aware extraction & upscaling; validate color-0 edges |
 | Scope creep into widescreen/gameplay | Invariant #3: logical space stays 320×200; widescreen is a separate project |
 | Mid-refactor breakage | Invariant #1/#2: classic path always runs; remaster behind a toggle |
+| Free scaling breaks mouse hit-testing (Phase 5) | Re-verify the Phase-0 window-point↔render-pixel mapping at arbitrary sizes + fullscreen |
+| High-framerate retune alters game feel/balance (Phase 6) | Prefer fixed-timestep sim + render interpolation (identical simulation); A/B the sim per tick before any tick-rate change |
 
 ## 6. Open decisions
 

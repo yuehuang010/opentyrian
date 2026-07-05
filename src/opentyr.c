@@ -202,6 +202,10 @@ void setupMenu(void)
 		if (restart)
 		{
 			JE_loadPic(VGAScreen2, 2, false);
+
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
+
 			fill_rectangle_wh(VGAScreen2, 0, 192, 320, 8, 0);
 		}
 
@@ -544,6 +548,7 @@ void setupMenu(void)
 					JE_playSampleNum(S_SELECT);
 
 					fade_black(10);
+					hd_clear_backdrop();  // don't leak the setup HD backdrop into the jukebox
 
 					jukebox();
 
@@ -555,6 +560,7 @@ void setupMenu(void)
 					JE_playSampleNum(S_SELECT);
 
 					fade_black(10);
+					hd_clear_backdrop();  // don't leak the setup HD backdrop into the destruct minigame
 
 					JE_destructGame();
 
@@ -610,6 +616,7 @@ void setupMenu(void)
 			{
 				fade_black(10);
 
+				hd_clear_backdrop();
 				return;
 			}
 		}

@@ -71,6 +71,9 @@ bool gameplaySelect(void)
 		{
 			JE_loadPic(VGAScreen2, 2, false);
 
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
+
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, gameplay_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
 		}
@@ -208,6 +211,7 @@ bool gameplaySelect(void)
 
 				onePlayerAction = selectedIndex == MENU_ITEM_1_PLAYER_ARCADE;
 				twoPlayerMode = selectedIndex == MENU_ITEM_2_PLAYER_ARCADE;
+				hd_clear_backdrop();
 				return true;
 			}
 			case MENU_ITEM_NETWORK:
@@ -224,6 +228,7 @@ bool gameplaySelect(void)
 		{
 			fade_black(15);
 
+			hd_clear_backdrop();
 			return false;
 		}
 	}
@@ -254,6 +259,9 @@ bool episodeSelect(void)
 		if (restart)
 		{
 			JE_loadPic(VGAScreen2, 2, false);
+
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
 
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, episode_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
@@ -386,6 +394,7 @@ bool episodeSelect(void)
 
 				JE_initEpisode(selectedIndex + 1);
 				initial_episode_num = episodeNum;
+				hd_clear_backdrop();
 				return true;
 			}
 			else
@@ -398,6 +407,7 @@ bool episodeSelect(void)
 		{
 			fade_black(15);
 
+			hd_clear_backdrop();
 			return false;
 		}
 	}
@@ -429,6 +439,9 @@ bool difficultySelect(void)
 		if (restart)
 		{
 			JE_loadPic(VGAScreen2, 2, false);
+
+			if (hd_mode && hd_set_backdrop(2))
+				JE_clr256(VGAScreen2);
 
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, difficulty_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
@@ -634,6 +647,7 @@ bool difficultySelect(void)
 
 			fade_black(10);
 
+			hd_clear_backdrop();
 			return true;
 		}
 
@@ -641,6 +655,7 @@ bool difficultySelect(void)
 		{
 			fade_black(15);
 
+			hd_clear_backdrop();
 			return false;
 		}
 	}

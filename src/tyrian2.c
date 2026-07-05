@@ -3270,11 +3270,8 @@ bool titleScreen(void)
 
 			JE_loadPic(VGAScreen, 4, false);
 
-			if (hd_mode)
-			{
+			if (hd_mode && hd_set_backdrop(4))
 				JE_clr256(VGAScreen);  // wipe the classic backdrop to index 0 (transparent); keep colors[] palette
-				hd_set_backdrop(4);
-			}
 
 			drawFontHvShadow(VGAScreen, 2, 192, opentyrian_version, FONT_SMALL, 15, 0, false, 1);
 
