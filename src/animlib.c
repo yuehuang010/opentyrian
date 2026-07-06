@@ -147,6 +147,12 @@ static void decodeRunSkipDump(MemWriter *writer, MemReader *reader)
 
 void playAnim(const char *filename, Uint8 startingFrame, Uint8 speed)
 {
+	// The ending cutscene has pre-rendered HD frames on disk; when HD mode is on,
+	// composite those full-screen instead of the classic 320x200 frame. Only the
+	// ending anm is HD-backed, so gate on the filename (other .anm files are
+	// unaffected and follow the classic path unchanged).
+	bool hd_anim = hd_mode && strcmp(filename, "tyrend.anm") == 0;
+
 	JE_clr256(VGAScreen);
 	JE_showVGA();
 
@@ -188,6 +194,9 @@ void playAnim(const char *filename, Uint8 startingFrame, Uint8 speed)
 
 	const size_t imageSize = 320 * 200;
 	Uint8 *image = calloc(imageSize, 1);
+
+	if (hd_anim)
+		hd_anim_begin();
 
 	for (Uint16 record = startingFrame; record < fileHeader.recordCount - 1; ++record)
 	{
@@ -256,6 +265,14 @@ void playAnim(const char *filename, Uint8 startingFrame, Uint8 speed)
 			for (size_t y = 0; y < 200; ++y)
 				memcpy((Uint8 *)VGAScreen->pixels + y * VGAScreen->pitch, image + y * 320, 320);
 
+			// `record` is the 0-based sequential displayed-frame index (exactly one
+			// decode+show per outer record), matching the hdanim_tyrend_NNNN.dat
+			// numbering. Stream the matching HD frame; on success blank the classic
+			// frame so it doesn't leak under the HD composite. A missing/short HD
+			// frame returns false and the classic 320x200 frame is presented instead.
+			if (hd_anim && hd_anim_show_frame("anim_tyrend", record))
+				JE_clr256(VGAScreen);
+
 			JE_showVGA();
 		}
 
@@ -265,6 +282,12 @@ void playAnim(const char *filename, Uint8 startingFrame, Uint8 speed)
 
 	free(image);
 	free(data);
+
+	// Covers every loop exit: natural end-of-frames and the keypress/skip early
+	// break above. Deactivates HD compositing (so the next screen isn't left with a
+	// stale HD backdrop) and destroys the streaming texture. Idempotent/no-op safe.
+	if (hd_anim)
+		hd_anim_end();
 
 fail:
 	fclose(f);

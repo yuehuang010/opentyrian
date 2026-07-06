@@ -54,6 +54,14 @@ bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if it
 bool hd_set_backdrop_asset(const char *name); // begin HD compositing for a filename-keyed full-screen asset ("hdpcx_<name>.dat"); returns success
 void hd_clear_backdrop(void);       // stop HD compositing (revert to classic); covers both hd_set_backdrop and hd_set_backdrop_asset
 
+// HD ending-cutscene streaming compositor (tyrend.anm). Separate from the fail-once
+// PIC/asset backdrop cache: one persistent STREAMING texture, created lazily on the
+// first frame and SDL_UpdateTexture'd in place per frame, routed through the existing
+// hd_backdrop draw path. hd_anim_end() must be called on every playback exit path.
+void hd_anim_begin(void);                                    // arm the anim streaming compositor (texture created lazily)
+bool hd_anim_show_frame(const char *basename, int frame_index); // stream frame "hd<basename>_%04d.dat"; true on success, false leaves classic frame showing
+void hd_anim_end(void);                                      // deactivate + destroy the streaming texture (idempotent)
+
 // Immediate-mode HD sprite overlays (e.g. the title logo). Call every frame, before
 // JE_showVGA(), for each HD-backed sprite that should composite on top of the backdrop;
 // the queue is drained by scale_and_flip() and must be re-populated each frame.

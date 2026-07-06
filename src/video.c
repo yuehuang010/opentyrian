@@ -519,16 +519,23 @@ static void calc_dst_render_rect(SDL_Surface *const src_surface, SDL_Rect *const
  * by load_hd_backdrop, load_hd_sprite, and load_hd_backdrop_asset so the HDPX
  * parsing itself lives in exactly one place.
  */
-static SDL_Texture *load_hdpx_texture(const char *filename)
+/**
+ * Reads a "HDPX" magic + u32 width/height + raw RGBA32 pixel blob from `filename`
+ * in the data directory into a freshly malloc'd buffer (caller frees). Returns the
+ * pixel buffer and writes the dimensions to out_width/out_height, or NULL if the
+ * file is missing/malformed. Shared by the static-texture loader (load_hdpx_texture)
+ * and the streaming ending-cutscene loader (hd_anim_show_frame) so the HDPX parsing
+ * lives in exactly one place.
+ */
+static Uint8 *load_hdpx_pixels(const char *filename, Uint32 *out_width, Uint32 *out_height)
 {
-	SDL_Texture *tex = NULL;
+	Uint8 *pixels = NULL;
 
 	FILE *f = dir_fopen(data_dir(), filename, "rb");
 	if (f != NULL)
 	{
 		Uint8 magic[4];
 		Uint8 dims[8];
-		Uint8 *pixels = NULL;
 
 		if (fread(magic, 1, 4, f) == 4 &&
 		    memcmp(magic, "HDPX", 4) == 0 &&
@@ -543,31 +550,52 @@ static SDL_Texture *load_hdpx_texture(const char *filename)
 			if (width > 0 && height > 0 && width <= 8192 && height <= 8192)
 			{
 				size_t pixel_bytes = (size_t)width * height * 4;
-				pixels = malloc(pixel_bytes);
+				Uint8 *buf = malloc(pixel_bytes);
 
-				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
+				if (buf != NULL && fread(buf, 1, pixel_bytes, f) == pixel_bytes)
 				{
-					tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
-						SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
-
-					if (tex != NULL)
-					{
-						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
-						{
-							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-						}
-						else
-						{
-							SDL_DestroyTexture(tex);
-							tex = NULL;
-						}
-					}
+					pixels = buf;
+					*out_width = width;
+					*out_height = height;
+				}
+				else
+				{
+					free(buf);
 				}
 			}
 		}
 
-		free(pixels);
 		fclose(f);
+	}
+
+	return pixels;
+}
+
+static SDL_Texture *load_hdpx_texture(const char *filename)
+{
+	SDL_Texture *tex = NULL;
+
+	Uint32 width, height;
+	Uint8 *pixels = load_hdpx_pixels(filename, &width, &height);
+	if (pixels != NULL)
+	{
+		tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+			SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
+
+		if (tex != NULL)
+		{
+			if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
+			{
+				SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+			}
+			else
+			{
+				SDL_DestroyTexture(tex);
+				tex = NULL;
+			}
+		}
+
+		free(pixels);
 	}
 
 	return tex;
@@ -688,6 +716,75 @@ bool hd_set_backdrop_asset(const char *name)
 void hd_clear_backdrop(void)
 {
 	hd_backdrop_active = false;
+}
+
+// --- HD ending-cutscene streaming compositor ---
+// The ending anm (tyrend.anm) has 111 HD frames, which would thrash the 8-slot
+// fail-once asset cache used by hd_set_backdrop_asset. Instead we keep one
+// persistent STREAMING texture, created lazily from the first frame's dimensions
+// and SDL_UpdateTexture'd in place per frame, then point the existing HD backdrop
+// draw path (hd_backdrop_cur_tex / hd_backdrop_active in scale_and_flip) at it.
+static SDL_Texture *hd_anim_tex = NULL;
+static int hd_anim_tex_w = 0, hd_anim_tex_h = 0;
+
+void hd_anim_begin(void)
+{
+	// The streaming texture is created lazily on the first frame (once its
+	// dimensions are known); here we only arm brightness. The ending anm plays
+	// at full brightness -- unlike hd_set_backdrop, there is no HD fade-in.
+	hd_backdrop_fade = 255;
+}
+
+bool hd_anim_show_frame(const char *basename, int frame_index)
+{
+	char filename[64];
+	snprintf(filename, sizeof filename, "hd%s_%04d.dat", basename, frame_index);
+
+	Uint32 width, height;
+	Uint8 *pixels = load_hdpx_pixels(filename, &width, &height);
+	if (pixels == NULL)
+		return false;  // leave whatever was showing -> classic 320x200 fallback
+
+	bool ok = false;
+
+	// Create the persistent streaming texture once, on the first frame that loads.
+	if (hd_anim_tex == NULL)
+	{
+		hd_anim_tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+			SDL_TEXTUREACCESS_STREAMING, (int)width, (int)height);
+		if (hd_anim_tex != NULL)
+		{
+			SDL_SetTextureBlendMode(hd_anim_tex, SDL_BLENDMODE_BLEND);
+			hd_anim_tex_w = (int)width;
+			hd_anim_tex_h = (int)height;
+		}
+	}
+
+	if (hd_anim_tex != NULL &&
+	    (int)width == hd_anim_tex_w && (int)height == hd_anim_tex_h &&
+	    SDL_UpdateTexture(hd_anim_tex, NULL, pixels, (int)(width * 4)) == 0)
+	{
+		hd_backdrop_cur_tex = hd_anim_tex;
+		hd_backdrop_active = true;
+		ok = true;
+	}
+
+	free(pixels);
+	return ok;
+}
+
+void hd_anim_end(void)
+{
+	// Stop compositing and don't leave a stale HD backdrop for the next screen.
+	hd_clear_backdrop();
+	hd_backdrop_cur_tex = NULL;
+
+	if (hd_anim_tex != NULL)
+	{
+		SDL_DestroyTexture(hd_anim_tex);
+		hd_anim_tex = NULL;
+	}
+	hd_anim_tex_w = hd_anim_tex_h = 0;
 }
 
 /**
