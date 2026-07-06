@@ -22,6 +22,17 @@ bytes to hdpic04.dat.
 NOTE: the Lanczos-3 resample is a PLACEHOLDER for a real AI upscaler; it
 just cleanly enlarges the original pixel art without hallucinating detail.
 
+Additionally extracts two static sprite tables from tyrian.shp (see
+src/sprite.c load_sprites()/JE_loadMainShapeTables() and doc/files.txt):
+PLANET_SHAPES (table 3, 151 frames -- frame 146 is the big Tyrian title
+logo) and FACE_SHAPES (table 4, 12 frames). Each frame is decoded from its
+RLE-compressed indexed pixels, keyed to RGBA using palette.dat slot 0 (the
+main game palette -- these tables are blitted against palettes[0] by the
+engine, unlike the per-image pcxpal-indexed backdrops), 4x Lanczos
+upscaled (alpha channel included, producing soft edges), and written as
+tyrian21/hdplanet_NN.dat / hdface_NN.dat (NN = frame index zero-padded to
+2 digits) alongside a tyrian21/hd_sprite_manifest.json manifest.
+
 Standard library only (no Pillow/numpy/ImageMagick). Tested against
 python3.9.
 
@@ -35,9 +46,13 @@ Format references:
   - src/palette.c JE_loadPals() (palette.dat layout, 6-bit -> 8-bit scaling)
   - src/picload.c JE_loadPic() (tyrian.pic layout, PCX-style RLE decoding)
   - src/pcxmast.c (pcxpal table: which palette index goes with which image)
+  - src/sprite.c load_sprites(), JE_loadMainShapeTables(),
+    blit_sprite() (tyrian.shp layout and its RLE sprite encoding)
+  - src/sprite.h (PLANET_SHAPES / FACE_SHAPES table indices)
 """
 
 import argparse
+import json
 import math
 import os
 import struct
@@ -52,8 +67,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(REPO_ROOT, "tyrian21")
 PALETTE_PATH = os.path.join(DATA_DIR, "palette.dat")
 PIC_PATH = os.path.join(DATA_DIR, "tyrian.pic")
+SHP_PATH = os.path.join(DATA_DIR, "tyrian.shp")
 OUT_TITLE_ASSET_PATH = os.path.join(DATA_DIR, "hdtitle.dat")
 PREVIEW_DIR = os.path.join(REPO_ROOT, "tools", "hdpic_previews")
+SPRITE_MANIFEST_PATH = os.path.join(DATA_DIR, "hd_sprite_manifest.json")
 
 SRC_W, SRC_H = 320, 200
 SCALE = 4
@@ -65,6 +82,18 @@ PCX_NUM = 13            # number of images in tyrian.pic (see pcxmast.h)
 # 0-based index into this list = image number - 1; value = palette index to
 # use for that image (see src/pcxmast.c).
 PCXPAL = [0, 7, 5, 8, 10, 5, 18, 19, 19, 20, 21, 22, 5]
+
+# tyrian.shp table indices (see src/sprite.h) and the SHP_NUM used by
+# JE_loadMainShapeTables() in src/sprite.c for the leading offset table.
+SHP_NUM = 12
+PLANET_SHAPES = 3
+FACE_SHAPES = 4
+
+# Sprite tables to extract as HD overlays: (table index, output prefix).
+SPRITE_TABLES = [
+    (PLANET_SHAPES, "hdplanet"),
+    (FACE_SHAPES, "hdface"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +185,117 @@ def load_pic_indices(path, pic_number_1based, pcx_num=PCX_NUM):
 
 
 # ---------------------------------------------------------------------------
+# STEP 2b: tyrian.shp -> decoded sprite frames (indexed pixels + alpha mask)
+# ---------------------------------------------------------------------------
+
+def load_shp_table_offsets(path, shp_num=SHP_NUM):
+    """
+    Mirrors JE_loadMainShapeTables(): u16 table count, then shp_num
+    little-endian Int32 table offsets, with the file length appended as the
+    trailing sentinel (used by other tables in the engine, unused here).
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+
+    shp_numb = struct.unpack_from("<H", data, 0)[0]
+    assert shp_numb == shp_num, (
+        "tyrian.shp: expected %d table offsets, header says %d" % (shp_num, shp_numb))
+
+    offset = 2
+    shp_pos = list(struct.unpack_from("<%di" % shp_num, data, offset))
+    shp_pos.append(len(data))
+    return data, shp_pos
+
+
+def load_sprite_table(data, start_offset):
+    """
+    Mirrors load_sprites() in src/sprite.c: u16 sprite count, then per
+    sprite a populated byte, and if populated: u16 width, u16 height,
+    u16 size, then `size` bytes of RLE-compressed indexed pixel data.
+
+    Returns a list of length count, each entry either None (unpopulated
+    slot) or a dict with width/height/rle (raw compressed bytes).
+    """
+    count = struct.unpack_from("<H", data, start_offset)[0]
+    p = start_offset + 2
+
+    sprites = []
+    for _ in range(count):
+        populated = data[p]
+        p += 1
+        if not populated:
+            sprites.append(None)
+            continue
+
+        width, height, size = struct.unpack_from("<HHH", data, p)
+        p += 6
+        rle = data[p:p + size]
+        p += size
+        sprites.append({"width": width, "height": height, "rle": rle})
+
+    return sprites
+
+
+def decode_sprite_rle(sprite):
+    """
+    Decode one sprite's RLE pixel data into a flat width*height buffer of
+    (palette_index_or_None) -- None marks a transparent pixel -- mirroring
+    the pointer arithmetic of blit_sprite() in src/sprite.c exactly (a flat
+    "pixels" cursor plus an in-row "x_offset", with no explicit row
+    variable; pitch == width since we have no surface stride padding):
+      255       -> next byte is a count of transparent pixels
+      254       -> advance the cursor to the start of the next row
+      253       -> a single transparent pixel
+      0..252    -> a direct opaque palette index
+    After every op, if x_offset has reached (or passed) width, the row is
+    considered finished and x_offset resets to 0 (matching the unconditional
+    post-switch wrap check in blit_sprite()).
+    """
+    width, height = sprite["width"], sprite["height"]
+    rle = sprite["rle"]
+    total = width * height
+
+    out = [None] * total
+    pos = 0        # flat cursor into out[], mirrors the `pixels` pointer
+    x_offset = 0
+    i = 0
+    n = len(rle)
+
+    def write(idx, value):
+        if 0 <= idx < total:
+            out[idx] = value
+
+    while i < n:
+        b = rle[i]
+        if b == 255:
+            run = rle[i + 1]
+            i += 2
+            # Transparent run: out[] entries are already None, just advance.
+            pos += run
+            x_offset += run
+        elif b == 254:
+            pos += width - x_offset
+            x_offset = width
+            i += 1
+        elif b == 253:
+            write(pos, None)
+            pos += 1
+            x_offset += 1
+            i += 1
+        else:
+            write(pos, b)
+            pos += 1
+            x_offset += 1
+            i += 1
+
+        if x_offset >= width:
+            pos += width - x_offset
+            x_offset = 0
+
+    return out, width, height
+
+
+# ---------------------------------------------------------------------------
 # STEP 3: colorize indices -> flat RGB bytearray (row-major, 3 bytes/pixel)
 # ---------------------------------------------------------------------------
 
@@ -168,6 +308,30 @@ def colorize(indices, palette):
         rgb[o + 1] = g
         rgb[o + 2] = b
     return rgb
+
+
+def colorize_rgba(indices, palette):
+    """
+    Like colorize(), but for a sequence that may contain None entries
+    (transparent pixels, per decode_sprite_rle()): produces an RGBA buffer
+    (4 bytes/pixel) with alpha 0 for transparent pixels and 255 for opaque
+    ones, so it can be Lanczos-upscaled as a single 4-channel image.
+    """
+    rgba = bytearray(len(indices) * 4)
+    for idx, pixel_index in enumerate(indices):
+        o = idx * 4
+        if pixel_index is None:
+            rgba[o] = 0
+            rgba[o + 1] = 0
+            rgba[o + 2] = 0
+            rgba[o + 3] = 0
+        else:
+            r, g, b = palette[pixel_index]
+            rgba[o] = r
+            rgba[o + 1] = g
+            rgba[o + 2] = b
+            rgba[o + 3] = 255
+    return rgba
 
 
 # ---------------------------------------------------------------------------
@@ -225,45 +389,40 @@ def build_taps(src_n, dst_n, a=3):
     return taps
 
 
-def resample_axis_horizontal(src, src_w, src_h, dst_w, taps):
-    """Resample width src_w -> dst_w for an RGB buffer (3 bytes/pixel)."""
-    dst = bytearray(dst_w * src_h * 3)
+def resample_axis_horizontal(src, src_w, src_h, dst_w, taps, channels=3):
+    """Resample width src_w -> dst_w for an interleaved pixel buffer."""
+    dst = bytearray(dst_w * src_h * channels)
     for y in range(src_h):
-        row_off = y * src_w * 3
-        out_off = y * dst_w * 3
+        row_off = y * src_w * channels
+        out_off = y * dst_w * channels
         for x in range(dst_w):
-            r_acc = g_acc = b_acc = 0.0
+            acc = [0.0] * channels
             for src_x, w in taps[x]:
-                o = row_off + src_x * 3
-                r_acc += src[o] * w
-                g_acc += src[o + 1] * w
-                b_acc += src[o + 2] * w
-            o2 = out_off + x * 3
-            dst[o2] = clamp_byte(r_acc)
-            dst[o2 + 1] = clamp_byte(g_acc)
-            dst[o2 + 2] = clamp_byte(b_acc)
+                o = row_off + src_x * channels
+                for c in range(channels):
+                    acc[c] += src[o + c] * w
+            o2 = out_off + x * channels
+            for c in range(channels):
+                dst[o2 + c] = clamp_byte(acc[c])
     return dst
 
 
-def resample_axis_vertical(src, src_w, src_h, dst_h, taps):
-    """Resample height src_h -> dst_h for an RGB buffer (3 bytes/pixel)."""
-    dst = bytearray(src_w * dst_h * 3)
-    # Precompute column base offsets once.
+def resample_axis_vertical(src, src_w, src_h, dst_h, taps, channels=3):
+    """Resample height src_h -> dst_h for an interleaved pixel buffer."""
+    dst = bytearray(src_w * dst_h * channels)
     for y in range(dst_h):
-        out_row_off = y * src_w * 3
+        out_row_off = y * src_w * channels
         col_taps = taps[y]
         for x in range(src_w):
-            r_acc = g_acc = b_acc = 0.0
-            xo = x * 3
+            acc = [0.0] * channels
+            xo = x * channels
             for src_y, w in col_taps:
-                o = src_y * src_w * 3 + xo
-                r_acc += src[o] * w
-                g_acc += src[o + 1] * w
-                b_acc += src[o + 2] * w
+                o = src_y * src_w * channels + xo
+                for c in range(channels):
+                    acc[c] += src[o + c] * w
             o2 = out_row_off + xo
-            dst[o2] = clamp_byte(r_acc)
-            dst[o2 + 1] = clamp_byte(g_acc)
-            dst[o2 + 2] = clamp_byte(b_acc)
+            for c in range(channels):
+                dst[o2 + c] = clamp_byte(acc[c])
     return dst
 
 
@@ -276,14 +435,14 @@ def clamp_byte(v):
     return iv
 
 
-def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3):
+def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3, channels=3):
     h_taps = build_taps(src_w, dst_w, a)
     v_taps = build_taps(src_h, dst_h, a)
 
     # Horizontal pass first (src_w -> dst_w), producing dst_w x src_h.
-    stage1 = resample_axis_horizontal(rgb, src_w, src_h, dst_w, h_taps)
+    stage1 = resample_axis_horizontal(rgb, src_w, src_h, dst_w, h_taps, channels)
     # Vertical pass second (src_h -> dst_h), producing dst_w x dst_h.
-    stage2 = resample_axis_vertical(stage1, dst_w, src_h, dst_h, v_taps)
+    stage2 = resample_axis_vertical(stage1, dst_w, src_h, dst_h, v_taps, channels)
     return stage2
 
 
@@ -291,21 +450,31 @@ def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3):
 # STEP 5a: write the engine asset (HDPX raw RGBA format)
 # ---------------------------------------------------------------------------
 
-def write_hdpx_asset(path, rgb, width, height):
+def write_hdpx_asset(path, pixels, width, height, channels=3):
+    """
+    Write the HDPX raw-asset format: ASCII "HDPX", u32 LE width, u32 LE
+    height, then width*height RGBA8888 pixels.
+
+    `pixels` holds `channels` bytes/pixel already (3 = RGB, opaque assumed;
+    4 = RGBA, alpha taken as-is -- e.g. a Lanczos-upscaled sprite overlay).
+    """
     with open(path, "wb") as f:
         f.write(b"HDPX")
         f.write(struct.pack("<I", width))
         f.write(struct.pack("<I", height))
-        # Build RGBA in bulk: interleave rgb triplets with a constant alpha.
-        out = bytearray(width * height * 4)
-        for i in range(width * height):
-            so = i * 3
-            do = i * 4
-            out[do] = rgb[so]
-            out[do + 1] = rgb[so + 1]
-            out[do + 2] = rgb[so + 2]
-            out[do + 3] = 255
-        f.write(out)
+        if channels == 4:
+            f.write(bytes(pixels))
+        else:
+            # Build RGBA in bulk: interleave triplets with a constant alpha.
+            out = bytearray(width * height * 4)
+            for i in range(width * height):
+                so = i * 3
+                do = i * 4
+                out[do] = pixels[so]
+                out[do + 1] = pixels[so + 1]
+                out[do + 2] = pixels[so + 2]
+                out[do + 3] = 255
+            f.write(out)
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +556,53 @@ def process_pic(n, palette_cache, want_preview):
         return False
 
 
+def process_sprite_tables(palette, manifest_frames):
+    """
+    Extract PLANET_SHAPES and FACE_SHAPES (SPRITE_TABLES) from tyrian.shp:
+    decode each populated frame's RLE pixels, key transparency to alpha,
+    Lanczos-upscale 4x (RGBA), and write one hdplanet_NN.dat / hdface_NN.dat
+    HDPX-with-alpha asset per frame. Appends a manifest entry per frame to
+    manifest_frames (in place). Returns the number of frames written.
+    """
+    if not os.path.isfile(SHP_PATH):
+        print("error: tyrian.shp not found at %s" % SHP_PATH, file=sys.stderr)
+        return 0
+
+    data, shp_pos = load_shp_table_offsets(SHP_PATH)
+
+    written = 0
+    for table_index, prefix in SPRITE_TABLES:
+        sprites = load_sprite_table(data, shp_pos[table_index])
+        print("Table %d (%s): %d frames -> %s_NN.dat ..." %
+              (table_index, prefix, len(sprites), prefix))
+
+        for frame_index, sprite in enumerate(sprites):
+            if sprite is None:
+                continue
+
+            indices, src_w, src_h = decode_sprite_rle(sprite)
+            rgba = colorize_rgba(indices, palette)
+            upscaled = lanczos_upscale(
+                rgba, src_w, src_h, src_w * SCALE, src_h * SCALE, a=3, channels=4)
+
+            out_name = "%s_%02d.dat" % (prefix, frame_index)
+            out_path = os.path.join(DATA_DIR, out_name)
+            write_hdpx_asset(out_path, upscaled, src_w * SCALE, src_h * SCALE, channels=4)
+
+            manifest_frames.append({
+                "table": "PLANET_SHAPES" if table_index == PLANET_SHAPES else "FACE_SHAPES",
+                "frame_index": frame_index,
+                "file": out_name,
+                "src_width": src_w,
+                "src_height": src_h,
+                "hd_width": src_w * SCALE,
+                "hd_height": src_h * SCALE,
+            })
+            written += 1
+
+    return written
+
+
 def parse_pics_arg(value):
     result = []
     for part in value.split(","):
@@ -426,6 +642,15 @@ def main():
         ok = process_pic(n, palette_cache, want_preview=not args.no_preview)
         if not ok:
             failed.append(n)
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    main_palette = load_palette(PALETTE_PATH, 0)
+    manifest_frames = []
+    sprite_count = process_sprite_tables(main_palette, manifest_frames)
+    if sprite_count:
+        with open(SPRITE_MANIFEST_PATH, "w") as f:
+            json.dump({"scale": SCALE, "frames": manifest_frames}, f, indent=2)
+        print("Wrote %d sprite frames, manifest -> %s" % (sprite_count, SPRITE_MANIFEST_PATH))
 
     if failed:
         print("Done with errors. Failed images: %s" % ", ".join(str(n) for n in failed),
