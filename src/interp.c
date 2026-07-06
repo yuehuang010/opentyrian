@@ -517,8 +517,10 @@ void interp_flight_emit(float alpha)
 		if (op->type != OP_SPRITE2)
 			continue;
 
-		// Sheet identity: sheet8..12 + explosion are wired. Enemy sheets and any
-		// unwired sheet return -1 and stay pure 8-bit (no HD overlay).
+		// Sheet identity: sheet8..12, explosion, and the 31 dynamic per-level
+		// enemy banks (enemySpriteSheets[]) are wired. Any unresolved sheet (e.g.
+		// an empty enemy slot, or a newsh file with no HD asset) returns -1 and
+		// stays pure 8-bit (no HD overlay).
 		int sheet = hd_sheet_id_for(op->s2.data);
 		if (sheet < 0)
 			continue;

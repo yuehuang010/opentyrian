@@ -488,20 +488,96 @@ void blit_sprite_dark(SDL_Surface *surface, int x, int y, unsigned int table, un
 	}
 }
 
+// One entry per distinct newsh?.shp enemy bank the extractor emits HD assets
+// for (tools/hd_extract_comp.py, WHOLE_FILE_SHEETS/_enemy_sheet_name()/
+// _ENEMY_ID_OVERRIDES). `chr` is the lowercased newsh filename suffix char
+// (i.e. tolower() of the shapeFile[] char passed to JE_loadCompShapes());
+// `stem` is the exact "enemy_<suffix>" asset stem (hd_comp_manifest.json key).
+// Order/count verified 1:1 against tyrian21/hd_comp_manifest.json's 31
+// "enemy_*" entries -- do not add/remove without re-checking the manifest.
+static const struct { char chr; const char *stem; } hd_enemy_stems[HD_SHEET_ENEMY_COUNT] =
+{
+	{ '0', "enemy_0" },
+	{ '2', "enemy_2" },
+	{ '3', "enemy_3" },
+	{ '4', "enemy_4" },
+	{ '5', "enemy_5" },
+	{ '7', "enemy_7" },
+	{ '8', "enemy_8" },
+	{ '9', "enemy_9" },
+	{ 'a', "enemy_a" },
+	{ 'b', "enemy_b" },
+	{ 'c', "enemy_c" },
+	{ '^', "enemy_caret" },
+	{ 'd', "enemy_d" },
+	{ 'e', "enemy_e" },
+	{ 'f', "enemy_f" },
+	{ 'g', "enemy_g" },
+	{ 'h', "enemy_h" },
+	{ '#', "enemy_hash" },
+	{ 'i', "enemy_i" },
+	{ 'j', "enemy_j" },
+	{ 'k', "enemy_k" },
+	{ 'l', "enemy_l" },
+	{ 'm', "enemy_m" },
+	{ 'n', "enemy_n" },
+	{ 'o', "enemy_o" },
+	{ 'p', "enemy_p" },
+	{ 'r', "enemy_r" },
+	{ 's', "enemy_s" },
+	{ 't', "enemy_t" },
+	{ 'u', "enemy_u" },
+	{ 'v', "enemy_v" },
+};
+
+int enemy_slot_stem_id[4] = { -1, -1, -1, -1 };
+
+// Resolves a shapeFile[] char (as passed to JE_loadCompShapes(), i.e. before its
+// own tolower()) to a stable HD_SHEET_ENEMY_FIRST+n id, or -1 if that newsh file
+// has no HD asset (e.g. shapeFile[] entries 'Q'/'@', for which no newshq.shp /
+// newsh@.shp data file -- and thus no extracted enemy_q/enemy_@ asset -- exists).
+static int hd_enemy_stem_id_for_char(char shape_file_char)
+{
+	char c = (char)tolower((unsigned char)shape_file_char);
+	for (int i = 0; i < HD_SHEET_ENEMY_COUNT; ++i)
+		if (hd_enemy_stems[i].chr == c)
+			return HD_SHEET_ENEMY_FIRST + i;
+	return -1;
+}
+
+void hd_enemy_slot_set(int slot, char shape_file_char)
+{
+	assert(slot >= 0 && slot < (int)COUNTOF(enemy_slot_stem_id));
+	enemy_slot_stem_id[slot] = hd_enemy_stem_id_for_char(shape_file_char);
+}
+
+void hd_enemy_slot_clear(int slot)
+{
+	assert(slot >= 0 && slot < (int)COUNTOF(enemy_slot_stem_id));
+	enemy_slot_stem_id[slot] = -1;
+}
+
 int hd_sheet_id_for(const Uint8 *data)
 {
 	if (data == NULL)
 		return -1;
 
-	// STATIC-IDENTITY sheets loaded once at startup. The per-level enemy sheets
-	// (enemySpriteSheets[]) are dynamic identity and deliberately NOT matched here,
-	// so they stay pure 8-bit (return -1) until their own increment.
+	// STATIC-IDENTITY sheets loaded once at startup.
 	if (data == spriteSheet8.data)          return HD_SHEET_SHEET8;
 	if (data == spriteSheet9.data)          return HD_SHEET_SHEET9;
 	if (data == spriteSheet10.data)         return HD_SHEET_SHEET10;
 	if (data == spriteSheet11.data)         return HD_SHEET_SHEET11;
 	if (data == spriteSheet12.data)         return HD_SHEET_SHEET12;
 	if (data == explosionSpriteSheet.data)  return HD_SHEET_EXPLOSION;
+
+	// Dynamic-identity per-level enemy banks: resolve via the slot->stem map
+	// maintained by hd_enemy_slot_set()/hd_enemy_slot_clear() (src/tyrian2.c,
+	// event type 5's newsh?.shp load). enemy_slot_stem_id[i] is -1 for an empty
+	// slot or an unmapped newsh file, which correctly falls through to -1 here.
+	for (int i = 0; i < (int)COUNTOF(enemySpriteSheets); ++i)
+		if (data == enemySpriteSheets[i].data)
+			return enemy_slot_stem_id[i];
+
 	return -1;
 }
 
@@ -515,7 +591,11 @@ const char *hd_sheet_stem(int sheet_id)
 	case HD_SHEET_SHEET11:    return "sheet11";
 	case HD_SHEET_SHEET12:    return "sheet12";
 	case HD_SHEET_EXPLOSION:  return "explosion";
-	default:                  return NULL;
+	default:
+		if (sheet_id >= HD_SHEET_ENEMY_FIRST &&
+		    sheet_id < HD_SHEET_ENEMY_FIRST + HD_SHEET_ENEMY_COUNT)
+			return hd_enemy_stems[sheet_id - HD_SHEET_ENEMY_FIRST].stem;
+		return NULL;
 	}
 }
 

@@ -118,9 +118,12 @@ void JE_loadCompShapesB(Sprite2_array *, FILE *f);
 void free_sprite2s(Sprite2_array *);
 
 // HD in-flight compositor: stable small ids for the sprite sheets that have HD
-// assets. STATIC-IDENTITY sheets (loaded once at startup) are wired here; the
-// per-level enemy sheets (enemySpriteSheets[]) are dynamic identity and remain
-// future work (hd_sheet_id_for returns -1 for them, keeping them pure 8-bit).
+// assets. STATIC-IDENTITY sheets (loaded once at startup) get fixed ids below.
+// The per-level enemy sheets (enemySpriteSheets[0..3]) are dynamic identity --
+// each runtime slot is loaded from one of 31 possible newsh?.shp files, one per
+// level event -- so their ids are assigned per distinct newsh source (one id per
+// `enemy_<suffix>` stem the extractor emits) and resolved at runtime via
+// enemy_slot_stem_id[]; see hd_enemy_slot_set()/hd_enemy_slot_clear() below.
 enum
 {
 	HD_SHEET_SHEET8 = 0,    // player shots (spriteSheet8)
@@ -129,7 +132,26 @@ enum
 	HD_SHEET_SHEET11,       // spriteSheet11
 	HD_SHEET_SHEET12,       // spriteSheet12
 	HD_SHEET_EXPLOSION,     // explosionSpriteSheet
+	HD_SHEET_ENEMY_FIRST,   // first of 31 stable per-newsh-file enemy ids
+	HD_SHEET_ENEMY_COUNT = 31,
 };
+
+// Per-slot HD sheet id for enemySpriteSheets[0..3], or -1 if that slot is empty
+// or holds a newsh file with no known enemy_<suffix> HD asset (e.g. the unused
+// 'Q'/'@' shapeFile entries -- see hd_enemy_stem_id_for_char()). Updated by
+// hd_enemy_slot_set()/hd_enemy_slot_clear() at the same call sites that load or
+// free enemySpriteSheets[i] (src/tyrian2.c). Declared here (not static) so
+// hd_sheet_id_for() can read it inline; do not write it from outside
+// hd_enemy_slot_set()/hd_enemy_slot_clear().
+extern int enemy_slot_stem_id[4];
+
+// Records that enemySpriteSheets[slot] now holds the newsh<lower(shape_file_char)>.shp
+// bank (the same `shape_file_char` passed to JE_loadCompShapes()); resolves it to
+// a stable HD_SHEET_ENEMY_FIRST+n id (or -1 if that newsh file has no HD asset).
+void hd_enemy_slot_set(int slot, char shape_file_char);
+
+// Records that enemySpriteSheets[slot] has been freed / holds no bank.
+void hd_enemy_slot_clear(int slot);
 
 // Maps a Sprite2 sheet's stable `.data` pointer to its HD sheet id, or -1 if the
 // sheet has no HD asset wired yet.

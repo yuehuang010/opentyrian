@@ -676,6 +676,10 @@ start_level:
 	free_sprite2s(&enemySpriteSheets[1]);
 	free_sprite2s(&enemySpriteSheets[2]);
 	free_sprite2s(&enemySpriteSheets[3]);
+	hd_enemy_slot_clear(0);
+	hd_enemy_slot_clear(1);
+	hd_enemy_slot_clear(2);
+	hd_enemy_slot_clear(3);
 
 	/* Normal speed */
 	if (fastPlay != 0)
@@ -4398,9 +4402,13 @@ void JE_eventSystem(void)
 					{
 						assert(newEnemyShapeTables[i] <= COUNTOF(shapeFile));
 						JE_loadCompShapes(&enemySpriteSheets[i], shapeFile[newEnemyShapeTables[i] - 1]);
+						hd_enemy_slot_set(i, shapeFile[newEnemyShapeTables[i] - 1]);
 					}
 					else
+					{
 						free_sprite2s(&enemySpriteSheets[i]);
+						hd_enemy_slot_clear(i);
+					}
 
 					enemySpriteSheetIds[i] = newEnemyShapeTables[i];
 				}

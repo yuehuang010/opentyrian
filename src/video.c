@@ -85,7 +85,10 @@ static bool hd_sprite_queue_overflow_warned = false;
 // Per-frame HD sheet-frame texture cache, keyed by (sheet id, frame index).
 // Mirrors load_hd_sprite's "load once, remember failure, never retry" pattern so
 // a missing frame file is not re-opened every render.
-#define HD_FLIGHT_SHEET_COUNT 16
+// 6 static-identity sheets (HD_SHEET_SHEET8..HD_SHEET_EXPLOSION) + 31 dynamic
+// per-level enemy banks (HD_SHEET_ENEMY_FIRST..+HD_SHEET_ENEMY_COUNT-1), sized
+// with headroom for future static sheets (see sprite.h).
+#define HD_FLIGHT_SHEET_COUNT 48
 #define HD_FLIGHT_FRAME_MAX 512
 static SDL_Texture *hd_sheet_frame_tex[HD_FLIGHT_SHEET_COUNT][HD_FLIGHT_FRAME_MAX];
 static bool hd_sheet_frame_load_failed[HD_FLIGHT_SHEET_COUNT][HD_FLIGHT_FRAME_MAX];
