@@ -51,27 +51,35 @@ Upscaler tags: `L` = Lanczos placeholder · `E` = Real-ESRGAN (photo/anime) ·
 
 ---
 
-## 2. Sprite tables (`Sprite`) — 🔨 title logo done
+## 2. Sprite tables (`Sprite`) — ✅ fonts + logo wired; menu sprites extracted
 
 Loaded by `JE_loadMainShapeTables("tyrian.shp")` (or `tyrianc.shp` at Xmas),
-`opentyr.c:796`. Transparency = color 0 → must become real alpha.
-See plan §Phase 2 Tracks A/B/C and §Phase 3 (recoloring).
+`opentyr.c:796`. Transparency = color 0 → real alpha.
 
-| Table | `sprite.h` id | Contents | Blit modes used | Upscaler | Status |
-|--:|---|---|---|:--:|:--:|
-| 0 | `FONT_SHAPES` | large font | — | 🎨 H | ⬜ redraw |
-| 1 | `SMALL_FONT_SHAPES` | small font | — | 🎨 H | ⬜ redraw |
-| 2 | `TINY_FONT` | tiny font | — | 🎨 H | ⬜ redraw |
-| 3 | `PLANET_SHAPES` | title logo, planets, cube | plain, blend | X | 🔨 logo (#146) done · rest extracted |
-| 4 | `FACE_SHAPES` | menu portraits | plain | X | ⬜ (per-face `facepal[]` recolor) |
-| 5 | `OPTION_SHAPES` | option/help icons | plain | X/H | ⬜ |
-| 6 | `WEAPON_SHAPES` | weapon icons | plain | X | ⬜ |
-| 7 | `EXTRA_SHAPES` | ending pics (`estsc.shp`, `mainint.c:2475`) | plain | E | ⬜ |
+| Table | `sprite.h` id | Contents | Upscaler | HD status |
+|--:|---|---|:--:|:--:|
+| 0 | `FONT_SHAPES` | large font | X | ✅ wired (HD font rendering, `hd_font_emit`) |
+| 1 | `SMALL_FONT_SHAPES` | small font | X | ✅ wired |
+| 2 | `TINY_FONT` | tiny font | X | ✅ wired |
+| 3 | `PLANET_SHAPES` | title logo, planets, cube | X | ✅ logo `#146` live; planets wired (dormant, §note) |
+| 4 | `FACE_SHAPES` | menu portraits | X | ⬜ extracted (per-face palette); wiring needs persistent overlay |
+| 5 | `OPTION_SHAPES` | option/help icons | X | 🔨 wired but dormant (shop has no HD backdrop) |
+| 6 | `WEAPON_SHAPES` | weapon icons | X | ⬜ extracted; one-shot draw → needs persistent overlay |
+| 7 | `EXTRA_SHAPES` | ending pics (`estsc.shp`) | X | ⬜ extracted |
 
-**Recommended first target (Track 2a):** `PLANET_SHAPES` #146 (title logo) and
-`FACE_SHAPES` — static, plain-blit, no recolor → behave like backdrops, reuse
-the `hd_set_backdrop`-style compositor. Fonts are 🎨 **redraw** (Phase 4), not
-upscale.
+**Fonts (was 🎨 redraw): done via xBRZ brightness maps + runtime recolor**, not a
+TTF redraw — glyphs are recolored per draw call (`hue<<4 | (brightness+value)`) to
+match `blit_sprite_hv`. HD text shows on all full-screen VGA screens (title,
+menus, shop, interlude); in-flight HUD stays classic by design (composite/interp
+can't be reproduced by a full-screen quad safely). See
+[`REMASTER_FLIGHT_COMPOSITOR.md`](REMASTER_FLIGHT_COMPOSITOR.md) for the shared
+recolor-synthesis approach.
+
+**Menu-sprite dormancy:** OPTION/PLANET menu sprites are wired but only composite
+where an HD backdrop is active; the shop screen (`JE_itemScreen`) has none, so
+they fall back to classic today. FACE/WEAPON draw once per menu-state (not per
+frame) → need a *persistent* HD overlay (current overlay is immediate-mode).
+Both are follow-ups; assets are ready.
 
 ---
 
@@ -151,14 +159,17 @@ out of scope for asset upscaling.
 
 | Group | Assets | Done | Notes |
 |---|:--:|:--:|---|
-| Backdrops | 13 | ✅ 13/13 wired | all still Lanczos placeholder |
-| Sprite tables | 8 | 🔨 logo wired; 4 more extracted | title logo `#146` live; OPTION/WEAPON/EXTRA/FACE extracted, wiring pending; 3 fonts = redraw |
-| Comp sprite sheets | 39 sheets / 11,856 frames | 🔨 extracted | wiring = display-list compositor (Track 2b), see design doc |
-| Large PCX | 8 | 🔨 extracted | wiring pending, backdrop-like |
-| Cutscenes | 1 (111 frames) | 🔨 extracted | wiring pending |
+| Backdrops | 13 | ✅ wired | Lanczos placeholder (real AI upscaler unavailable on host) |
+| Fonts | 3 tables / 272 glyphs | ✅ wired | HD text on all full-screen VGA screens; HUD classic by design |
+| In-flight sprites | 39 sheets / 11,856 frames | ✅ wired | shots, ship, powerups, coins, explosions, enemies (plain+darken+blend+`_filter` hue) |
+| Title logo | `PLANET_SHAPES` #146 | ✅ wired | xBRZ, gold |
+| Cutscene | `tyrend.anm` (111 fr) | ✅ wired | HD streaming playback |
+| Menu sprites | FACE/OPTION/WEAPON/PLANET | 🔨 extracted; partly wired | dormant (needs shop HD backdrop + persistent overlay) |
+| Large PCX | 8 | ➖ | 7/8 not engine-hooked (DOS-tool assets); tshp2 deferred |
 
-**State:** all offline extraction done (Phase A). Remaining: wire static assets
-(Phase B), then the invasive in-flight compositor (Phase C, Track 2b) +
-recoloring parity (Phase D) per
-[`REMASTER_FLIGHT_COMPOSITOR.md`](REMASTER_FLIGHT_COMPOSITOR.md), then font
-redraw. Backdrops still Lanczos (real AI upscaler unavailable on this host).
+**State — HD wiring complete.** The gameplay (all in-flight sprites incl.
+recolored enemies), title, backdrops, cutscene, and text render in HD; the whole
+pipeline regenerates from `tools/hd_extract*.py`. Known follow-ups (assets ready):
+menu-sprite dormancy (shop HD backdrop + persistent overlay for FACE/WEAPON
+portraits), swapping backdrop/PCX Lanczos → a real AI upscaler when one is
+available, and (optional) HD in-flight HUD text.
