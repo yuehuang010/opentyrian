@@ -60,4 +60,13 @@ void blur_filter(SDL_Surface *dst, SDL_Surface *src);
 void initialize_starfield(void);
 void update_and_draw_starfield(SDL_Surface* surface, int move_speed);
 
+#define STARFIELD_STAR_COUNT 100
+// Copy the current star buffer positions into out[STARFIELD_STAR_COUNT]; used by
+// the high-fps renderer to snapshot the starfield for interpolation.
+void starfield_snapshot_positions(JE_word *out);
+// Draw the starfield read-only (no position advance) with each star blended
+// between its previous and current snapshot by alpha. Mirrors the pixel logic of
+// update_and_draw_starfield.
+void draw_starfield_interp(SDL_Surface *surface, const JE_word *prev, const JE_word *curr, float alpha);
+
 #endif /* BACKGRND_H */

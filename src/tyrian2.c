@@ -184,6 +184,8 @@ inline static void blit_enemy(SDL_Surface *surface, unsigned int i, signed int x
 	          y = enemy[i].ey + y_offset;
 	const unsigned int index = enemy[i].egr[enemy[i].enemycycle - 1] + sprite_offset;
 
+	interp_tag(INTERP_TAG(INTERP_TAG_ENEMY, i)); // high-fps: pair this enemy's draw across ticks
+
 	if (enemy[i].filter != 0)
 		blit_sprite2_filter(surface, x, y, *enemy[i].sprite2s, index, enemy[i].filter);
 	else
@@ -1095,6 +1097,8 @@ start_level_first:
 
 level_loop:
 
+	interp_record_begin(); // high-fps: start recording this tick's playfield draws
+
 	//tempScreenSeg = game_screen; /* side-effect of game_screen */
 
 	if (isNetworkGame)
@@ -1864,6 +1868,8 @@ draw_player_shot_loop_end:
 								enemyShot[z].animate = 0;
 						}
 
+						interp_tag(INTERP_TAG(INTERP_TAG_ENEMY_SHOT, z)); // high-fps: pair this shot across ticks
+
 						if (enemyShot[z].sgr >= 500)
 							blit_sprite2(VGAScreen, enemyShot[z].sx, enemyShot[z].sy, spriteSheet12, enemyShot[z].sgr + enemyShot[z].animate - 500);
 						else
@@ -1967,6 +1973,8 @@ draw_player_shot_loop_end:
 			}
 			else
 			{
+				interp_tag(INTERP_TAG(INTERP_TAG_EXPLOSION, j)); // high-fps: pair this explosion across ticks
+
 				if (explosionTransparent)
 					blit_sprite2_blend(VGAScreen, explosions[j].x, explosions[j].y, explosionSpriteSheet, explosions[j].sprite + 1);
 				else

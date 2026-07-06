@@ -19,6 +19,7 @@
 #include "shots.h"
 
 #include "player.h"
+#include "interp.h"
 #include "sprite.h"
 #include "video.h"
 #include "varz.h"
@@ -167,6 +168,8 @@ bool player_shot_move_and_draw(
 		JE_word* out_special_radiusw, JE_word* out_special_radiush)
 {
 	PlayerShotDataType* shot = &playerShotData[shot_id];
+
+	interp_tag(INTERP_TAG(INTERP_TAG_PLAYER_SHOT, shot_id)); // high-fps: pair this shot's draw across ticks
 
 	shotAvail[shot_id]--;
 	if (shot_id != MAX_PWEAPON - 1)

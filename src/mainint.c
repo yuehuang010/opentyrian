@@ -44,6 +44,7 @@
 #include "player.h"
 #include "shots.h"
 #include "sndmast.h"
+#include "interp.h"
 #include "sprite.h"
 #include "varz.h"
 #include "vga256d.h"
@@ -2955,6 +2956,10 @@ void JE_inGameDisplays(void)
 	char stemp[21];
 	char tempstr[256];
 
+	// high-fps: this HUD text/icons draw at fixed playfield positions; tag them
+	// STATIC so the interpolated frames hold them in place (no smearing).
+	interp_tag(INTERP_TAG(INTERP_TAG_STATIC, 0));
+
 	for (uint i = 0; i < ((twoPlayerMode && !galagaMode) ? 2 : 1); ++i)
 	{
 		snprintf(tempstr, sizeof(tempstr), "%lu", player[i].cash);
@@ -3381,6 +3386,10 @@ void JE_playerMovement(Player *this_player,
 {
 	JE_integer mouseXC, mouseYC;
 	JE_integer accelXC, accelYC;
+
+	// high-fps: pair this player's ship + sidekick draws across ticks. Both players
+	// call this with distinct playerNum_, so their draws get distinct tags.
+	interp_tag(INTERP_TAG(INTERP_TAG_PLAYER, playerNum_));
 
 	if (playerNum_ == 2 || !twoPlayerMode)
 	{

@@ -19,6 +19,7 @@
 #include "backgrnd.h"
 
 #include "config.h"
+#include "interp.h"
 #include "mtrand.h"
 #include "opentyr.h"
 #include "varz.h"
@@ -63,7 +64,8 @@ void JE_darkenBackground(JE_word neat)  /* wild detail level */
 void blit_background_row(SDL_Surface *surface, int x, int y, Uint8 **map)
 {
 	assert(surface->format->BitsPerPixel == 8);
-	
+	interp_record_bg_row(surface, x, y, map, false);
+
 	Uint8 *pixels = (Uint8 *)surface->pixels + (y * surface->pitch) + x,
 	      *pixels_ll = (Uint8 *)surface->pixels,  // lower limit
 	      *pixels_ul = (Uint8 *)surface->pixels + (surface->h * surface->pitch);  // upper limit
@@ -109,7 +111,8 @@ void blit_background_row(SDL_Surface *surface, int x, int y, Uint8 **map)
 void blit_background_row_blend(SDL_Surface *surface, int x, int y, Uint8 **map)
 {
 	assert(surface->format->BitsPerPixel == 8);
-	
+	interp_record_bg_row(surface, x, y, map, true);
+
 	Uint8 *pixels = (Uint8 *)surface->pixels + (y * surface->pitch) + x,
 	      *pixels_ll = (Uint8 *)surface->pixels,  // lower limit
 	      *pixels_ul = (Uint8 *)surface->pixels + (surface->h * surface->pitch);  // upper limit
@@ -155,7 +158,9 @@ void blit_background_row_blend(SDL_Surface *surface, int x, int y, Uint8 **map)
 void draw_background_1(SDL_Surface *surface)
 {
 	SDL_FillRect(surface, NULL, 0);
-	
+
+	interp_tag(INTERP_TAG(INTERP_TAG_BG1, 0));
+
 	Uint8 **map = (Uint8 **)mapYPos + mapXbpPos - 12;
 	
 	for (int i = -1; i < 7; i++)
@@ -175,9 +180,11 @@ void draw_background_2(SDL_Surface *surface)
 	{
 		// water effect combines background 1 and 2 by synchronizing the x coordinate
 		int x = smoothies[1] ? mapXPos : mapX2Pos;
-		
+
 		Uint8 **map = (Uint8 **)mapY2Pos + (smoothies[1] ? mapXbpPos : mapX2bpPos) - 12;
-		
+
+		interp_tag(INTERP_TAG(INTERP_TAG_BG2, 0));
+
 		for (int i = -1; i < 7; i++)
 		{
 			blit_background_row(surface, x, (i * 28) + backPos2, map);
@@ -208,7 +215,9 @@ void draw_background_2_blend(SDL_Surface *surface)
 		backMove2 = (map2YDelay == 1) ? 1 : 0;
 	
 	Uint8 **map = (Uint8 **)mapY2Pos + mapX2bpPos - 12;
-	
+
+	interp_tag(INTERP_TAG(INTERP_TAG_BG2, 0));
+
 	for (int i = -1; i < 7; i++)
 	{
 		blit_background_row_blend(surface, mapX2Pos, (i * 28) + backPos2, map);
@@ -245,7 +254,9 @@ void draw_background_3(SDL_Surface *surface)
 	}
 	
 	Uint8 **map = (Uint8 **)mapY3Pos + mapX3bpPos - 12;
-	
+
+	interp_tag(INTERP_TAG(INTERP_TAG_BG3, 0));
+
 	for (int i = -1; i < 7; i++)
 	{
 		blit_background_row(surface, mapX3Pos, (i * 28) + backPos3, map);
@@ -488,8 +499,39 @@ void initialize_starfield(void)
 	}
 }
 
+// Draw one star at the given linear pixel offset, reproducing the pixel and
+// bright-neighbor logic shared by update_and_draw_starfield and the interpolated
+// path. `pos` is a signed offset so interpolated positions slightly off the top of
+// the buffer are handled safely.
+static void draw_one_star(Uint8 *p, int pitch, long pos, Uint8 color)
+{
+	if (pos < 0 || pos >= 177 * pitch)
+		return;
+
+	if (p[pos] == 0)
+		p[pos] = color;
+
+	// If star is bright enough, draw surrounding pixels
+	if (color - 4 >= STARFIELD_HUE)
+	{
+		if (p[pos + 1] == 0)
+			p[pos + 1] = color - 4;
+
+		if (pos > 0 && p[pos - 1] == 0)
+			p[pos - 1] = color - 4;
+
+		if (p[pos + pitch] == 0)
+			p[pos + pitch] = color - 4;
+
+		if (pos >= pitch && p[pos - pitch] == 0)
+			p[pos - pitch] = color - 4;
+	}
+}
+
 void update_and_draw_starfield(SDL_Surface* surface, int move_speed)
 {
+	interp_record_starfield(surface);
+
 	Uint8* p = (Uint8*)surface->pixels;
 
 	for (int i = MAX_STARS-1; i >= 0; --i)
@@ -499,27 +541,40 @@ void update_and_draw_starfield(SDL_Surface* surface, int move_speed)
 		star->position += (star->speed + move_speed) * surface->pitch;
 
 		if (star->position < 177 * surface->pitch)
-		{
-			if (p[star->position] == 0)
-			{
-				p[star->position] = star->color;
-			}
+			draw_one_star(p, surface->pitch, star->position, star->color);
+	}
+}
 
-			// If star is bright enough, draw surrounding pixels
-			if (star->color - 4 >= STARFIELD_HUE)
-			{
-				if (p[star->position + 1] == 0)
-					p[star->position + 1] = star->color - 4;
+void starfield_snapshot_positions(JE_word *out)
+{
+	for (int i = 0; i < MAX_STARS; ++i)
+		out[i] = starfield_stars[i].position;
+}
 
-				if (star->position > 0 && p[star->position - 1] == 0)
-					p[star->position - 1] = star->color - 4;
+void draw_starfield_interp(SDL_Surface *surface, const JE_word *prev, const JE_word *curr, float alpha)
+{
+	Uint8 *p = (Uint8 *)surface->pixels;
+	const int pitch = surface->pitch;
+	const long wrap = 65536L; // star->position is a JE_word relying on overflow wrap
 
-				if (p[star->position + surface->pitch] == 0)
-					p[star->position + surface->pitch] = star->color - 4;
+	for (int i = MAX_STARS - 1; i >= 0; --i)
+	{
+		long pp = prev[i], cc = curr[i];
 
-				if (star->position >= surface->pitch && p[star->position - surface->pitch] == 0)
-					p[star->position - surface->pitch] = star->color - 4;
-			}
-		}
+		// Unwrap the 16-bit position so a wrap-around this tick interpolates forward
+		// instead of snapping backward across the whole buffer.
+		long delta = cc - pp;
+		if (delta < -wrap / 2)
+			delta += wrap;
+		else if (delta > wrap / 2)
+			delta -= wrap;
+
+		long pos = pp + (long)(delta * alpha + (delta >= 0 ? 0.5f : -0.5f));
+		pos %= wrap;
+		if (pos < 0)
+			pos += wrap;
+
+		if (pos < 177 * pitch)
+			draw_one_star(p, pitch, pos, starfield_stars[i].color);
 	}
 }
