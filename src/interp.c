@@ -246,7 +246,10 @@ void interp_record_starfield(SDL_Surface *dst)
 
 void interp_record_begin(void)
 {
-	if (!highfps_mode)
+	// Record when high-fps interpolation is active OR when the HD flight compositor
+	// needs the display list to emit HD overlays (which it does even with high-fps
+	// off -- one HD present per tick at alpha=1).
+	if (!highfps_mode && !(hd_mode && hd_flight_active))
 	{
 		interp_recording = false;
 		return;
@@ -366,6 +369,46 @@ static void reapply_filter(SDL_Surface *surface)
 	}
 }
 
+// Computes an op's interpolated draw position for the given `back` weight
+// (= 1 - alpha, the weight toward the previous-tick position). Shared by the
+// replay (interp_draw) and the HD overlay emit (interp_flight_emit) so both use
+// identical positions and the HD sprite rides exactly on top of its 8-bit base.
+// When there is no previous list to pair against, returns the raw current-tick
+// position (alpha = 1 behaviour).
+static void interp_op_pos(const Op *op, float back, int *out_dx, int *out_dy)
+{
+	int dx = op->x, dy = op->y;
+
+	if (have_prev)
+	{
+		const Op *p = hash_find_prev(op->key);
+		if (p != NULL)
+		{
+			int ddx = p->x - op->x;
+			int ddy = p->y - op->y;
+
+			// Background layers scroll and wrap every 28 px; unwrap so a wrap tick
+			// interpolates forward rather than snapping back a whole tile row.
+			if (op->type == OP_BG_ROW || op->type == OP_BG_ROW_BLEND)
+			{
+				if (ddy > 14)
+					ddy -= 28;
+				else if (ddy < -14)
+					ddy += 28;
+			}
+
+			if (abs(ddx) <= MAX_INTERP_JUMP && abs(ddy) <= MAX_INTERP_JUMP)
+			{
+				dx = op->x + (int)lrintf(ddx * back);
+				dy = op->y + (int)lrintf(ddy * back);
+			}
+		}
+	}
+
+	*out_dx = dx;
+	*out_dy = dy;
+}
+
 // Renders the interpolated playfield into game_screen for the given alpha
 // (0.0 = previous tick, 1.0 = current tick) by replaying the current tick's
 // display list, offsetting each op toward its previous-tick position.
@@ -410,30 +453,8 @@ static void interp_draw(float alpha)
 			continue;
 		}
 
-		int dx = op->x, dy = op->y;
-
-		const Op *p = hash_find_prev(op->key);
-		if (p != NULL)
-		{
-			int ddx = p->x - op->x;
-			int ddy = p->y - op->y;
-
-			// Background layers scroll and wrap every 28 px; unwrap so a wrap tick
-			// interpolates forward rather than snapping back a whole tile row.
-			if (op->type == OP_BG_ROW || op->type == OP_BG_ROW_BLEND)
-			{
-				if (ddy > 14)
-					ddy -= 28;
-				else if (ddy < -14)
-					ddy += 28;
-			}
-
-			if (abs(ddx) <= MAX_INTERP_JUMP && abs(ddy) <= MAX_INTERP_JUMP)
-			{
-				dx = op->x + (int)lrintf(ddx * back);
-				dy = op->y + (int)lrintf(ddy * back);
-			}
-		}
+		int dx, dy;
+		interp_op_pos(op, back, &dx, &dy);
 
 		switch (op->type)
 		{
@@ -451,6 +472,56 @@ static void interp_draw(float alpha)
 }
 
 // ---------------------------------------------------------------------------
+// HD in-flight overlay emit
+// ---------------------------------------------------------------------------
+
+void interp_flight_emit(float alpha)
+{
+	// Rebuild the video flight queue for this presented frame.
+	hd_flight_begin();
+
+	if (!hd_mode || curr_count == 0)
+		return;
+
+	if (have_prev && !hash_built)
+		hash_build_prev();
+
+	const float back = 1.0f - alpha;
+
+	for (int i = 0; i < curr_count; ++i)
+	{
+		const Op *op = &curr_ops[i];
+
+		// This increment: player shots only (spriteSheet8), plain blit variant only.
+		if (op->type != OP_SPRITE2 || (InterpSprite2Kind)op->variant != INTERP_SPRITE2)
+			continue;
+
+		int sheet = hd_sheet_id_for(op->s2.data);
+		if (sheet != HD_SHEET_SHEET8)
+			continue;
+
+		// The Sprite2 frame index is 1-based (blit uses index-1); the HD frame files
+		// are 0-based (hdcomp_sheet8_00.dat == frame index 0).
+		if (op->index < 1)
+			continue;
+		int frame = (int)op->index - 1;
+
+		SDL_Texture *tex = load_hd_sheet_frame(sheet, frame);
+		if (tex == NULL)
+			continue;
+
+		int dx, dy;
+		interp_op_pos(op, back, &dx, &dy);
+
+		// The HD asset (48x56) is a 4x upscale of the 12x14 Sprite2 cell, so its
+		// logical footprint is 12x14 at the playfield-relative position (op.x - 24,
+		// op.y). The -24 matches JE_starCompositeShow's `src += 24` playfield origin.
+		SDL_Rect src = { 0, 0, 48, 56 };
+		hd_flight_set(tex, src, dx - 24, dy, 12, 14, SDL_BLENDMODE_BLEND, 255, 255, 255, 255);
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Present
 // ---------------------------------------------------------------------------
 
@@ -464,7 +535,9 @@ void flight_present(void)
 	// time.
 	do
 	{
-		interp_draw(have_prev ? getTickInterpAlpha() : 1.0f);
+		float alpha = have_prev ? getTickInterpAlpha() : 1.0f;
+		interp_draw(alpha);
+		interp_flight_emit(alpha); // HD overlay rides the same interpolated positions
 		JE_starCompositeShow();
 		handleSdlEvents();
 

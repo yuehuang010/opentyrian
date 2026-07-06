@@ -22,6 +22,7 @@
 #include "keyboard.h"
 #include "opentyr.h"
 #include "palette.h"
+#include "sprite.h"
 #include "video_scale.h"
 
 #include <assert.h>
@@ -51,6 +52,8 @@ int hd_backdrop_fade = 0;
 
 bool crt_mode = false;
 
+bool hd_flight_active = false;
+
 static SDL_Texture *crt_scanline_tex = NULL;
 static SDL_Texture *crt_vignette_tex = NULL;
 static int crt_built_w = 0;
@@ -78,6 +81,31 @@ static HDSpriteQueueEntry hd_sprite_queue[HD_SPRITE_QUEUE_COUNT];
 static int hd_sprite_queue_count = 0;
 static bool hd_sprite_queue_overflow_warned = false;
 
+// ---- HD in-flight sprite compositor (Track B) ----
+// Per-frame HD sheet-frame texture cache, keyed by (sheet id, frame index).
+// Mirrors load_hd_sprite's "load once, remember failure, never retry" pattern so
+// a missing frame file is not re-opened every render.
+#define HD_FLIGHT_SHEET_COUNT 16
+#define HD_FLIGHT_FRAME_MAX 512
+static SDL_Texture *hd_sheet_frame_tex[HD_FLIGHT_SHEET_COUNT][HD_FLIGHT_FRAME_MAX];
+static bool hd_sheet_frame_load_failed[HD_FLIGHT_SHEET_COUNT][HD_FLIGHT_FRAME_MAX];
+
+// Per-frame queue of HD flight-sprite overlays, in logical VGA-space rects (with
+// the playfield x-offset already applied by the caller). Rebuilt every presented
+// frame from the interp display list; drained by scale_and_flip().
+#define HD_FLIGHT_QUEUE_COUNT 512
+typedef struct
+{
+	SDL_Texture *tex;
+	SDL_Rect src;        // source rect within the texture
+	int lx, ly, lw, lh;  // logical position/size in the 320x200 VGA space
+	SDL_BlendMode blendmode;
+	Uint8 r, g, b, a;    // colour / alpha mod
+} HDFlightQueueEntry;
+static HDFlightQueueEntry hd_flight_queue[HD_FLIGHT_QUEUE_COUNT];
+static int hd_flight_queue_count = 0;
+static bool hd_flight_queue_overflow_warned = false;
+
 SDL_Surface *VGAScreen, *VGAScreenSeg;
 SDL_Surface *VGAScreen2;
 SDL_Surface *game_screen;
@@ -97,6 +125,7 @@ static void deinit_texture(void);
 static int window_get_display_index(void);
 static void window_center_in_display(int display_index);
 static void calc_dst_render_rect(SDL_Surface *src_surface, SDL_Rect *dst_rect);
+static void classic_scale_base(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void scale_and_flip(SDL_Surface *);
 static bool load_hd_backdrop(int pic_num);
 static SDL_Texture *load_hd_sprite(const char *asset_name);
@@ -697,6 +726,139 @@ void hd_clear_sprites(void)
 	hd_sprite_queue_count = 0;
 }
 
+/**
+ * Lazily loads and caches one HD sheet frame ("hdcomp_<stem>_NN.dat") for the
+ * given (sheet id, frame index). Returns the cached texture, or NULL if the asset
+ * is missing/malformed. Mirrors load_hd_sprite: a load failure is only ever
+ * reported (and retried) once per distinct (sheet, index).
+ */
+SDL_Texture *load_hd_sheet_frame(int sheet_id, int index)
+{
+	if (sheet_id < 0 || sheet_id >= HD_FLIGHT_SHEET_COUNT || index < 0 || index >= HD_FLIGHT_FRAME_MAX)
+		return NULL;
+
+	if (hd_sheet_frame_tex[sheet_id][index] != NULL)
+		return hd_sheet_frame_tex[sheet_id][index];
+
+	if (hd_sheet_frame_load_failed[sheet_id][index])
+		return NULL;
+
+	const char *stem = hd_sheet_stem(sheet_id);
+	if (stem == NULL)
+	{
+		hd_sheet_frame_load_failed[sheet_id][index] = true;
+		return NULL;
+	}
+
+	char name[32];
+	snprintf(name, sizeof name, "hdcomp_%s_%02d.dat", stem, index);
+
+	bool ok = false;
+	SDL_Texture *tex = NULL;
+
+	FILE *f = dir_fopen(data_dir(), name, "rb");
+	if (f != NULL)
+	{
+		Uint8 magic[4];
+		Uint8 dims[8];
+		Uint8 *pixels = NULL;
+
+		if (fread(magic, 1, 4, f) == 4 &&
+		    memcmp(magic, "HDPX", 4) == 0 &&
+		    fread(dims, 1, 8, f) == 8)
+		{
+			Uint32 width, height;
+			memcpy(&width, &dims[0], 4);
+			memcpy(&height, &dims[4], 4);
+			width = SDL_SwapLE32(width);
+			height = SDL_SwapLE32(height);
+
+			if (width > 0 && height > 0 && width <= 8192 && height <= 8192)
+			{
+				size_t pixel_bytes = (size_t)width * height * 4;
+				pixels = malloc(pixel_bytes);
+
+				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
+				{
+					tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+						SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
+
+					if (tex != NULL)
+					{
+						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
+						{
+							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+							ok = true;
+						}
+						else
+						{
+							SDL_DestroyTexture(tex);
+							tex = NULL;
+						}
+					}
+				}
+			}
+		}
+
+		free(pixels);
+		fclose(f);
+	}
+
+	if (!ok)
+	{
+		fprintf(stderr, "warning: HD sheet frame %s unavailable; falling back\n", name);
+		hd_sheet_frame_load_failed[sheet_id][index] = true;
+		return NULL;
+	}
+
+	hd_sheet_frame_tex[sheet_id][index] = tex;
+	return tex;
+}
+
+bool hd_flight_lookup(int sheet_id, int index)
+{
+	return load_hd_sheet_frame(sheet_id, index) != NULL;
+}
+
+void hd_flight_begin(void)
+{
+	hd_flight_queue_count = 0;
+}
+
+void hd_flight_set(SDL_Texture *tex, SDL_Rect src, int lx, int ly, int lw, int lh, SDL_BlendMode blendmode, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
+{
+	if (tex == NULL)
+		return;
+
+	if (hd_flight_queue_count >= HD_FLIGHT_QUEUE_COUNT)
+	{
+		if (!hd_flight_queue_overflow_warned)
+		{
+			fprintf(stderr, "warning: HD flight sprite queue full; dropping sprites\n");
+			hd_flight_queue_overflow_warned = true;
+		}
+		return;
+	}
+
+	HDFlightQueueEntry *entry = &hd_flight_queue[hd_flight_queue_count++];
+	entry->tex = tex;
+	entry->src = src;
+	entry->lx = lx;
+	entry->ly = ly;
+	entry->lw = lw;
+	entry->lh = lh;
+	entry->blendmode = blendmode;
+	entry->r = r;
+	entry->g = g;
+	entry->b = b;
+	entry->a = a;
+}
+
+void hd_flight_clear(void)
+{
+	hd_flight_queue_count = 0;
+}
+
 static void deinit_crt_overlay(void)
 {
 	if (crt_scanline_tex != NULL)
@@ -855,9 +1017,86 @@ static void apply_crt_overlay(const SDL_Rect *dst_rect)
 	SDL_RenderCopy(main_window_renderer, crt_vignette_tex, NULL, dst_rect);
 }
 
+/**
+ * The classic present base: software-scale the 8-bit src_surface into
+ * main_window_texture and blit it to the window at the computed destination rect
+ * (returned in *dst_rect). This is exactly the head of the classic scale-and-flip
+ * tail, factored out so the HD flight branch composites on an identical base --
+ * making empty-queue HD output byte-identical to classic by construction. Does NOT
+ * apply the CRT overlay or present; the caller owns those (ordering differs).
+ */
+static void classic_scale_base(SDL_Surface *src_surface, SDL_Rect *dst_rect)
+{
+	assert(scaler_function != NULL);
+	scaler_function(src_surface, main_window_texture);
+
+	calc_dst_render_rect(src_surface, dst_rect);
+
+	SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
+	SDL_RenderClear(main_window_renderer);
+	SDL_RenderCopy(main_window_renderer, main_window_texture, NULL, dst_rect);
+}
+
 static void scale_and_flip(SDL_Surface *src_surface)
 {
 	assert(src_surface->format->BitsPerPixel == 8);
+
+	// HD in-flight compositor (Track B): draw the scaled 8-bit playfield exactly as
+	// the classic tail would, then overlay the HD flight-sprite queue on top. With an
+	// empty queue this produces byte-identical pixels to classic (same classic_scale_base
+	// call, same apply_crt_overlay, same present). Placed before the backdrop branch:
+	// gameplay has a scrolling background, not a PIC backdrop, so hd_backdrop_active is
+	// false in flight.
+	if (hd_mode && hd_flight_active)
+	{
+		SDL_Rect dst_rect;
+		classic_scale_base(src_surface, &dst_rect);
+
+		SDL_Texture *cur_tex = NULL;
+		SDL_BlendMode cur_bm = SDL_BLENDMODE_NONE;
+		Uint8 cur_r = 0, cur_g = 0, cur_b = 0, cur_a = 0;
+		bool state_valid = false;
+
+		for (int i = 0; i < hd_flight_queue_count; ++i)
+		{
+			HDFlightQueueEntry *entry = &hd_flight_queue[i];
+
+			SDL_Rect window_rect;
+			window_rect.x = dst_rect.x + entry->lx * dst_rect.w / vga_width;
+			window_rect.y = dst_rect.y + entry->ly * dst_rect.h / vga_height;
+			window_rect.w = entry->lw * dst_rect.w / vga_width;
+			window_rect.h = entry->lh * dst_rect.h / vga_height;
+
+			// Cheap dedupe: only re-set mod state on the texture when it changed since
+			// the previous entry (SDL texture mod is sticky per texture).
+			bool tex_changed = (entry->tex != cur_tex) || !state_valid;
+			if (tex_changed || entry->blendmode != cur_bm)
+			{
+				SDL_SetTextureBlendMode(entry->tex, entry->blendmode);
+				cur_bm = entry->blendmode;
+			}
+			if (tex_changed || entry->r != cur_r || entry->g != cur_g || entry->b != cur_b)
+			{
+				SDL_SetTextureColorMod(entry->tex, entry->r, entry->g, entry->b);
+				cur_r = entry->r; cur_g = entry->g; cur_b = entry->b;
+			}
+			if (tex_changed || entry->a != cur_a)
+			{
+				SDL_SetTextureAlphaMod(entry->tex, entry->a);
+				cur_a = entry->a;
+			}
+			cur_tex = entry->tex;
+			state_valid = true;
+
+			SDL_RenderCopy(main_window_renderer, entry->tex, &entry->src, &window_rect);
+		}
+
+		apply_crt_overlay(&dst_rect);
+		SDL_RenderPresent(main_window_renderer);
+		hd_flight_clear();
+		last_output_rect = dst_rect;
+		return;
+	}
 
 	if (hd_mode && hd_backdrop_active && load_hd_backdrop(hd_backdrop_id))
 	{
@@ -924,17 +1163,9 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	// fell back to the classic blit.
 	hd_sprite_queue_count = 0;
 
-	// Do software scaling
-	assert(scaler_function != NULL);
-	scaler_function(src_surface, main_window_texture);
-
+	// Do software scaling and blit the output texture to the window.
 	SDL_Rect dst_rect;
-	calc_dst_render_rect(src_surface, &dst_rect);
-
-	// Clear the window and blit the output texture to it
-	SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
-	SDL_RenderClear(main_window_renderer);
-	SDL_RenderCopy(main_window_renderer, main_window_texture, NULL, &dst_rect);
+	classic_scale_base(src_surface, &dst_rect);
 	apply_crt_overlay(&dst_rect);
 	SDL_RenderPresent(main_window_renderer);
 

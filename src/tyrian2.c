@@ -660,6 +660,8 @@ void JE_main(void)
 
 start_level:
 
+	hd_flight_active = false; // between-level / exit: HD flight compositor idle
+
 	flight_interp_reset(); // discard stale interpolation snapshots across levels
 
 	keyboardClearInput();
@@ -1096,6 +1098,8 @@ start_level_first:
 	BKwrap3 = BKwrap3to = &megaData3.mainmap[1][0];
 
 level_loop:
+
+	hd_flight_active = true; // in the real-time flight loop: HD flight compositor on
 
 	interp_record_begin(); // high-fps: start recording this tick's playfield draws
 
@@ -2365,6 +2369,12 @@ draw_player_shot_loop_end:
 	}
 	else
 	{
+		// HD flight compositor with high-fps off: emit the HD overlay for this tick
+		// (one present at alpha=1, no motion interpolation) before the single classic
+		// present. The 8-bit base is the simulation's own game_screen draw, untouched.
+		if (hd_mode && hd_flight_active && !playerEndLevel && !skipStarShowVGA)
+			interp_flight_emit(1.0f);
+
 		JE_starShowVGA();
 	}
 

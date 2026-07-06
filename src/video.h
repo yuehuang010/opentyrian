@@ -48,6 +48,8 @@ extern int  hd_backdrop_fade;    // 0..255, drives the HD backdrop fade-in
 
 extern bool crt_mode;            // optional CRT scanline + vignette post-process
 
+extern bool hd_flight_active;    // set while the in-flight HD sprite compositor should overlay
+
 bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if its HD asset loads; returns success
 void hd_clear_backdrop(void);       // stop HD compositing (revert to classic)
 
@@ -56,6 +58,17 @@ void hd_clear_backdrop(void);       // stop HD compositing (revert to classic)
 // the queue is drained by scale_and_flip() and must be re-populated each frame.
 bool hd_set_sprite(const char *asset_name, int lx, int ly, int lw, int lh); // queue an HD sprite overlay at the given logical VGA rect; returns success
 void hd_clear_sprites(void);       // drop any queued HD sprite overlays (e.g. when leaving a screen)
+
+// HD in-flight sprite compositor (Track B). load_hd_sheet_frame lazily loads and
+// caches one HDPX frame of an HD sheet (keyed by sheet id + frame index), mirroring
+// the "load once, remember failure, never retry" pattern of the menu HD sprite
+// cache. The flight queue is rebuilt every presented frame (immediate mode) from
+// the interp display list and drained by scale_and_flip().
+SDL_Texture *load_hd_sheet_frame(int sheet_id, int index); // load+cache one HD sheet frame; NULL if unavailable
+bool hd_flight_lookup(int sheet_id, int index);            // true iff a frame texture is available (loading it if needed)
+void hd_flight_begin(void);                                // reset the flight queue (call once per present, before recording)
+void hd_flight_set(SDL_Texture *tex, SDL_Rect src, int lx, int ly, int lw, int lh, SDL_BlendMode blendmode, Uint8 r, Uint8 g, Uint8 b, Uint8 a); // push one entry (bounds-checked)
+void hd_flight_clear(void);                                // reset the flight queue (call after presenting)
 
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;
 extern SDL_Surface *game_screen;

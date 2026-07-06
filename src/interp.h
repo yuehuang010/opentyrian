@@ -61,6 +61,13 @@ void flight_present(void);
 // from stale positions left over from a previous level.
 void flight_interp_reset(void);
 
+// HD in-flight compositor (Track B): walk the current tick's display list and push
+// HD sprite overlays into the video flight queue at the given interpolation alpha
+// (1.0 = current tick, no motion interpolation). Clears the queue first. A no-op
+// unless hd_mode is on. Emits only for wired sheets/variants (sheet8 plain this
+// increment); the 8-bit blit is never suppressed, so this is purely additive.
+void interp_flight_emit(float alpha);
+
 // ---- Recording (called from the draw choke points; no-ops unless recording) ----
 
 // True only during a tick's draw pass while high-fps mode is active. The blit

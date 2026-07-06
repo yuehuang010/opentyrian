@@ -488,6 +488,24 @@ void blit_sprite_dark(SDL_Surface *surface, int x, int y, unsigned int table, un
 	}
 }
 
+int hd_sheet_id_for(const Uint8 *data)
+{
+	// This increment wires only sheet8 (player shots); every other sheet is
+	// future work and must be left unaffected, so return -1 for them.
+	if (data != NULL && data == spriteSheet8.data)
+		return HD_SHEET_SHEET8;
+	return -1;
+}
+
+const char *hd_sheet_stem(int sheet_id)
+{
+	switch (sheet_id)
+	{
+	case HD_SHEET_SHEET8: return "sheet8";
+	default:              return NULL;
+	}
+}
+
 void JE_loadCompShapes(Sprite2_array *sprite2s, char s)
 {
 	free_sprite2s(sprite2s);

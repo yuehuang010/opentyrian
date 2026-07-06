@@ -117,6 +117,22 @@ void JE_loadCompShapes(Sprite2_array *, char s);
 void JE_loadCompShapesB(Sprite2_array *, FILE *f);
 void free_sprite2s(Sprite2_array *);
 
+// HD in-flight compositor: stable small ids for the sprite sheets that have HD
+// assets. Only sheet8 (player shots) is wired this increment; the rest are future
+// work (hd_sheet_id_for returns -1 for them).
+enum
+{
+	HD_SHEET_SHEET8 = 0,  // player shots (spriteSheet8)
+};
+
+// Maps a Sprite2 sheet's stable `.data` pointer to its HD sheet id, or -1 if the
+// sheet has no HD asset wired yet.
+int hd_sheet_id_for(const Uint8 *data);
+
+// The asset filename stem for an HD sheet id ("sheet8" for HD_SHEET_SHEET8), or
+// NULL for an unknown id.
+const char *hd_sheet_stem(int sheet_id);
+
 void blit_sprite2(SDL_Surface *, int x, int y, Sprite2_array, unsigned int index);
 void blit_sprite2_clip(SDL_Surface *, int x, int y, Sprite2_array, unsigned int index);
 void blit_sprite2_blend(SDL_Surface *,  int x, int y, Sprite2_array, unsigned int index);
