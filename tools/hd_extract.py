@@ -22,21 +22,57 @@ bytes to hdpic04.dat.
 NOTE: the Lanczos-3 resample is a PLACEHOLDER for a real AI upscaler; it
 just cleanly enlarges the original pixel art without hallucinating detail.
 
-Additionally extracts two static sprite tables from tyrian.shp (see
+Additionally extracts four static sprite tables from tyrian.shp (see
 src/sprite.c load_sprites()/JE_loadMainShapeTables() and doc/files.txt):
 PLANET_SHAPES (table 3, 151 frames -- frame 146 is the big Tyrian title
-logo) and FACE_SHAPES (table 4, 12 frames). Each frame is decoded from its
-RLE-compressed indexed pixels, keyed to RGBA using palette.dat slot 0 (the
-main game palette -- these tables are blitted against palettes[0] by the
-engine, unlike the per-image pcxpal-indexed backdrops), 4x xBRZ upscaled
-(edge-directed pixel-art scaling; alpha channel included as part of the
-edge-detection so transparency gets smooth anti-aliased cutout edges
-rather than blocky/blurry ones), and written as tyrian21/hdplanet_NN.dat /
-hdface_NN.dat (NN = frame index zero-padded to 2 digits) alongside a
-tyrian21/hd_sprite_manifest.json manifest. The full-screen PCX backdrops
-above are photographic-ish dithered art, so they intentionally stay on
-the Lanczos path -- xBRZ is a pixel-art scaler and would misbehave on
-them.
+logo), FACE_SHAPES (table 4, 12 frames), OPTION_SHAPES (table 5, 45
+frames -- menu/HUD/help icons), and WEAPON_SHAPES (table 6, 22 frames --
+weapon icons). It also extracts EXTRA_SHAPES (9 frames), which is loaded
+from the *separate* file estsc.shp, not tyrian.shp (see
+src/mainint.c JE_playCredits() / load_sprites_file(EXTRA_SHAPES,
+"estsc.shp")) -- table index 7 inside tyrian.shp itself is unrelated and
+is not used for EXTRA_SHAPES by the engine.
+
+Each frame is decoded from its RLE-compressed indexed pixels, keyed to
+RGBA using a palette.dat slot, 4x xBRZ upscaled (edge-directed pixel-art
+scaling; alpha channel included as part of the edge-detection so
+transparency gets smooth anti-aliased cutout edges rather than
+blocky/blurry ones), and written as tyrian21/hd<prefix>_NN.dat (NN = frame
+index zero-padded to 2 digits) alongside a tyrian21/hd_sprite_manifest.json
+manifest. Palette choice per table:
+  - PLANET_SHAPES: palettes[8] (the title-screen palette; see
+    SPRITE_TABLE_PAL_TITLE below).
+  - FACE_SHAPES: NOT a single fixed palette -- the engine recolors each
+    portrait per-frame via facepal[face_sprite] (src/pcxmast.c, wired up
+    in src/game_menu.c around the MENU_DATA_CUBES case), so each frame is
+    baked with its own palettes[facepal[frame_index]] slot (see FACEPAL
+    below, mirroring src/pcxmast.c's `facepal` table exactly).
+  - OPTION_SHAPES / WEAPON_SHAPES: these are blitted across many screens
+    (shop/menu screens in game_menu.c, in-flight HUD icons in mainint.c/
+    shots.c/varz.c) under whatever palette happens to be active there, so
+    there's no single universally-correct answer. Defaulting to
+    palette.dat slot 0, which is at least the palette active on the shop's
+    own background screen (JE_itemScreen() loads pic 1 -> PCXPAL[0] == 0)
+    -- flagged here for review, not a confident answer.
+
+Also extracts 8 large full-screen 320x200 8bpp PCX images that are
+*not* part of tyrian.pic (tshp2.pcx, shipedit.pcx, tyrian.pcx-adjacent
+tyrset.pcx, and the netXXX.pcx multiplayer-tool screens). Unlike
+tyrian.pic's images (which carry no embedded palette and are colorized
+via the pcxpal-indexed palette.dat table), every one of these files ships
+its own standard-PCX 769-byte VGA palette trailer (marker byte 0x0C + 768
+raw 8-bit RGB bytes -- see src/pcxload.c JE_loadPCX(), the only one of
+these actually loaded by the engine, which reads that trailer into
+`colors` directly with no 6-bit->8-bit expansion, unlike palette.dat).
+So each is decoded with its own embedded palette, not a palette.dat slot.
+These are photographic/dithered full-screen art like the tyrian.pic
+backdrops, so they use the same Lanczos 4x RGB (opaque) path and are
+written as tyrian21/hdpcx_<name>.dat.
+
+The full-screen PCX/PIC backdrops are photographic-ish dithered art, so
+they intentionally stay on the Lanczos path -- xBRZ is a pixel-art scaler
+and would misbehave on them. Everything sprite-shaped (icons, portraits,
+logos) goes through xBRZ instead.
 
 Standard library only (no Pillow/numpy/ImageMagick). Tested against
 python3.9.
@@ -50,10 +86,16 @@ Usage:
 Format references:
   - src/palette.c JE_loadPals() (palette.dat layout, 6-bit -> 8-bit scaling)
   - src/picload.c JE_loadPic() (tyrian.pic layout, PCX-style RLE decoding)
-  - src/pcxmast.c (pcxpal table: which palette index goes with which image)
+  - src/pcxmast.c (pcxpal table: which palette index goes with which image;
+    facepal table: which palette index goes with which FACE_SHAPES frame)
+  - src/pcxload.c JE_loadPCX() (standalone .pcx layout: 128-byte header,
+    RLE body, trailing 769-byte VGA palette)
   - src/sprite.c load_sprites(), JE_loadMainShapeTables(),
     blit_sprite() (tyrian.shp layout and its RLE sprite encoding)
-  - src/sprite.h (PLANET_SHAPES / FACE_SHAPES table indices)
+  - src/sprite.h (PLANET_SHAPES / FACE_SHAPES / OPTION_SHAPES /
+    WEAPON_SHAPES / EXTRA_SHAPES table indices)
+  - src/mainint.c JE_playCredits() (estsc.shp / EXTRA_SHAPES loading and
+    its palette)
 """
 
 import argparse
@@ -73,6 +115,7 @@ DATA_DIR = os.path.join(REPO_ROOT, "tyrian21")
 PALETTE_PATH = os.path.join(DATA_DIR, "palette.dat")
 PIC_PATH = os.path.join(DATA_DIR, "tyrian.pic")
 SHP_PATH = os.path.join(DATA_DIR, "tyrian.shp")
+EXTRA_SHP_PATH = os.path.join(DATA_DIR, "estsc.shp")
 OUT_TITLE_ASSET_PATH = os.path.join(DATA_DIR, "hdtitle.dat")
 PREVIEW_DIR = os.path.join(REPO_ROOT, "tools", "hdpic_previews")
 SPRITE_MANIFEST_PATH = os.path.join(DATA_DIR, "hd_sprite_manifest.json")
@@ -93,19 +136,47 @@ PCXPAL = [0, 7, 5, 8, 10, 5, 18, 19, 19, 20, 21, 22, 5]
 SHP_NUM = 12
 PLANET_SHAPES = 3
 FACE_SHAPES = 4
+OPTION_SHAPES = 5   # menu/HUD/help icons (src/sprite.h: "Also contains help shapes")
+WEAPON_SHAPES = 6   # weapon icons
 
-# Sprite tables to extract as HD overlays: (table index, output prefix, palette).
-# The palette is the one *active on screen where the sprite is drawn*, not palette
-# 0: the engine blits these against whatever palette the current screen loaded. The
-# title logo (PLANET_SHAPES frame 146) is drawn on the title screen, which loads pic
-# 4 -> palettes[PCXPAL[4-1]] = palettes[8] (gold); baking it with palette 0 turns it
-# silver. FACE_SHAPES portraits are recolored per-face via facepal[] at draw time
-# (game_menu.c) and are not wired yet, so palette 0 is a placeholder for them.
+# facepal[12] (src/pcxmast.c): the palette.dat slot the engine recolors each
+# FACE_SHAPES portrait with (see the MENU_DATA_CUBES case in game_menu.c,
+# `temp2 = facepal[face_sprite]; ... colors[temp] = palettes[temp2][temp]`).
+# These are used as direct 0-based palette.dat slot indices, same as PCXPAL.
+FACEPAL = [1, 2, 3, 4, 6, 9, 11, 12, 16, 13, 14, 15]
+
+# Sprite tables to extract as HD overlays: (table index, output prefix,
+# manifest table name, palette-or-None). When palette is None, the table is
+# recolored per-frame instead of with one fixed palette (see FACEPAL, used
+# for FACE_SHAPES).
+#
+# The palette is the one *active on screen where the sprite is drawn*, not
+# palette 0: the engine blits these against whatever palette the current
+# screen loaded. The title logo (PLANET_SHAPES frame 146) is drawn on the
+# title screen, which loads pic 4 -> palettes[PCXPAL[4-1]] = palettes[8]
+# (gold); baking it with palette 0 turns it silver. FACE_SHAPES portraits are
+# recolored per-face via facepal[] at draw time (game_menu.c) -- see FACEPAL
+# above. OPTION_SHAPES/WEAPON_SHAPES icons are blitted across many different
+# screens (shop menus in game_menu.c, in-flight HUD in mainint.c/shots.c/
+# varz.c) each with a different active palette, so there is no single
+# correct answer; palette 0 is used as a documented default (see the module
+# docstring) -- NOTE: flagged for review, not a confident answer.
 SPRITE_TABLE_PAL_TITLE = PCXPAL[4 - 1]  # palettes[8], the title-screen palette
 SPRITE_TABLES = [
-    (PLANET_SHAPES, "hdplanet", SPRITE_TABLE_PAL_TITLE),
-    (FACE_SHAPES, "hdface", 0),
+    (PLANET_SHAPES, "hdplanet", "PLANET_SHAPES", SPRITE_TABLE_PAL_TITLE),
+    (FACE_SHAPES, "hdface", "FACE_SHAPES", None),
+    (OPTION_SHAPES, "hdoption", "OPTION_SHAPES", 0),
+    (WEAPON_SHAPES, "hdweapon", "WEAPON_SHAPES", 0),
 ]
+
+# EXTRA_SHAPES (src/sprite.h table index 7, "Used for Ending pics") is loaded
+# by the engine from a *separate* file, estsc.shp, not tyrian.shp (see
+# src/mainint.c JE_playCredits(): load_sprites_file(EXTRA_SHAPES,
+# "estsc.shp")) -- tyrian.shp's own table index 7 is unrelated. It's blitted
+# during the end-of-game credits scroll against `memcpy(colors,
+# palettes[6-1], ...)`, i.e. palette.dat slot 5 (0-based) -- the same slot as
+# PCXPAL[2] (image 3).
+EXTRA_SHAPES_PAL = 5  # palettes[6-1], per JE_playCredits() in src/mainint.c
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +265,144 @@ def load_pic_indices(path, pic_number_1based, pcx_num=PCX_NUM):
             p += 1
 
     return bytes(out)
+
+
+# ---------------------------------------------------------------------------
+# STEP 2a: standalone full-screen .pcx files (own embedded VGA palette)
+#
+# These are 320x200 8bpp single-plane PCX files that are NOT part of
+# tyrian.pic and are not colorized via the pcxpal/palette.dat mechanism.
+# tshp2.pcx is the only one actually loaded by the current engine
+# (src/pcxload.c JE_loadPCX(), called from src/tyrian2.c for the 'P0'
+# script command); the rest (shipedit.pcx, tyrset.pcx, netXXX.pcx) belong
+# to the original DOS-era companion tools (shipedit.exe, netarena.exe,
+# etc.) and were never wired into OpenTyrian, but are ordinary PCX files
+# with the same 128-byte-header + RLE-body + 769-byte-VGA-palette-trailer
+# layout, so the same decode applies.
+# ---------------------------------------------------------------------------
+
+# (source filename, output prefix) -- output asset is hdpcx_<prefix>.dat.
+STANDALONE_PCX = [
+    ("tshp2.pcx", "tshp2"),
+    ("shipedit.pcx", "shipedit"),
+    ("tyrset.pcx", "tyrset"),
+    ("netarena.pcx", "netarena"),
+    ("netset.pcx", "netset"),
+    ("netmega.pcx", "netmega"),
+    ("netfont1.pcx", "netfont1"),
+    ("netfont2.pcx", "netfont2"),
+]
+
+
+def load_standalone_pcx(path):
+    """
+    Decode a standalone 8bpp single-plane PCX file: the 128-byte header (for
+    width/height), the PCX-RLE pixel body (same 0xC0-run-length scheme as
+    load_pic_indices()/JE_loadPCX()), and the trailing 769-byte VGA palette
+    (marker byte 0x0C followed by 768 raw 8-bit RGB triples -- no 6-bit ->
+    8-bit expansion, matching JE_loadPCX()'s direct `colors[i].r = rgb[0]`).
+
+    Returns (indices: bytes, palette: list of (r,g,b), width, height).
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+
+    header = data[:128]
+    if len(header) < 128:
+        raise ValueError("%s: file too short for a PCX header" % path)
+
+    manufacturer = header[0]
+    bpp = header[3]
+    xmin, ymin, xmax, ymax = struct.unpack_from("<HHHH", header, 4)
+    nplanes = header[65]
+    width = xmax - xmin + 1
+    height = ymax - ymin + 1
+
+    if manufacturer != 10:
+        raise ValueError("%s: not a PCX file (manufacturer=%d)" % (path, manufacturer))
+    if bpp != 8 or nplanes != 1:
+        raise ValueError(
+            "%s: unsupported PCX format (bpp=%d nplanes=%d), expected 8bpp/1-plane"
+            % (path, bpp, nplanes))
+    if width <= 0 or height <= 0:
+        raise ValueError("%s: invalid PCX dimensions %dx%d" % (path, width, height))
+
+    if len(data) < 128 + 769:
+        raise ValueError("%s: file too short to hold a VGA palette trailer" % path)
+
+    marker = data[-769]
+    if marker != 0x0C:
+        raise ValueError(
+            "%s: missing 769-byte VGA palette trailer (marker byte=%d, expected 12)"
+            % (path, marker))
+
+    pal_raw = data[-768:]
+    palette = [(pal_raw[i * 3], pal_raw[i * 3 + 1], pal_raw[i * 3 + 2]) for i in range(256)]
+
+    body_end = len(data) - 769
+    chunk = data[128:body_end]
+
+    total = width * height
+    out = bytearray(total)
+    i = 0    # pixels written
+    p = 0    # read cursor into chunk
+    n = len(chunk)
+    while i < total:
+        if p >= n:
+            raise ValueError("%s: unexpected end of compressed pixel data" % path)
+        b = chunk[p]
+        if (b & 0xC0) == 0xC0:
+            count = b & 0x3F
+            color = chunk[p + 1]
+            p += 2
+            remaining = total - i
+            take = min(count, remaining)
+            out[i:i + take] = bytes([color]) * take
+            i += count
+        else:
+            out[i] = b
+            i += 1
+            p += 1
+
+    return bytes(out), palette, width, height
+
+
+def process_standalone_pcx(filename, prefix, want_preview):
+    """
+    Process one standalone full-screen PCX (see STANDALONE_PCX): decode with
+    its own embedded palette, Lanczos-upscale 4x (photographic/dithered art,
+    same reasoning as the tyrian.pic backdrops), and write
+    tyrian21/hdpcx_<prefix>.dat (+ optional PNG preview). Returns True on
+    success. If the source file is missing, prints a notice and returns
+    False without raising, so the caller can continue with other assets.
+    """
+    src_path = os.path.join(DATA_DIR, filename)
+    if not os.path.isfile(src_path):
+        print("skip: %s not found at %s (not present in this data dir)" % (filename, src_path),
+              file=sys.stderr)
+        return False
+
+    try:
+        out_path = os.path.join(DATA_DIR, "hdpcx_%s.dat" % prefix)
+        print("PCX %s: own embedded palette -> %s ..." % (filename, out_path))
+
+        indices, palette, src_w, src_h = load_standalone_pcx(src_path)
+        rgb = colorize(indices, palette)
+        dst_w, dst_h = src_w * SCALE, src_h * SCALE
+        upscaled = lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3)
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+        write_hdpx_asset(out_path, upscaled, dst_w, dst_h)
+
+        if want_preview:
+            os.makedirs(PREVIEW_DIR, exist_ok=True)
+            preview_path = os.path.join(PREVIEW_DIR, "hdpcx_%s.png" % prefix)
+            write_png(preview_path, upscaled, dst_w, dst_h)
+
+        return True
+    except Exception as e:
+        print("error: failed to process %s: %s" % (filename, e), file=sys.stderr)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -989,15 +1198,25 @@ def process_pic(n, palette_cache, want_preview):
         return False
 
 
+def _get_cached_palette(palette_cache, pal_index):
+    palette = palette_cache.get(pal_index)
+    if palette is None:
+        palette = load_palette(PALETTE_PATH, pal_index)
+        palette_cache[pal_index] = palette
+    return palette
+
+
 def process_sprite_tables(palette_cache, manifest_frames):
     """
-    Extract PLANET_SHAPES and FACE_SHAPES (SPRITE_TABLES) from tyrian.shp:
-    decode each populated frame's RLE pixels, key transparency to alpha,
-    xBRZ-upscale 4x (RGBA; edge-directed pixel-art scaling, so the title
-    logo gets smooth curved edges instead of blocky/blurry ones -- see the
-    "STEP 4b" xBRZ port above), and write one hdplanet_NN.dat / hdface_NN.dat
-    HDPX-with-alpha asset per frame. Appends a manifest entry per frame to
-    manifest_frames (in place). Returns the number of frames written.
+    Extract PLANET_SHAPES, FACE_SHAPES, OPTION_SHAPES, and WEAPON_SHAPES
+    (SPRITE_TABLES) from tyrian.shp: decode each populated frame's RLE
+    pixels, key transparency to alpha, xBRZ-upscale 4x (RGBA; edge-directed
+    pixel-art scaling, so the title logo gets smooth curved edges instead of
+    blocky/blurry ones -- see the "STEP 4b" xBRZ port above), and write one
+    hd<prefix>_NN.dat HDPX-with-alpha asset per frame. A table entry with
+    palette None (FACE_SHAPES) is recolored per-frame via FACEPAL instead of
+    one fixed palette. Appends a manifest entry per frame to manifest_frames
+    (in place). Returns the number of frames written.
     """
     if not os.path.isfile(SHP_PATH):
         print("error: tyrian.shp not found at %s" % SHP_PATH, file=sys.stderr)
@@ -1006,19 +1225,32 @@ def process_sprite_tables(palette_cache, manifest_frames):
     data, shp_pos = load_shp_table_offsets(SHP_PATH)
 
     written = 0
-    for table_index, prefix, pal_index in SPRITE_TABLES:
-        palette = palette_cache.get(pal_index)
-        if palette is None:
-            palette = load_palette(PALETTE_PATH, pal_index)
-            palette_cache[pal_index] = palette
-
+    for table_index, prefix, manifest_name, pal_index in SPRITE_TABLES:
         sprites = load_sprite_table(data, shp_pos[table_index])
-        print("Table %d (%s): %d frames, palette %d -> %s_NN.dat ..." %
-              (table_index, prefix, len(sprites), pal_index, prefix))
+
+        if pal_index is None:
+            print("Table %d (%s): %d frames, per-frame FACEPAL palette -> %s_NN.dat ..." %
+                  (table_index, prefix, len(sprites), prefix))
+        else:
+            print("Table %d (%s): %d frames, palette %d -> %s_NN.dat ..." %
+                  (table_index, prefix, len(sprites), pal_index, prefix))
 
         for frame_index, sprite in enumerate(sprites):
             if sprite is None:
                 continue
+
+            if pal_index is None:
+                if frame_index >= len(FACEPAL):
+                    print("  warning: frame %d has no FACEPAL entry (table has %d frames, "
+                          "FACEPAL has %d), falling back to palette 0" %
+                          (frame_index, len(sprites), len(FACEPAL)), file=sys.stderr)
+                    frame_pal_index = 0
+                else:
+                    frame_pal_index = FACEPAL[frame_index]
+            else:
+                frame_pal_index = pal_index
+
+            palette = _get_cached_palette(palette_cache, frame_pal_index)
 
             indices, src_w, src_h = decode_sprite_rle(sprite)
             rgba = colorize_rgba(indices, palette)
@@ -1029,15 +1261,71 @@ def process_sprite_tables(palette_cache, manifest_frames):
             write_hdpx_asset(out_path, upscaled, src_w * SCALE, src_h * SCALE, channels=4)
 
             manifest_frames.append({
-                "table": "PLANET_SHAPES" if table_index == PLANET_SHAPES else "FACE_SHAPES",
+                "table": manifest_name,
                 "frame_index": frame_index,
                 "file": out_name,
+                "palette": frame_pal_index,
                 "src_width": src_w,
                 "src_height": src_h,
                 "hd_width": src_w * SCALE,
                 "hd_height": src_h * SCALE,
             })
             written += 1
+
+    return written
+
+
+def process_extra_shapes(palette_cache, manifest_frames):
+    """
+    Extract EXTRA_SHAPES from estsc.shp (a separate file from tyrian.shp;
+    see the EXTRA_SHAPES_PAL comment above), the same way
+    process_sprite_tables() handles tyrian.shp's tables: decode each
+    populated frame's RLE pixels, key transparency to alpha, xBRZ-upscale
+    4x, and write one hdextra_NN.dat HDPX-with-alpha asset per frame.
+    Appends a manifest entry per frame to manifest_frames (in place).
+    Returns the number of frames written (0 if estsc.shp is missing).
+    """
+    if not os.path.isfile(EXTRA_SHP_PATH):
+        print("skip: estsc.shp not found at %s (EXTRA_SHAPES not extracted)" % EXTRA_SHP_PATH,
+              file=sys.stderr)
+        return 0
+
+    with open(EXTRA_SHP_PATH, "rb") as f:
+        data = f.read()
+
+    palette = _get_cached_palette(palette_cache, EXTRA_SHAPES_PAL)
+
+    # estsc.shp has no leading table-offset header (unlike tyrian.shp) --
+    # load_sprites_file() in src/sprite.c reads a single sprite table
+    # straight from the start of the file, so start_offset is 0.
+    sprites = load_sprite_table(data, 0)
+    print("EXTRA_SHAPES (estsc.shp): %d frames, palette %d -> hdextra_NN.dat ..." %
+          (len(sprites), EXTRA_SHAPES_PAL))
+
+    written = 0
+    for frame_index, sprite in enumerate(sprites):
+        if sprite is None:
+            continue
+
+        indices, src_w, src_h = decode_sprite_rle(sprite)
+        rgba = colorize_rgba(indices, palette)
+        upscaled = xbrz_scale_4x(rgba, src_w, src_h)
+
+        out_name = "hdextra_%02d.dat" % frame_index
+        out_path = os.path.join(DATA_DIR, out_name)
+        write_hdpx_asset(out_path, upscaled, src_w * SCALE, src_h * SCALE, channels=4)
+
+        manifest_frames.append({
+            "table": "EXTRA_SHAPES",
+            "frame_index": frame_index,
+            "file": out_name,
+            "palette": EXTRA_SHAPES_PAL,
+            "src_width": src_w,
+            "src_height": src_h,
+            "hd_width": src_w * SCALE,
+            "hd_height": src_h * SCALE,
+        })
+        written += 1
 
     return written
 
@@ -1083,16 +1371,36 @@ def main():
             failed.append(n)
 
     os.makedirs(DATA_DIR, exist_ok=True)
+
+    skipped_pcx = []
+    failed_pcx = []
+    for filename, prefix in STANDALONE_PCX:
+        src_path = os.path.join(DATA_DIR, filename)
+        ok = process_standalone_pcx(filename, prefix, want_preview=not args.no_preview)
+        if not ok:
+            if os.path.isfile(src_path):
+                failed_pcx.append(filename)
+            else:
+                skipped_pcx.append(filename)
+
     manifest_frames = []
     sprite_count = process_sprite_tables(palette_cache, manifest_frames)
+    sprite_count += process_extra_shapes(palette_cache, manifest_frames)
     if sprite_count:
         with open(SPRITE_MANIFEST_PATH, "w") as f:
             json.dump({"scale": SCALE, "frames": manifest_frames}, f, indent=2)
         print("Wrote %d sprite frames, manifest -> %s" % (sprite_count, SPRITE_MANIFEST_PATH))
 
-    if failed:
-        print("Done with errors. Failed images: %s" % ", ".join(str(n) for n in failed),
-              file=sys.stderr)
+    if skipped_pcx:
+        print("Skipped (source not present): %s" % ", ".join(skipped_pcx), file=sys.stderr)
+
+    if failed or failed_pcx:
+        if failed:
+            print("Done with errors. Failed images: %s" % ", ".join(str(n) for n in failed),
+                  file=sys.stderr)
+        if failed_pcx:
+            print("Done with errors. Failed PCX files: %s" % ", ".join(failed_pcx),
+                  file=sys.stderr)
         return 1
 
     print("Done.")
