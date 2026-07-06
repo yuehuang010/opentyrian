@@ -113,6 +113,27 @@ void delayUntilElapsed(void)
 		SDL_Delay(((Uint32)diff + half) >> 10);
 }
 
+// Interpolation factor in [0,1] for the current simulation tick: 0.0 at the tick's
+// start, 1.0 at its scheduled end (frameCountEnd). The high-fps render loop uses
+// this to blend previous and current entity positions. The tick period is
+// frameCountMax base periods; frameCountMax can vary between ticks (e.g. pentiumMode
+// alternates 2/3), which only perturbs the blend by a sub-tick fraction.
+float getTickInterpAlpha(void)
+{
+	Uint32 period = (Uint32)framePeriod * frameCountMax; // UQ22.10 ms
+	if (period == 0)
+		return 1.0f;
+
+	Uint32 now = SDL_GetTicks() << 10;
+	Sint32 remaining = (Sint32)(frameCountEnd - now);
+	if (remaining <= 0)
+		return 1.0f;
+	if ((Uint32)remaining >= period)
+		return 0.0f;
+
+	return 1.0f - (float)remaining / (float)period;
+}
+
 void loadSndFile(bool xmas)
 {
 	FILE *f;

@@ -52,6 +52,7 @@ void JE_whoa(void);
 Sint16 JE_newEnemy(int enemyOffset, Uint16 eDatI, Sint16 uniqueShapeTableI);
 void JE_drawEnemy(int enemyOffset);
 void JE_starShowVGA(void);
+void JE_starCompositeShow(void);
 
 void JE_main(void);
 void JE_loadMap(void);

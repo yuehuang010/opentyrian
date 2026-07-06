@@ -41,6 +41,7 @@ void setFrameCount2(JE_word frameCount2);
 Uint32 getFrameCountTicks(void);
 Uint32 getFrameCount2Ticks(void);
 void delayUntilElapsed(void);
+float getTickInterpAlpha(void);
 
 void JE_changeVolume(JE_word *music, int music_delta, JE_word *sample, int sample_delta);
 

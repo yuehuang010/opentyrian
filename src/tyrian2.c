@@ -25,6 +25,7 @@
 #include "font.h"
 #include "fonthand.h"
 #include "game_menu.h"
+#include "interp.h"
 #include "joystick.h"
 #include "keyboard.h"
 #include "lds_play.h"
@@ -72,27 +73,22 @@ char tempStr[31];
 JE_byte itemAvail[9][10]; /* [1..9, 1..10] */
 JE_byte itemAvailMax[9]; /* [1..9] */
 
-void JE_starShowVGA(void)
+// Composites the 264x184 playfield from game_screen into VGAScreenSeg (honoring the
+// mirror and light-effect special codes) and presents it. Does NOT pace the frame
+// or pump events -- the caller owns timing. Split out of JE_starShowVGA so the
+// high-fps interpolation loop (flight_present) can present several frames per tick.
+void JE_starCompositeShow(void)
 {
 	JE_byte *src;
 	Uint8 *s = NULL; /* screen pointer, 8-bit specific */
 
 	int x, y, lightx, lighty, lightdist;
 
-	if (!playerEndLevel && !skipStarShowVGA)
 	{
-
 		s = VGAScreenSeg->pixels;
 
 		src = game_screen->pixels;
 		src += 24;
-
-		if (smoothScroll != 0 /*&& thisPlayerNum != 2*/)
-		{
-			delayUntilElapsed();
-
-			setFrameCount(frameCountMax);
-		}
 
 		if (starShowVGASpecialCode == 1)
 		{
@@ -149,6 +145,25 @@ void JE_starShowVGA(void)
 			}
 		}
 		JE_showVGA();
+	}
+}
+
+// Classic single-present-per-tick path: pace to the tick deadline, composite, and
+// present exactly one frame. The flight loop calls flight_present() instead when
+// high-fps interpolation is active; this remains the path for paused/end-of-level
+// frames and when high-fps mode is off.
+void JE_starShowVGA(void)
+{
+	if (!playerEndLevel && !skipStarShowVGA)
+	{
+		if (smoothScroll != 0 /*&& thisPlayerNum != 2*/)
+		{
+			delayUntilElapsed();
+
+			setFrameCount(frameCountMax);
+		}
+
+		JE_starCompositeShow();
 	}
 
 	handleSdlEvents();
@@ -642,6 +657,8 @@ void JE_main(void)
 	   the loadmap function. */
 
 start_level:
+
+	flight_interp_reset(); // discard stale interpolation snapshots across levels
 
 	keyboardClearInput();
 	mouseClearInput();
@@ -2329,7 +2346,19 @@ draw_player_shot_loop_end:
 
 	VGAScreen = VGAScreenSeg; /* side-effect of game_screen */
 
-	JE_starShowVGA();
+	// High-fps path (Phase 6): snapshot this tick's entity positions, then present
+	// interpolated frames until the tick deadline instead of a single paced frame.
+	// Only when smoothScroll paces the sim and we're not in an end-of-level frame;
+	// otherwise fall back to the classic single-present path.
+	if (highfps_mode && smoothScroll != 0 && !playerEndLevel && !skipStarShowVGA)
+	{
+		flight_interp_capture();
+		flight_present();
+	}
+	else
+	{
+		JE_starShowVGA();
+	}
 
 	/*Start backgrounds if no enemies on screen
 	  End level if number of enemies left to kill equals 0.*/

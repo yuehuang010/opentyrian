@@ -30,6 +30,7 @@
 #include "player.h"
 #include "varz.h"
 #include "vga256d.h"
+#include "interp.h"
 #include "video.h"
 #include "video_scale.h"
 
@@ -260,6 +261,7 @@ bool load_opentyrian_config(void)
 	fullscreen_display = -1;
 	hd_mode = true;
 	crt_mode = false;
+	highfps_mode = false;
 	window_width = 0;
 	window_height = 0;
 	set_scaler_by_name("Scale2x");
@@ -295,6 +297,8 @@ bool load_opentyrian_config(void)
 		config_get_bool_option(section, "hd", &hd_mode);
 
 		config_get_bool_option(section, "crt", &crt_mode);
+
+		config_get_bool_option(section, "highfps", &highfps_mode);
 
 		const char *scaler;
 		if (config_get_string_option(section, "scaler", &scaler))
@@ -343,6 +347,8 @@ bool save_opentyrian_config(void)
 	config_set_bool_option(section, "hd", hd_mode, FALSE_TRUE);
 
 	config_set_bool_option(section, "crt", crt_mode, FALSE_TRUE);
+
+	config_set_bool_option(section, "highfps", highfps_mode, FALSE_TRUE);
 
 	config_set_string_option(section, "scaler", scalers[scaler].name);
 	
