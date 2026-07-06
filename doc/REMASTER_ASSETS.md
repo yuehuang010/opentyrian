@@ -75,49 +75,62 @@ upscale.
 
 ---
 
-## 3. Compiled sprite sheets (`Sprite2`) — ⬜ not started
+## 3. Compiled sprite sheets (`Sprite2`) — 🔨 extracted (wiring pending)
 
 RLE comp shapes (`JE_loadCompShapesB`, `sprite.c:501`). These are the in-flight
 sprites — the invasive **display-list compositor** (plan Track 2b) and the bulk
-of **recoloring parity** (Phase 3) live here.
+of **recoloring parity** (Phase 3) live here. Extracted offline by
+`tools/hd_extract_comp.py` (`Sprite2` = `u16 offsets[]` header, 1-based; frames
+are 12×14 RLE; `2x2` = tiles `i,i+1,i+19,i+20`). **11,856 HD frames** written as
+`hdcomp_<sheet>_NN.dat` (48×56, xBRZ+alpha) + `hd_comp_manifest.json`. Wiring per
+[`REMASTER_FLIGHT_COMPOSITOR.md`](REMASTER_FLIGHT_COMPOSITOR.md).
 
-| Sheet var | Source file(s) | Contents | Recolor? | Upscaler | Status |
-|---|---|---|:--:|:--:|:--:|
-| `spriteSheet8` | `tyrian.shp` blk | player shots | value/flash | X | ⬜ |
-| `spriteSheet9` | `tyrian.shp` blk | player ships | **hue** (ship color) | X | ⬜ |
-| `spriteSheet10` | `tyrian.shp` blk | power-ups | value | X | ⬜ |
-| `spriteSheet11` | `tyrian.shp` blk | coins/pickups | value | X | ⬜ |
-| `spriteSheet12` | `tyrian.shp` blk | misc weapons | value | X | ⬜ |
-| `enemySpriteSheets[0..3]` | `shapes).dat`, `shapesw.dat`, `shapesx.dat`, `shapesy.dat`, `shapesz.dat` (per-level banks, `tyrian2.c:4355`) | enemies | value/dark | X/E | ⬜ |
-| `shopSpriteSheet` | `newsh1.shp` (`game_menu.c:159`) | shop icons/arrows | plain | X | ⬜ |
-| `explosionSpriteSheet` | `newsh6.shp` (`tyrian2.c:793`) | explosions | blend/add | E | ⬜ |
-| `destructSpriteSheet` | `newsh~.shp` (`destruct.c:685`) | destruct minigame | plain | X | ⬜ |
+| Sheet var | Source file(s) | Contents | In-flight blit | HD status |
+|---|---|---|:--:|:--:|
+| `spriteSheet8` | `tyrian.shp` blk 7 | player shots | plain | ✅ extracted |
+| `spriteSheet9` | `tyrian.shp` blk 8 | player ships | plain + `_darken`/`_blend` | ✅ extracted |
+| `spriteSheet10` | `tyrian.shp` blk 9 | power-ups | plain | ✅ extracted |
+| `spriteSheet11` | `tyrian.shp` blk 10 | coins/pickups | plain | ✅ extracted |
+| `spriteSheet12` | `tyrian.shp` blk 11 | misc | plain | ✅ extracted |
+| `enemySpriteSheets[0..3]` | **`newsh?.shp`** per-level via `shapeFile[]` (`tyrian2.c` evt 5, `lvlmast.c`) — 31 banks `enemy_<suffix>` | enemies | plain + **`_filter`** (16-band hue) | ✅ extracted |
+| `shopSpriteSheet` | `newsh1.shp` (`game_menu.c:159`) | shop icons/arrows | plain (menu) | ✅ extracted |
+| `explosionSpriteSheet` | `newsh6.shp` (`tyrian2.c:793`) | explosions | `_blend` | ✅ extracted |
+| `destructSpriteSheet` | `newsh~.shp` (`destruct.c:685`) | destruct minigame | plain | ✅ extracted |
 
-> **Recolor column is the Phase-3 crux.** `hue` (ship/team color) = pre-bake the
-> finite hue set OR HSV shader. `value`/flash/dark = `SDL_SetTextureColorMod`.
-> `blend`/explosions = alpha/additive. Start Track 2b with plain+value only,
-> defer hue.
+> **Correction:** enemy sheets are **`newsh?.shp`** loaded per-level, NOT
+> `shapes*.dat` (those are level-tileset graphics, a different format).
+>
+> **Recolor (Phase-3 crux) — narrowed by the compositor design:** in-flight
+> sprites use only 4 modes — plain, `_blend`, `_darken`, `_filter`. There is **no
+> hue-rotation blit**; "ship hue" is plain frames, "enemy hue" is `_filter`'s
+> 16-band nibble remap (bake band variants OR retain band structure for enemy
+> banks only). Everything else = colormod/alpha/blendmode. See the design doc.
 
 ---
 
-## 4. Large PCX images — ⬜ not started
+## 4. Large PCX images — 🔨 extracted (wiring pending)
 
-Loaded via `pcxload.c` / `JE_loadPCX`.
+Loaded via `pcxload.c` / `JE_loadPCX`. Extracted by `hd_extract.py` using each
+file's own embedded PCX palette (no 6→8 expansion), Lanczos 4x → `hdpcx_<name>.dat`.
 
 | File | Where | Upscaler | Status |
 |---|---|:--:|:--:|
-| `tshp2.pcx` | big interlude image (`tyrian2.c:2784`) | E | ⬜ |
-| `shipedit.pcx` | ship editor bg | E | ⬜ |
-| `tyrset.pcx` | setup screen | E | ⬜ |
-| `netarena.pcx`, `netset.pcx`, `netmega.pcx`, `netfont1/2.pcx` | network UI | E / 🎨 | ⬜ |
+| `tshp2.pcx` | big interlude image (`tyrian2.c:2784`) | L | ✅ extracted |
+| `shipedit.pcx` | ship editor bg | L | ✅ extracted |
+| `tyrset.pcx` | setup screen | L | ✅ extracted |
+| `netarena.pcx`, `netset.pcx`, `netmega.pcx`, `netfont1/2.pcx` | network UI | L | ✅ extracted |
 
 ---
 
-## 5. Cutscenes (`.anm`) — ⬜ not started
+## 5. Cutscenes (`.anm`) — 🔨 extracted (wiring pending)
+
+Extracted by `tools/hd_extract_anim.py` (`.anm` = OpenTyrian page-based delta
+container, NOT FLI/FLC; 256B header + 1024B BGR palette + page descriptors +
+cumulative run/skip/dump deltas over a 320×200 framebuffer).
 
 | File | Where | Approach | Status |
 |---|---|---|:--:|
-| `tyrend.anm` | ending cutscene (`tyrian2.c:2500`, `animlib.c`) | upscale frames offline **or** runtime upscaler; treat as video | ⬜ |
+| `tyrend.anm` | ending cutscene (`tyrian2.c:2500`, `animlib.c`) | 111 frames → `hdanim_tyrend_NNNN.dat` (1280×800, Lanczos) | ✅ extracted |
 
 ---
 
@@ -134,11 +147,13 @@ out of scope for asset upscaling.
 | Group | Assets | Done | Notes |
 |---|:--:|:--:|---|
 | Backdrops | 13 | ✅ 13/13 wired | all still Lanczos placeholder |
-| Sprite tables | 8 | ⬜ 0/8 | 3 are font-redraw, not upscale |
-| Comp sprite sheets | ~13 | ⬜ 0 | needs display-list compositor (Track 2b) |
-| Large PCX | ~9 | ⬜ 0 | backdrop-like, low risk |
-| Cutscenes | 1 | ⬜ 0 | separate treatment |
+| Sprite tables | 8 | 🔨 logo wired; 4 more extracted | title logo `#146` live; OPTION/WEAPON/EXTRA/FACE extracted, wiring pending; 3 fonts = redraw |
+| Comp sprite sheets | 39 sheets / 11,856 frames | 🔨 extracted | wiring = display-list compositor (Track 2b), see design doc |
+| Large PCX | 8 | 🔨 extracted | wiring pending, backdrop-like |
+| Cutscenes | 1 (111 frames) | 🔨 extracted | wiring pending |
 
-**Next asset action:** settle the upscaler model on a test batch (backdrops re-run
-`E` + a sprite batch `E` vs `X` for halo/tiny-sprite quality), then Track 2a
-(static plain sprites: title logo, faces, large PCX).
+**State:** all offline extraction done (Phase A). Remaining: wire static assets
+(Phase B), then the invasive in-flight compositor (Phase C, Track 2b) +
+recoloring parity (Phase D) per
+[`REMASTER_FLIGHT_COMPOSITOR.md`](REMASTER_FLIGHT_COMPOSITOR.md), then font
+redraw. Backdrops still Lanczos (real AI upscaler unavailable on this host).
