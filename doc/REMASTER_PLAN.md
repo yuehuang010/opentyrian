@@ -4,6 +4,9 @@
 > gameplay that plays **identically** to the original. The classic build stays
 > fully playable at every step; the remaster ships behind a toggle so we can
 > always A/B against the original.
+>
+> **Per-asset status lives in [`REMASTER_ASSETS.md`](REMASTER_ASSETS.md)** — this
+> doc is the architecture & phases; that one is the inventory & wiring checklist.
 
 Status: **Phase 0 + Phase 1 complete and verified** (title-screen vertical slice;
 Go/No-Go gate = **GO**). **Phase 2 spine landed**: the asset pipeline now extracts
@@ -85,8 +88,8 @@ it's a separate future project because it *does* require touching gameplay bound
 | **2** | HD asset pipeline | Extract → AI-upscale → repackage → composite HD backgrounds & sprites | M | Med | 🔨 backdrops done; sprites pending |
 | **3** | Palette-effect parity | Reimplement recoloring & cycling as GPU tint/shader so HD art matches classic behavior | M–L | High | — |
 | **4** | Text, UI & polish | Redrawn fonts/menus, optional shaders (bloom/CRT), cutscene handling | M | Low | 🔨 CRT/scanline done |
-| **5** | Free scaling & fullscreen | Any window size + real fullscreen, aspect-correct, no gameplay-space change | S–M | Low–Med | — |
-| **6** | High-framerate retune | Decouple sim tick from 60/70 Hz origin; smooth 60 fps+ without altering game speed/balance | **L** | **High** | — |
+| **5** | Free scaling & fullscreen | Any window size + real fullscreen, aspect-correct, no gameplay-space change | S–M | Low–Med | ✅ done |
+| **6** | High-framerate retune | Decouple sim tick from 60/70 Hz origin; smooth 60 fps+ without altering game speed/balance | **L** | **High** | 🔨 render interpolation live (opt-in) |
 
 **Phase 0/1 verification (done):** built clean on macOS/arm64; the title screen
 composites a 4× Lanczos-upscaled backdrop (`hdtitle.dat`, via
@@ -255,6 +258,16 @@ subtle. Build a side-by-side harness (classic vs HD) for each effect.
 
 ### Phase 5 — Free scaling & fullscreen
 
+**Status: done.** The window is `SDL_WINDOW_RESIZABLE`; the destination rect is
+recomputed every frame from the renderer *output* size (Phase 0), so both the
+classic scaler path and the HD backdrop path scale continuously and aspect-correct.
+`FULLSCREEN_DESKTOP` toggling (Alt+Enter / options) round-trips correctly. Added:
+persisted `[video] window_width` / `window_height`, so a resized window is restored
+across scaler switches, fullscreen round-trips, and restarts (fullscreen-desktop
+sizes are never recorded as the user's free size). Both `RESIZED` and `SIZE_CHANGED`
+route to the resize handler. Mouse mapping is unchanged from Phase 0 and wants a
+hands-on check at extreme sizes.
+
 Today the window opens at a fixed integer multiple and the render rect is
 computed in `calc_dst_render_rect` (`video.c`). Goal: the player can resize the
 window to *any* size and toggle real fullscreen, always aspect-correct, with the
@@ -284,6 +297,34 @@ resolution from logical space) was already done in Phases 0–1.
 ---
 
 ### Phase 6 — High-framerate retune (60 fps+)
+
+**Status: render interpolation live behind `[video] highfps` (default off).** We took
+recommended path (1) — *fixed-timestep simulation + rendered interpolation* — so the
+simulation is byte-identical and only presentation is decoupled. Because the flight
+loop fuses movement and drawing (and consumes RNG inside draw paths), a from-scratch
+read-only re-render was rejected in favor of a **display-list capture/replay**
+(`src/interp.c`):
+
+- The sim still runs exactly once per tick. During its draw pass every playfield
+  draw is recorded into a per-tick display list, tagged by entity, via hooks at the
+  blit choke points (`blit_sprite2*`, the `blit_sprite*`/font family, background
+  rows, a starfield marker). HUD on `VGAScreenSeg` is not recorded.
+- Between ticks, `flight_present()` fills the wait to the tick deadline with
+  interpolated frames: clear `game_screen`, replay the current list with each op
+  offset toward its previous-tick position (paired by a `(tag, occurrence)` hash),
+  re-apply the starfield and flat colored filter read-only, composite, present. The
+  pacing (`setFrameCount`) is preserved, so game speed is unchanged.
+- **Known degradations on interpolated frames** (documented in `interp.c`):
+  framebuffer-reading effects can't be replayed op-by-op, so superpixel sparkles and
+  the smoothie/lava/water filters render at tick-rate; the flat level tint is
+  preserved. Mispaired/reused entity slots snap rather than smear.
+- **Verified:** clean `make`/`make debug`; the attract-mode demo runs the full
+  record→replay path headless with no assert/overflow/crash. **On-device visual A/B
+  of smoothness is still pending** (no display in the build environment). Enable with
+  `[video] highfps = true`.
+- **Not** the same as raising the *simulation* rate to 60/120 Hz (which retunes
+  balance — option 2 below). That is a separate, opt-in follow-on now made far more
+  tractable by this decoupling.
 
 The original is locked to the DOS/VGA cadence (~70 Hz via `setFrameCount`/
 `waitUntilElapsed` in `nortsong.c`; much game logic assumes "one tick = one
