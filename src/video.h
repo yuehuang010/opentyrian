@@ -51,6 +51,12 @@ extern bool crt_mode;            // optional CRT scanline + vignette post-proces
 bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if its HD asset loads; returns success
 void hd_clear_backdrop(void);       // stop HD compositing (revert to classic)
 
+// Immediate-mode HD sprite overlays (e.g. the title logo). Call every frame, before
+// JE_showVGA(), for each HD-backed sprite that should composite on top of the backdrop;
+// the queue is drained by scale_and_flip() and must be re-populated each frame.
+bool hd_set_sprite(const char *asset_name, int lx, int ly, int lw, int lh); // queue an HD sprite overlay at the given logical VGA rect; returns success
+void hd_clear_sprites(void);       // drop any queued HD sprite overlays (e.g. when leaving a screen)
+
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;
 extern SDL_Surface *game_screen;
 extern SDL_Surface *VGAScreen2;

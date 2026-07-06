@@ -3316,7 +3316,10 @@ bool titleScreen(void)
 			{
 				memcpy(VGAScreen2->pixels, VGAScreen->pixels, VGAScreen2->pitch * VGAScreen2->h);
 
-				blit_sprite(VGAScreenSeg, 11, 62, PLANET_SHAPES, 146); // tyrian logo
+				if (!(hd_mode && hd_set_sprite("hdplanet_146.dat", 11, 62,
+				                                get_sprite_width(PLANET_SHAPES, 146),
+				                                get_sprite_height(PLANET_SHAPES, 146))))
+					blit_sprite(VGAScreenSeg, 11, 62, PLANET_SHAPES, 146); // tyrian logo
 
 				if (hd_mode)
 				{
@@ -3325,6 +3328,9 @@ bool titleScreen(void)
 					{
 						setFrameCount(1);
 						hd_backdrop_fade = 255 * s / 10;
+						hd_set_sprite("hdplanet_146.dat", 11, 62,
+						                get_sprite_width(PLANET_SHAPES, 146),
+						                get_sprite_height(PLANET_SHAPES, 146));
 						JE_showVGA();
 						waitUntilElapsed();
 					}
@@ -3338,7 +3344,10 @@ bool titleScreen(void)
 
 					memcpy(VGAScreen->pixels, VGAScreen2->pixels, VGAScreen->pitch * VGAScreen->h);
 
-					blit_sprite(VGAScreenSeg, 11, y, PLANET_SHAPES, 146); // tyrian logo
+					if (!(hd_mode && hd_set_sprite("hdplanet_146.dat", 11, y,
+					                                get_sprite_width(PLANET_SHAPES, 146),
+					                                get_sprite_height(PLANET_SHAPES, 146))))
+						blit_sprite(VGAScreenSeg, 11, y, PLANET_SHAPES, 146); // tyrian logo
 
 					JE_showVGA();
 
@@ -3349,7 +3358,10 @@ bool titleScreen(void)
 			}
 			else
 			{
-				blit_sprite(VGAScreenSeg, 11, 4, PLANET_SHAPES, 146); // tyrian logo
+				if (!(hd_mode && hd_set_sprite("hdplanet_146.dat", 11, 4,
+				                                get_sprite_width(PLANET_SHAPES, 146),
+				                                get_sprite_height(PLANET_SHAPES, 146))))
+					blit_sprite(VGAScreenSeg, 11, 4, PLANET_SHAPES, 146); // tyrian logo
 
 				if (hd_mode)
 				{
@@ -3358,6 +3370,9 @@ bool titleScreen(void)
 					{
 						setFrameCount(1);
 						hd_backdrop_fade = 255 * s / 10;
+						hd_set_sprite("hdplanet_146.dat", 11, 4,
+						                get_sprite_width(PLANET_SHAPES, 146),
+						                get_sprite_height(PLANET_SHAPES, 146));
 						JE_showVGA();
 						waitUntilElapsed();
 					}
@@ -3400,6 +3415,11 @@ bool titleScreen(void)
 		// Highlight selected menu item.
 		drawFontHvAligned(VGAScreen, VGAScreen->w / 2, yMenuItems + hMenuItem * selectedIndex, menuText[selectedIndex], FONT_NORMAL, ALIGN_CENTER, 15, -1);
 
+		// Re-queue the HD logo overlay every redraw; the queue is drained each JE_showVGA.
+		hd_set_sprite("hdplanet_146.dat", 11, 4,
+		              get_sprite_width(PLANET_SHAPES, 146),
+		              get_sprite_height(PLANET_SHAPES, 146));
+
 		JE_mouseStartFilter(0xF0);
 		JE_showVGA();
 		JE_mouseReplace();
@@ -3415,6 +3435,7 @@ bool titleScreen(void)
 
 				play_demo = true;
 				hd_clear_backdrop();
+				hd_clear_sprites();
 				return true;
 			}
 
@@ -3530,6 +3551,7 @@ bool titleScreen(void)
 
 						loadDestruct = true;
 						hd_clear_backdrop();
+						hd_clear_sprites();
 						return true;
 					}
 					else if (i + 1 == SA_ENGAGE)
@@ -3541,6 +3563,7 @@ bool titleScreen(void)
 
 						newSuperTyrianGame();
 						hd_clear_backdrop();
+						hd_clear_sprites();
 						return true;
 					}
 					else
@@ -3550,6 +3573,7 @@ bool titleScreen(void)
 						if (newSuperArcadeGame(i))
 						{
 							hd_clear_backdrop();
+							hd_clear_sprites();
 							return true;
 						}
 
@@ -3572,6 +3596,7 @@ bool titleScreen(void)
 				if (newGame())
 				{
 					hd_clear_backdrop();
+					hd_clear_sprites();
 					return true;
 				}
 
@@ -3585,6 +3610,7 @@ bool titleScreen(void)
 				if (JE_loadScreen())
 				{
 					hd_clear_backdrop();
+					hd_clear_sprites();
 					return true;
 				}
 
@@ -3624,6 +3650,7 @@ bool titleScreen(void)
 
 				play_demo = true;
 				hd_clear_backdrop();
+				hd_clear_sprites();
 				return true;
 			}
 			case MENU_ITEM_QUIT:
@@ -3631,6 +3658,7 @@ bool titleScreen(void)
 				fade_black(15);
 
 				hd_clear_backdrop();
+				hd_clear_sprites();
 				return false;
 			}
 			default:
@@ -3643,6 +3671,7 @@ bool titleScreen(void)
 			fade_black(15);
 
 			hd_clear_backdrop();
+			hd_clear_sprites();
 			return false;
 		}
 	}

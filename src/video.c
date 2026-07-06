@@ -60,6 +60,24 @@ static int crt_built_h = 0;
 static SDL_Texture *hd_backdrop_tex[HD_BACKDROP_COUNT + 1];        // [0] unused
 static bool hd_backdrop_load_failed[HD_BACKDROP_COUNT + 1];
 
+// Cache of loaded HD sprite overlay textures (e.g. hdplanet_146.dat), keyed by asset filename.
+#define HD_SPRITE_CACHE_COUNT 16
+static char hd_sprite_cache_name[HD_SPRITE_CACHE_COUNT][64];
+static SDL_Texture *hd_sprite_cache_tex[HD_SPRITE_CACHE_COUNT];
+static bool hd_sprite_cache_load_failed[HD_SPRITE_CACHE_COUNT];
+
+// Per-frame queue of HD sprite overlays to draw this frame, in logical VGA-space rects.
+// Rebuilt every frame by the call sites (immediate-mode pattern); drained by scale_and_flip().
+#define HD_SPRITE_QUEUE_COUNT 16
+typedef struct
+{
+	SDL_Texture *tex;
+	int lx, ly, lw, lh;
+} HDSpriteQueueEntry;
+static HDSpriteQueueEntry hd_sprite_queue[HD_SPRITE_QUEUE_COUNT];
+static int hd_sprite_queue_count = 0;
+static bool hd_sprite_queue_overflow_warned = false;
+
 SDL_Surface *VGAScreen, *VGAScreenSeg;
 SDL_Surface *VGAScreen2;
 SDL_Surface *game_screen;
@@ -81,6 +99,7 @@ static void window_center_in_display(int display_index);
 static void calc_dst_render_rect(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void scale_and_flip(SDL_Surface *);
 static bool load_hd_backdrop(int pic_num);
+static SDL_Texture *load_hd_sprite(const char *asset_name);
 static void deinit_crt_overlay(void);
 static bool build_crt_overlay(int out_w, int out_h);
 static void apply_crt_overlay(const SDL_Rect *dst_rect);
@@ -548,6 +567,136 @@ void hd_clear_backdrop(void)
 	hd_backdrop_active = false;
 }
 
+/**
+ * Lazily loads and caches the HD sprite overlay asset with the given filename
+ * (e.g. "hdplanet_146.dat") from the data directory. Returns the cached texture,
+ * or NULL if the asset is missing/malformed; a load failure is only ever
+ * reported (and retried) once per distinct asset name.
+ */
+static SDL_Texture *load_hd_sprite(const char *asset_name)
+{
+	int slot = -1;
+	for (int i = 0; i < HD_SPRITE_CACHE_COUNT; ++i)
+	{
+		if (hd_sprite_cache_name[i][0] != '\0' && strcmp(hd_sprite_cache_name[i], asset_name) == 0)
+		{
+			if (hd_sprite_cache_load_failed[i])
+				return NULL;
+			return hd_sprite_cache_tex[i];
+		}
+		if (slot < 0 && hd_sprite_cache_name[i][0] == '\0')
+			slot = i;
+	}
+
+	if (slot < 0)
+	{
+		fprintf(stderr, "warning: HD sprite cache full; cannot load %s\n", asset_name);
+		return NULL;
+	}
+
+	snprintf(hd_sprite_cache_name[slot], sizeof hd_sprite_cache_name[slot], "%s", asset_name);
+
+	bool ok = false;
+	SDL_Texture *tex = NULL;
+
+	FILE *f = dir_fopen(data_dir(), asset_name, "rb");
+	if (f != NULL)
+	{
+		Uint8 magic[4];
+		Uint8 dims[8];
+		Uint8 *pixels = NULL;
+
+		if (fread(magic, 1, 4, f) == 4 &&
+		    memcmp(magic, "HDPX", 4) == 0 &&
+		    fread(dims, 1, 8, f) == 8)
+		{
+			Uint32 width, height;
+			memcpy(&width, &dims[0], 4);
+			memcpy(&height, &dims[4], 4);
+			width = SDL_SwapLE32(width);
+			height = SDL_SwapLE32(height);
+
+			if (width > 0 && height > 0 && width <= 8192 && height <= 8192)
+			{
+				size_t pixel_bytes = (size_t)width * height * 4;
+				pixels = malloc(pixel_bytes);
+
+				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
+				{
+					tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+						SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
+
+					if (tex != NULL)
+					{
+						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
+						{
+							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+							ok = true;
+						}
+						else
+						{
+							SDL_DestroyTexture(tex);
+							tex = NULL;
+						}
+					}
+				}
+			}
+		}
+
+		free(pixels);
+		fclose(f);
+	}
+
+	if (!ok)
+	{
+		fprintf(stderr, "warning: HD sprite %s unavailable; falling back\n", asset_name);
+		hd_sprite_cache_load_failed[slot] = true;
+		return NULL;
+	}
+
+	hd_sprite_cache_tex[slot] = tex;
+	return tex;
+}
+
+bool hd_set_sprite(const char *asset_name, int lx, int ly, int lw, int lh)
+{
+	// Only claim the sprite (suppressing the caller's classic blit) when it will
+	// actually be composited: scale_and_flip only draws the overlay queue on the
+	// HD-backdrop-active path. Without the hd_backdrop_active check, a present HD
+	// sprite asset paired with a missing/failed backdrop would make the caller skip
+	// the classic blit while the overlay is silently dropped -- the sprite vanishes.
+	if (!hd_mode || !hd_backdrop_active)
+		return false;
+
+	SDL_Texture *tex = load_hd_sprite(asset_name);
+	if (tex == NULL)
+		return false;
+
+	if (hd_sprite_queue_count >= HD_SPRITE_QUEUE_COUNT)
+	{
+		if (!hd_sprite_queue_overflow_warned)
+		{
+			fprintf(stderr, "warning: HD sprite overlay queue full; dropping %s\n", asset_name);
+			hd_sprite_queue_overflow_warned = true;
+		}
+		return false;
+	}
+
+	HDSpriteQueueEntry *entry = &hd_sprite_queue[hd_sprite_queue_count++];
+	entry->tex = tex;
+	entry->lx = lx;
+	entry->ly = ly;
+	entry->lw = lw;
+	entry->lh = lh;
+
+	return true;
+}
+
+void hd_clear_sprites(void)
+{
+	hd_sprite_queue_count = 0;
+}
+
 static void deinit_crt_overlay(void)
 {
 	if (crt_scanline_tex != NULL)
@@ -741,12 +890,35 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_DestroyTexture(overlay);
 		}
 
+		// HD sprite overlays (e.g. title logo), on top of the indexed overlay, sharing
+		// the same fade factor `f` so nothing fades out of lockstep with the backdrop.
+		for (int i = 0; i < hd_sprite_queue_count; ++i)
+		{
+			HDSpriteQueueEntry *entry = &hd_sprite_queue[i];
+
+			SDL_Rect window_rect;
+			window_rect.x = dst_rect.x + entry->lx * dst_rect.w / vga_width;
+			window_rect.y = dst_rect.y + entry->ly * dst_rect.h / vga_height;
+			window_rect.w = entry->lw * dst_rect.w / vga_width;
+			window_rect.h = entry->lh * dst_rect.h / vga_height;
+
+			SDL_SetTextureColorMod(entry->tex, f, f, f);
+			SDL_RenderCopy(main_window_renderer, entry->tex, NULL, &window_rect);
+		}
+		hd_sprite_queue_count = 0;
+
 		apply_crt_overlay(&dst_rect);
 
 		SDL_RenderPresent(main_window_renderer);
 		last_output_rect = dst_rect;
 		return;
 	}
+
+	// Not compositing HD this frame (HD mode off, no active backdrop, or its load
+	// failed) -- drop any HD sprite overlays queued this frame so they never leak
+	// into a later frame; they were never drawn, so hd_set_sprite's caller already
+	// fell back to the classic blit.
+	hd_sprite_queue_count = 0;
 
 	// Do software scaling
 	assert(scaler_function != NULL);

@@ -42,3 +42,6 @@ tyrian.sav
 /tools/title_preview.png
 /tools/hdpic_previews/
 /doc/remaster_title_verified.png
+
+# macOS
+.DS_Store
