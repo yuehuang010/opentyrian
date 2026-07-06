@@ -63,6 +63,19 @@ static int crt_built_h = 0;
 static SDL_Texture *hd_backdrop_tex[HD_BACKDROP_COUNT + 1];        // [0] unused
 static bool hd_backdrop_load_failed[HD_BACKDROP_COUNT + 1];
 
+// The texture scale_and_flip's backdrop branch actually draws this frame, regardless
+// of whether it was activated via the numeric PIC path (hd_set_backdrop) or the
+// filename-keyed asset path (hd_set_backdrop_asset). Kept in lockstep with
+// hd_backdrop_active by both setters; hd_clear_backdrop only needs to flip the flag.
+static SDL_Texture *hd_backdrop_cur_tex = NULL;
+
+// Cache of loaded full-screen HD backdrop assets (e.g. hdpcx_tyrset.dat), keyed by
+// short asset name ("tyrset"). Mirrors load_hd_sprite's cache-by-filename pattern.
+#define HD_BACKDROP_ASSET_CACHE_COUNT 8
+static char hd_backdrop_asset_cache_name[HD_BACKDROP_ASSET_CACHE_COUNT][64];
+static SDL_Texture *hd_backdrop_asset_cache_tex[HD_BACKDROP_ASSET_CACHE_COUNT];
+static bool hd_backdrop_asset_cache_load_failed[HD_BACKDROP_ASSET_CACHE_COUNT];
+
 // Cache of loaded HD sprite overlay textures (e.g. hdplanet_146.dat), keyed by asset filename.
 #define HD_SPRITE_CACHE_COUNT 16
 static char hd_sprite_cache_name[HD_SPRITE_CACHE_COUNT][64];
@@ -130,8 +143,10 @@ static void window_center_in_display(int display_index);
 static void calc_dst_render_rect(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void classic_scale_base(SDL_Surface *src_surface, SDL_Rect *dst_rect);
 static void scale_and_flip(SDL_Surface *);
+static SDL_Texture *load_hdpx_texture(const char *filename);
 static bool load_hd_backdrop(int pic_num);
 static SDL_Texture *load_hd_sprite(const char *asset_name);
+static SDL_Texture *load_hd_backdrop_asset(const char *name);
 static void deinit_crt_overlay(void);
 static bool build_crt_overlay(int out_w, int out_h);
 static void apply_crt_overlay(const SDL_Rect *dst_rect);
@@ -498,29 +513,17 @@ static void calc_dst_render_rect(SDL_Surface *const src_surface, SDL_Rect *const
 }
 
 /**
- * Lazily loads the HD backdrop asset ("hdpicNN.dat") for the given 1-based PIC
- * number into hd_backdrop_tex[pic_num]. Returns true if the texture is ready
- * to use. Missing/malformed assets degrade gracefully (HD compositing is
- * simply skipped) rather than crashing; the warning is only ever printed once
- * per PIC.
+ * Shared HDPX loader: reads a "HDPX" magic + u32 width/height + raw RGBA32 pixel
+ * blob from `filename` in the data directory and uploads it into a new static
+ * texture. Returns the texture, or NULL if the file is missing/malformed. Used
+ * by load_hd_backdrop, load_hd_sprite, and load_hd_backdrop_asset so the HDPX
+ * parsing itself lives in exactly one place.
  */
-static bool load_hd_backdrop(int pic_num)
+static SDL_Texture *load_hdpx_texture(const char *filename)
 {
-	if (pic_num < 1 || pic_num > HD_BACKDROP_COUNT)
-		return false;
+	SDL_Texture *tex = NULL;
 
-	if (hd_backdrop_tex[pic_num] != NULL)
-		return true;
-
-	if (hd_backdrop_load_failed[pic_num])
-		return false;
-
-	bool ok = false;
-
-	char name[16];
-	snprintf(name, sizeof name, "hdpic%02d.dat", pic_num);
-
-	FILE *f = dir_fopen(data_dir(), name, "rb");
+	FILE *f = dir_fopen(data_dir(), filename, "rb");
 	if (f != NULL)
 	{
 		Uint8 magic[4];
@@ -544,7 +547,7 @@ static bool load_hd_backdrop(int pic_num)
 
 				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
 				{
-					SDL_Texture *tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+					tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
 						SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
 
 					if (tex != NULL)
@@ -552,12 +555,11 @@ static bool load_hd_backdrop(int pic_num)
 						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
 						{
 							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-							hd_backdrop_tex[pic_num] = tex;
-							ok = true;
 						}
 						else
 						{
 							SDL_DestroyTexture(tex);
+							tex = NULL;
 						}
 					}
 				}
@@ -568,13 +570,40 @@ static bool load_hd_backdrop(int pic_num)
 		fclose(f);
 	}
 
-	if (!ok)
+	return tex;
+}
+
+/**
+ * Lazily loads the HD backdrop asset ("hdpicNN.dat") for the given 1-based PIC
+ * number into hd_backdrop_tex[pic_num]. Returns true if the texture is ready
+ * to use. Missing/malformed assets degrade gracefully (HD compositing is
+ * simply skipped) rather than crashing; the warning is only ever printed once
+ * per PIC.
+ */
+static bool load_hd_backdrop(int pic_num)
+{
+	if (pic_num < 1 || pic_num > HD_BACKDROP_COUNT)
+		return false;
+
+	if (hd_backdrop_tex[pic_num] != NULL)
+		return true;
+
+	if (hd_backdrop_load_failed[pic_num])
+		return false;
+
+	char name[16];
+	snprintf(name, sizeof name, "hdpic%02d.dat", pic_num);
+
+	SDL_Texture *tex = load_hdpx_texture(name);
+	if (tex == NULL)
 	{
 		fprintf(stderr, "warning: HD backdrop hdpic%02d.dat unavailable; falling back\n", pic_num);
 		hd_backdrop_load_failed[pic_num] = true;
+		return false;
 	}
 
-	return ok;
+	hd_backdrop_tex[pic_num] = tex;
+	return true;
 }
 
 bool hd_set_backdrop(int pic_num)
@@ -589,6 +618,68 @@ bool hd_set_backdrop(int pic_num)
 	}
 
 	hd_backdrop_id = pic_num;
+	hd_backdrop_cur_tex = hd_backdrop_tex[pic_num];
+	hd_backdrop_active = true;
+	hd_backdrop_fade = 0;
+	return true;
+}
+
+/**
+ * Lazily loads and caches the full-screen HD backdrop asset ("hdpcx_<name>.dat")
+ * for the given short asset name (e.g. "tyrset" -> "hdpcx_tyrset.dat"). Returns
+ * the cached texture, or NULL if the asset is missing/malformed; a load failure
+ * is only ever reported (and retried) once per distinct asset name.
+ */
+static SDL_Texture *load_hd_backdrop_asset(const char *name)
+{
+	int slot = -1;
+	for (int i = 0; i < HD_BACKDROP_ASSET_CACHE_COUNT; ++i)
+	{
+		if (hd_backdrop_asset_cache_name[i][0] != '\0' && strcmp(hd_backdrop_asset_cache_name[i], name) == 0)
+		{
+			if (hd_backdrop_asset_cache_load_failed[i])
+				return NULL;
+			return hd_backdrop_asset_cache_tex[i];
+		}
+		if (slot < 0 && hd_backdrop_asset_cache_name[i][0] == '\0')
+			slot = i;
+	}
+
+	if (slot < 0)
+	{
+		fprintf(stderr, "warning: HD backdrop asset cache full; cannot load %s\n", name);
+		return NULL;
+	}
+
+	snprintf(hd_backdrop_asset_cache_name[slot], sizeof hd_backdrop_asset_cache_name[slot], "%s", name);
+
+	char filename[64];
+	snprintf(filename, sizeof filename, "hdpcx_%s.dat", name);
+
+	SDL_Texture *tex = load_hdpx_texture(filename);
+	if (tex == NULL)
+	{
+		fprintf(stderr, "warning: HD backdrop asset %s unavailable; falling back\n", filename);
+		hd_backdrop_asset_cache_load_failed[slot] = true;
+		return NULL;
+	}
+
+	hd_backdrop_asset_cache_tex[slot] = tex;
+	return tex;
+}
+
+bool hd_set_backdrop_asset(const char *name)
+{
+	// Mirrors hd_set_backdrop(int): only begin HD compositing if the asset actually
+	// loads, so callers can gate the destructive JE_clr256() on the return value.
+	SDL_Texture *tex = load_hd_backdrop_asset(name);
+	if (tex == NULL)
+	{
+		hd_backdrop_active = false;
+		return false;
+	}
+
+	hd_backdrop_cur_tex = tex;
 	hd_backdrop_active = true;
 	hd_backdrop_fade = 0;
 	return true;
@@ -628,58 +719,8 @@ static SDL_Texture *load_hd_sprite(const char *asset_name)
 
 	snprintf(hd_sprite_cache_name[slot], sizeof hd_sprite_cache_name[slot], "%s", asset_name);
 
-	bool ok = false;
-	SDL_Texture *tex = NULL;
-
-	FILE *f = dir_fopen(data_dir(), asset_name, "rb");
-	if (f != NULL)
-	{
-		Uint8 magic[4];
-		Uint8 dims[8];
-		Uint8 *pixels = NULL;
-
-		if (fread(magic, 1, 4, f) == 4 &&
-		    memcmp(magic, "HDPX", 4) == 0 &&
-		    fread(dims, 1, 8, f) == 8)
-		{
-			Uint32 width, height;
-			memcpy(&width, &dims[0], 4);
-			memcpy(&height, &dims[4], 4);
-			width = SDL_SwapLE32(width);
-			height = SDL_SwapLE32(height);
-
-			if (width > 0 && height > 0 && width <= 8192 && height <= 8192)
-			{
-				size_t pixel_bytes = (size_t)width * height * 4;
-				pixels = malloc(pixel_bytes);
-
-				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
-				{
-					tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
-						SDL_TEXTUREACCESS_STATIC, (int)width, (int)height);
-
-					if (tex != NULL)
-					{
-						if (SDL_UpdateTexture(tex, NULL, pixels, (int)(width * 4)) == 0)
-						{
-							SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-							ok = true;
-						}
-						else
-						{
-							SDL_DestroyTexture(tex);
-							tex = NULL;
-						}
-					}
-				}
-			}
-		}
-
-		free(pixels);
-		fclose(f);
-	}
-
-	if (!ok)
+	SDL_Texture *tex = load_hdpx_texture(asset_name);
+	if (tex == NULL)
 	{
 		fprintf(stderr, "warning: HD sprite %s unavailable; falling back\n", asset_name);
 		hd_sprite_cache_load_failed[slot] = true;
@@ -1101,7 +1142,7 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		return;
 	}
 
-	if (hd_mode && hd_backdrop_active && load_hd_backdrop(hd_backdrop_id))
+	if (hd_mode && hd_backdrop_active && hd_backdrop_cur_tex != NULL)
 	{
 		SDL_Rect dst_rect;
 		calc_dst_render_rect(src_surface, &dst_rect);
@@ -1111,8 +1152,10 @@ static void scale_and_flip(SDL_Surface *src_surface)
 
 		Uint8 f = (Uint8)(hd_backdrop_fade < 0 ? 0 : hd_backdrop_fade > 255 ? 255 : hd_backdrop_fade);
 
-		// HD backdrop (behind)
-		SDL_Texture *hd_tex = hd_backdrop_tex[hd_backdrop_id];
+		// HD backdrop (behind); drawn via hd_backdrop_cur_tex regardless of whether it was
+		// activated by the numeric PIC path (hd_set_backdrop) or the filename-keyed asset
+		// path (hd_set_backdrop_asset).
+		SDL_Texture *hd_tex = hd_backdrop_cur_tex;
 		SDL_SetTextureColorMod(hd_tex, f, f, f);
 		SDL_RenderCopy(main_window_renderer, hd_tex, NULL, &dst_rect);
 

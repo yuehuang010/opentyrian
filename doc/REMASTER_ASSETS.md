@@ -108,17 +108,22 @@ are 12×14 RLE; `2x2` = tiles `i,i+1,i+19,i+20`). **11,856 HD frames** written a
 
 ---
 
-## 4. Large PCX images — 🔨 extracted (wiring pending)
+## 4. Large PCX images — ➖ mostly not engine-hooked
 
-Loaded via `pcxload.c` / `JE_loadPCX`. Extracted by `hd_extract.py` using each
-file's own embedded PCX palette (no 6→8 expansion), Lanczos 4x → `hdpcx_<name>.dat`.
+Extracted by `hd_extract.py` (each file's own embedded PCX palette, no 6→8
+expansion, Lanczos 4x → `hdpcx_<name>.dat`). **Investigation finding:** 7 of 8
+are **not loaded by the OpenTyrian engine at all** — they're assets from separate
+standalone DOS utilities in the Tyrian 2.1 distro (`SHIPEDIT.EXE`,
+`NETARENA.EXE`, etc.) that were never ported. OpenTyrian's own ship editor
+(`editship.c`) builds its UI from sprites, no PCX. Infra to composite full-screen
+HD assets exists (`hd_set_backdrop_asset`), but there are no call sites to wire.
 
-| File | Where | Upscaler | Status |
+| File | Where | Wireable? | Status |
 |---|---|:--:|:--:|
-| `tshp2.pcx` | big interlude image (`tyrian2.c:2784`) | L | ✅ extracted |
-| `shipedit.pcx` | ship editor bg | L | ✅ extracted |
-| `tyrset.pcx` | setup screen | L | ✅ extracted |
-| `netarena.pcx`, `netset.pcx`, `netmega.pcx`, `netfont1/2.pcx` | network UI | L | ✅ extracted |
+| `tshp2.pcx` | interlude image (`JE_loadPCX`, `tyrian2.c:2804`) | in a generic script branch, no clean enter/exit | ✅ extracted · wiring deferred (leak risk) |
+| `shipedit.pcx` | — | ➖ not loaded (DOS `SHIPEDIT.EXE` asset) | extracted, dead |
+| `tyrset.pcx` | — | ➖ not loaded (DOS setup tool asset) | extracted, dead |
+| `netarena/netset/netmega/netfont1-2.pcx` | — | ➖ not loaded (DOS net tool assets) | extracted, dead |
 
 ---
 

@@ -51,7 +51,8 @@ extern bool crt_mode;            // optional CRT scanline + vignette post-proces
 extern bool hd_flight_active;    // set while the in-flight HD sprite compositor should overlay
 
 bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if its HD asset loads; returns success
-void hd_clear_backdrop(void);       // stop HD compositing (revert to classic)
+bool hd_set_backdrop_asset(const char *name); // begin HD compositing for a filename-keyed full-screen asset ("hdpcx_<name>.dat"); returns success
+void hd_clear_backdrop(void);       // stop HD compositing (revert to classic); covers both hd_set_backdrop and hd_set_backdrop_asset
 
 // Immediate-mode HD sprite overlays (e.g. the title logo). Call every frame, before
 // JE_showVGA(), for each HD-backed sprite that should composite on top of the backdrop;
