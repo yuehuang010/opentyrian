@@ -51,7 +51,7 @@ Upscaler tags: `L` = Lanczos placeholder · `E` = Real-ESRGAN (photo/anime) ·
 
 ---
 
-## 2. Sprite tables (`Sprite`) — ⬜ not started
+## 2. Sprite tables (`Sprite`) — 🔨 title logo done
 
 Loaded by `JE_loadMainShapeTables("tyrian.shp")` (or `tyrianc.shp` at Xmas),
 `opentyr.c:796`. Transparency = color 0 → must become real alpha.
@@ -62,8 +62,8 @@ See plan §Phase 2 Tracks A/B/C and §Phase 3 (recoloring).
 | 0 | `FONT_SHAPES` | large font | — | 🎨 H | ⬜ redraw |
 | 1 | `SMALL_FONT_SHAPES` | small font | — | 🎨 H | ⬜ redraw |
 | 2 | `TINY_FONT` | tiny font | — | 🎨 H | ⬜ redraw |
-| 3 | `PLANET_SHAPES` | title logo, planets, cube | plain, blend | E | ⬜ |
-| 4 | `FACE_SHAPES` | menu portraits | plain | E | ⬜ |
+| 3 | `PLANET_SHAPES` | title logo, planets, cube | plain, blend | X | 🔨 logo (#146) done · rest extracted |
+| 4 | `FACE_SHAPES` | menu portraits | plain | X | ⬜ (per-face `facepal[]` recolor) |
 | 5 | `OPTION_SHAPES` | option/help icons | plain | X/H | ⬜ |
 | 6 | `WEAPON_SHAPES` | weapon icons | plain | X | ⬜ |
 | 7 | `EXTRA_SHAPES` | ending pics (`estsc.shp`, `mainint.c:2475`) | plain | E | ⬜ |

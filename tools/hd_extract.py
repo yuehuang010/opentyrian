@@ -28,10 +28,15 @@ PLANET_SHAPES (table 3, 151 frames -- frame 146 is the big Tyrian title
 logo) and FACE_SHAPES (table 4, 12 frames). Each frame is decoded from its
 RLE-compressed indexed pixels, keyed to RGBA using palette.dat slot 0 (the
 main game palette -- these tables are blitted against palettes[0] by the
-engine, unlike the per-image pcxpal-indexed backdrops), 4x Lanczos
-upscaled (alpha channel included, producing soft edges), and written as
-tyrian21/hdplanet_NN.dat / hdface_NN.dat (NN = frame index zero-padded to
-2 digits) alongside a tyrian21/hd_sprite_manifest.json manifest.
+engine, unlike the per-image pcxpal-indexed backdrops), 4x xBRZ upscaled
+(edge-directed pixel-art scaling; alpha channel included as part of the
+edge-detection so transparency gets smooth anti-aliased cutout edges
+rather than blocky/blurry ones), and written as tyrian21/hdplanet_NN.dat /
+hdface_NN.dat (NN = frame index zero-padded to 2 digits) alongside a
+tyrian21/hd_sprite_manifest.json manifest. The full-screen PCX backdrops
+above are photographic-ish dithered art, so they intentionally stay on
+the Lanczos path -- xBRZ is a pixel-art scaler and would misbehave on
+them.
 
 Standard library only (no Pillow/numpy/ImageMagick). Tested against
 python3.9.
@@ -454,6 +459,427 @@ def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3, channels=3):
 
 
 # ---------------------------------------------------------------------------
+# STEP 4b: xBRZ 4x edge-directed upscaling (SPRITE path only)
+#
+# A pure-Python, stdlib-only port of Zenju's xBRZ ("edge-directed" pixel-art
+# scaler; https://sourceforge.net/projects/xbrz), ARGB color format, fixed
+# to scale factor 4 (all this tool needs). Ported from xbrz.cpp / xbrz.h /
+# config.h (GPLv3, Copyright (C) Zenju), specifically:
+#   - distYCbCr()/ColorDistanceARGB::dist() -> _dist_argb(): the ITU-R
+#     BT.2020-weighted YCbCr color-distance metric, alpha-aware per
+#     ColorDistanceARGB (distance is scaled by the *lesser* of the two
+#     pixels' alpha, plus a term proportional to |a1 - a2| * 255 -- so a
+#     transparent/opaque boundary always registers as a strong "edge",
+#     which is exactly what gives the logo a clean anti-aliased cutout
+#     instead of a blurred or hard-stepped one).
+#   - gradientARGB()/ColorGradientARGB::alphaGrad() -> _gradient_argb():
+#     the alpha-weighted color+alpha blend used for every softened pixel.
+#     Because each source color is weighted by *its own* alpha before
+#     blending, a fully-transparent neighbor (garbage RGB or not) never
+#     contributes any color -- only coverage -- so there is no dark/color
+#     halo at cutout edges.
+#   - preProcessCorners() -> _preprocess_corners(): the per-corner
+#     "which diagonal is the real edge" detection over a 4x4-pixel
+#     neighborhood (the "5x5-ish" neighborhood the corner tests reach
+#     into), producing BLEND_NONE/BLEND_NORMAL/BLEND_DOMINANT per corner.
+#   - blendPixel() -> _blend_pixel_rot(): the 3x3-neighborhood, per-corner
+#     rule set (shallow/steep/steep+shallow/diagonal line blends, or a
+#     rounded corner blend) evaluated once per 90-degree rotation of the
+#     kernel (4 rotations cover all four corners of the output block).
+#   - Scaler4x<ColorGradientARGB>'s blendLineShallow/Steep/
+#     SteepAndShallow/Diagonal/Corner -> _blend_line_*()/_blend_corner():
+#     the exact scale-4 sub-pixel weight tables (as M/N alpha-blend
+#     fractions) that shape the rounded/diagonal edges.
+#   - The OutputMatrix<N, rotDeg> compile-time rotation is reproduced by
+#     _out_index(), a closed-form solution of the same recursive
+#     definition (verified against all 4 rotations transcribed from the
+#     DEF_GETTER macros in xbrz.cpp).
+#
+# Deviations from upstream (all deliberate, and all preserve the visual
+# algorithm -- nothing here changes *which* pixels get blended or by how
+# much):
+#   - Only ColorFormat::ARGB at scale factor 4 is implemented (2x/3x/5x/6x
+#     and the plain-RGB scaler are omitted; this tool never needs them).
+#   - distYCbCr()'s "lumaWeight" parameter is fixed at 1.0. Upstream's
+#     ColorDistanceARGB::dist() always routes through DistYCbCrBuffer
+#     (a precomputed 256^3 LUT keyed only on the raw R/G/B diffs), which
+#     structurally ignores cfg.luminanceWeight -- and the library's own
+#     default ScalerCfg::luminanceWeight is 1.0 anyway, so this matches
+#     upstream's actual runtime behavior exactly, not just its defaults.
+#   - No 256^3 precomputed distance LUT (DistYCbCrBuffer): a 64 MB cache
+#     buys ~30% perf in C++ but is pure overhead to build in Python for a
+#     few hundred small sprite frames, so distances are computed directly.
+#   - No multithreaded row-striping (yFirst/yLast slicing) -- processes
+#     the whole image in one pass; irrelevant to the output.
+#   - Guard against transparent-pixel RGB bleed: source pixels with
+#     alpha == 0 have their R/G/B forced to 0 before scaling starts, so
+#     any stray/garbage color baked into a fully-transparent source texel
+#     can never leak into a blend (on top of the alpha-weighting in
+#     _gradient_argb() already suppressing it structurally).
+# ---------------------------------------------------------------------------
+
+# ScalerCfg defaults, from config.h (Copyright (C) Zenju):
+_XBRZ_EQUAL_COLOR_TOLERANCE = 30.0
+_XBRZ_DOMINANT_DIRECTION_THRESHOLD = 3.6
+_XBRZ_STEEP_DIRECTION_THRESHOLD = 2.2
+
+# ITU-R BT.2020 YCbCr conversion weights (distYCbCr() in xbrz.cpp).
+_XBRZ_K_B = 0.0593
+_XBRZ_K_R = 0.2627
+_XBRZ_K_G = 1.0 - _XBRZ_K_B - _XBRZ_K_R
+_XBRZ_SCALE_B = 0.5 / (1.0 - _XBRZ_K_B)
+_XBRZ_SCALE_R = 0.5 / (1.0 - _XBRZ_K_R)
+
+_BLEND_NONE = 0
+_BLEND_NORMAL = 1
+_BLEND_DOMINANT = 2
+
+
+def _dist_argb(p1, p2):
+    """
+    Port of ColorDistanceARGB::dist() (xbrz.cpp): an alpha-aware YCbCr color
+    distance. `p1`/`p2` are packed 0xAARRGGBB pixels. lumaWeight is fixed at
+    1.0 (see the deviations note above).
+    """
+    a1 = (p1 >> 24) & 0xFF
+    a2 = (p2 >> 24) & 0xFF
+    r_diff = ((p1 >> 16) & 0xFF) - ((p2 >> 16) & 0xFF)
+    g_diff = ((p1 >> 8) & 0xFF) - ((p2 >> 8) & 0xFF)
+    b_diff = (p1 & 0xFF) - (p2 & 0xFF)
+
+    y = _XBRZ_K_R * r_diff + _XBRZ_K_G * g_diff + _XBRZ_K_B * b_diff
+    c_b = _XBRZ_SCALE_B * (b_diff - y)
+    c_r = _XBRZ_SCALE_R * (r_diff - y)
+    d = math.sqrt(y * y + c_b * c_b + c_r * c_r)
+
+    fa1 = a1 / 255.0
+    fa2 = a2 / 255.0
+    if fa1 < fa2:
+        return fa1 * d + 255.0 * (fa2 - fa1)
+    else:
+        return fa2 * d + 255.0 * (fa1 - fa2)
+
+
+def _gradient_argb(pix_front, pix_back, m, n):
+    """
+    Port of gradientARGB<M,N>() (xbrz.cpp): blend `pix_front` over
+    `pix_back` with nominal opacity M/N, weighting each side's contribution
+    by its own alpha (so a fully-transparent side contributes zero color,
+    only its absence of coverage) -- NOT regular "over" alpha compositing.
+    Returns a new packed 0xAARRGGBB pixel.
+    """
+    weight_front = ((pix_front >> 24) & 0xFF) * m
+    weight_back = ((pix_back >> 24) & 0xFF) * (n - m)
+    weight_sum = weight_front + weight_back
+    if weight_sum == 0:
+        return 0
+
+    def calc(c_front, c_back):
+        return (c_front * weight_front + c_back * weight_back) // weight_sum
+
+    r = calc((pix_front >> 16) & 0xFF, (pix_back >> 16) & 0xFF)
+    g = calc((pix_front >> 8) & 0xFF, (pix_back >> 8) & 0xFF)
+    b = calc(pix_front & 0xFF, pix_back & 0xFF)
+    a = weight_sum // n
+    return (a << 24) | (r << 16) | (g << 8) | b
+
+
+def _xbrz_preprocess_corners(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p):
+    """
+    Port of preProcessCorners() (xbrz.cpp): given a 4x4 pixel neighborhood
+    (row-major a..p, with f/g/j/k the 2x2 block whose shared corner is
+    being classified), decide which diagonal (f-k or g-j) is the "real"
+    edge and return (blend_f, blend_g, blend_j, blend_k) blend-strength
+    codes (0=none, 1=normal, 2=dominant) for that corner as seen from each
+    of the four surrounding pixels.
+    """
+    if (f == g and j == k) or (f == j and g == k):
+        return 0, 0, 0, 0
+
+    weight = 4
+    jg = (_dist_argb(i, f) + _dist_argb(f, c) + _dist_argb(n, k) + _dist_argb(k, h)
+          + weight * _dist_argb(j, g))
+    fk = (_dist_argb(e, j) + _dist_argb(j, o) + _dist_argb(b, g) + _dist_argb(g, l)
+          + weight * _dist_argb(f, k))
+
+    blend_f = blend_g = blend_j = blend_k = _BLEND_NONE
+    if jg < fk:
+        bt = _BLEND_DOMINANT if _XBRZ_DOMINANT_DIRECTION_THRESHOLD * jg < fk else _BLEND_NORMAL
+        if f != g and f != j:
+            blend_f = bt
+        if k != j and k != g:
+            blend_k = bt
+    elif fk < jg:
+        bt = _BLEND_DOMINANT if _XBRZ_DOMINANT_DIRECTION_THRESHOLD * fk < jg else _BLEND_NORMAL
+        if j != f and j != k:
+            blend_j = bt
+        if g != f and g != k:
+            blend_g = bt
+    return blend_f, blend_g, blend_j, blend_k
+
+
+def _xbrz_rotate_blend_info(b, rot):
+    """Port of rotateBlendInfo<rotDeg>(): rotate the 4x 2-bit corner fields."""
+    if rot == 0:
+        return b
+    elif rot == 1:
+        return ((b << 2) | (b >> 6)) & 0xFF
+    elif rot == 2:
+        return ((b << 4) | (b >> 4)) & 0xFF
+    else:
+        return ((b << 6) | (b >> 2)) & 0xFF
+
+
+# Index permutations reproducing the get_a<rotDeg>..get_i<rotDeg> DEF_GETTER
+# macros in xbrz.cpp, for a Kernel_3x3 flattened as (a, b, c, d, e, f, g, h, i).
+_XBRZ_ROT_IDX = {
+    0: (0, 1, 2, 3, 4, 5, 6, 7, 8),
+    1: (6, 3, 0, 7, 4, 1, 8, 5, 2),
+    2: (8, 7, 6, 5, 4, 3, 2, 1, 0),
+    3: (2, 5, 8, 1, 4, 7, 0, 3, 6),
+}
+
+
+def _xbrz_out_index(bi, bj, rot, n=4):
+    """
+    Closed-form port of the recursive OutputMatrix<N, rotDeg>/MatrixRotation
+    template in xbrz.cpp (verified by unrolling the recursion for all 4
+    rotations): maps a rotation-relative (I, J) sub-block coordinate to the
+    actual (row, col) in the unrotated NxN output block, returned as a flat
+    row-major index.
+    """
+    if rot == 0:
+        io, jo = bi, bj
+    elif rot == 1:
+        io, jo = n - 1 - bj, bi
+    elif rot == 2:
+        io, jo = n - 1 - bi, n - 1 - bj
+    else:
+        io, jo = bj, n - 1 - bi
+    return io * n + jo
+
+
+def _xbrz_ag(block, bi, bj, rot, col, m, n):
+    idx = _xbrz_out_index(bi, bj, rot)
+    block[idx] = _gradient_argb(col, block[idx], m, n)
+
+
+# The following five functions are Scaler4x<ColorGradientARGB>'s
+# blendLineShallow/Steep/SteepAndShallow/Diagonal/blendCorner (xbrz.cpp),
+# transcribed 1:1 (scale = 4 baked in).
+
+def _xbrz_blend_line_shallow(block, col, rot):
+    _xbrz_ag(block, 3, 0, rot, col, 1, 4)
+    _xbrz_ag(block, 2, 2, rot, col, 1, 4)
+    _xbrz_ag(block, 3, 1, rot, col, 3, 4)
+    _xbrz_ag(block, 2, 3, rot, col, 3, 4)
+    block[_xbrz_out_index(3, 2, rot)] = col
+    block[_xbrz_out_index(3, 3, rot)] = col
+
+
+def _xbrz_blend_line_steep(block, col, rot):
+    _xbrz_ag(block, 0, 3, rot, col, 1, 4)
+    _xbrz_ag(block, 2, 2, rot, col, 1, 4)
+    _xbrz_ag(block, 1, 3, rot, col, 3, 4)
+    _xbrz_ag(block, 3, 2, rot, col, 3, 4)
+    block[_xbrz_out_index(2, 3, rot)] = col
+    block[_xbrz_out_index(3, 3, rot)] = col
+
+
+def _xbrz_blend_line_steep_and_shallow(block, col, rot):
+    _xbrz_ag(block, 3, 1, rot, col, 3, 4)
+    _xbrz_ag(block, 1, 3, rot, col, 3, 4)
+    _xbrz_ag(block, 3, 0, rot, col, 1, 4)
+    _xbrz_ag(block, 0, 3, rot, col, 1, 4)
+    _xbrz_ag(block, 2, 2, rot, col, 1, 3)
+    block[_xbrz_out_index(3, 3, rot)] = col
+    block[_xbrz_out_index(3, 2, rot)] = col
+    block[_xbrz_out_index(2, 3, rot)] = col
+
+
+def _xbrz_blend_line_diagonal(block, col, rot):
+    _xbrz_ag(block, 3, 2, rot, col, 1, 2)
+    _xbrz_ag(block, 2, 3, rot, col, 1, 2)
+    block[_xbrz_out_index(3, 3, rot)] = col
+
+
+def _xbrz_blend_corner(block, col, rot):
+    _xbrz_ag(block, 3, 3, rot, col, 68, 100)
+    _xbrz_ag(block, 3, 2, rot, col, 9, 100)
+    _xbrz_ag(block, 2, 3, rot, col, 9, 100)
+
+
+def _xbrz_blend_pixel_rot(block, k3, blend_byte, rot):
+    """
+    Port of blendPixel<Scaler4x, ColorDistanceARGB, rotDeg>() (xbrz.cpp) for
+    one of the 4 rotations: decides (per this corner) whether to do a line
+    blend (shallow/steep/both/diagonal) or a rounded corner blend, and
+    applies it to `block` (a flat 16-entry row-major 4x4 output block).
+    `k3` is the unrotated Kernel_3x3 as a 9-tuple (a, b, c, d, e, f, g, h, i).
+    """
+    br = _xbrz_rotate_blend_info(blend_byte, rot)
+    bottom_r = (br >> 4) & 0x3
+    if bottom_r == _BLEND_NONE:
+        return
+
+    idx = _XBRZ_ROT_IDX[rot]
+    ra, rb, rc, rd, re, rf, rg, rh, ri = (k3[idx[0]], k3[idx[1]], k3[idx[2]], k3[idx[3]],
+                                           k3[idx[4]], k3[idx[5]], k3[idx[6]], k3[idx[7]], k3[idx[8]])
+    top_r = (br >> 2) & 0x3
+    bottom_l = (br >> 6) & 0x3
+    tol = _XBRZ_EQUAL_COLOR_TOLERANCE
+
+    do_line_blend = True
+    if bottom_r >= _BLEND_DOMINANT:
+        do_line_blend = True
+    elif top_r != _BLEND_NONE and _dist_argb(re, rg) >= tol:
+        do_line_blend = False
+    elif bottom_l != _BLEND_NONE and _dist_argb(re, rc) >= tol:
+        do_line_blend = False
+    elif (_dist_argb(re, ri) >= tol and _dist_argb(rg, rh) < tol and _dist_argb(rh, ri) < tol
+          and _dist_argb(ri, rf) < tol and _dist_argb(rf, rc) < tol):
+        do_line_blend = False
+
+    px = rf if _dist_argb(re, rf) <= _dist_argb(re, rh) else rh
+
+    if do_line_blend:
+        fg = _dist_argb(rf, rg)
+        hc = _dist_argb(rh, rc)
+        have_shallow = _XBRZ_STEEP_DIRECTION_THRESHOLD * fg <= hc and re != rg and rd != rg
+        have_steep = _XBRZ_STEEP_DIRECTION_THRESHOLD * hc <= fg and re != rc and rb != rc
+
+        if have_shallow:
+            if have_steep:
+                _xbrz_blend_line_steep_and_shallow(block, px, rot)
+            else:
+                _xbrz_blend_line_shallow(block, px, rot)
+        else:
+            if have_steep:
+                _xbrz_blend_line_steep(block, px, rot)
+            else:
+                _xbrz_blend_line_diagonal(block, px, rot)
+    else:
+        _xbrz_blend_corner(block, px, rot)
+
+
+def xbrz_scale_4x(rgba, src_w, src_h):
+    """
+    xBRZ-scale an RGBA buffer (as produced by colorize_rgba()) by 4x,
+    returning a new RGBA bytearray of size (src_w*4) * (src_h*4) * 4. See
+    the "STEP 4b" block comment above for what this ports and how.
+    """
+    w, h = src_w, src_h
+    total = w * h
+
+    # Unpack to packed 0xAARRGGBB ints. Sanitize fully-transparent source
+    # pixels to RGB=0 so no stray/garbage color can ever bleed into a blend.
+    src = [0] * total
+    for idx in range(total):
+        o = idx * 4
+        r = rgba[o]
+        g = rgba[o + 1]
+        b = rgba[o + 2]
+        a = rgba[o + 3]
+        if a == 0:
+            r = g = b = 0
+        src[idx] = (a << 24) | (r << 16) | (g << 8) | b
+
+    # Pass 1: classify the blend strength of every interior corner
+    # (equivalent to scaleImage()'s row-buffered preprocessing pass, just
+    # computed directly per corner instead of carried in a rolling buffer).
+    blend = bytearray(total)
+    for y in range(h):
+        ym1 = y - 1 if y > 0 else 0
+        yp1 = y + 1 if y + 1 < h else h - 1
+        yp2 = y + 2 if y + 2 < h else h - 1
+        row_m1 = ym1 * w
+        row_0 = y * w
+        row_p1 = yp1 * w
+        row_p2 = yp2 * w
+        blend_row = y * w
+        blend_row_p1 = (y + 1) * w if y + 1 < h else None
+
+        for x in range(w):
+            xm1 = x - 1 if x > 0 else 0
+            xp1 = x + 1 if x + 1 < w else w - 1
+            xp2 = x + 2 if x + 2 < w else w - 1
+
+            a_ = src[row_m1 + xm1]
+            b_ = src[row_m1 + x]
+            c_ = src[row_m1 + xp1]
+            d_ = src[row_m1 + xp2]
+            e_ = src[row_0 + xm1]
+            f_ = src[row_0 + x]
+            g_ = src[row_0 + xp1]
+            h_ = src[row_0 + xp2]
+            i_ = src[row_p1 + xm1]
+            j_ = src[row_p1 + x]
+            k_ = src[row_p1 + xp1]
+            l_ = src[row_p1 + xp2]
+            m_ = src[row_p2 + xm1]
+            n_ = src[row_p2 + x]
+            o_ = src[row_p2 + xp1]
+            p_ = src[row_p2 + xp2]
+
+            bf, bg, bj, bk = _xbrz_preprocess_corners(
+                a_, b_, c_, d_, e_, f_, g_, h_, i_, j_, k_, l_, m_, n_, o_, p_)
+
+            if bf:
+                blend[blend_row + x] |= (bf << 4)
+            if bg and x + 1 < w:
+                blend[blend_row + x + 1] |= (bg << 6)
+            if bj and blend_row_p1 is not None:
+                blend[blend_row_p1 + x] |= (bj << 2)
+            if bk and blend_row_p1 is not None and x + 1 < w:
+                blend[blend_row_p1 + x + 1] |= bk
+
+    # Pass 2: fill each pixel's 4x4 output block with its own color, then
+    # (if any corner needs it) blend all 4 rotations into that block.
+    dst_w, dst_h = w * 4, h * 4
+    dst = bytearray(dst_w * dst_h * 4)
+
+    for y in range(h):
+        ym1 = y - 1 if y > 0 else 0
+        yp1 = y + 1 if y + 1 < h else h - 1
+        row_m1 = ym1 * w
+        row_0 = y * w
+        row_p1 = yp1 * w
+        blend_row = y * w
+        dst_row_base = y * 4
+
+        for x in range(w):
+            center = src[row_0 + x]
+            bl = blend[blend_row + x]
+
+            if bl:
+                xm1 = x - 1 if x > 0 else 0
+                xp1 = x + 1 if x + 1 < w else w - 1
+                k3 = (src[row_m1 + xm1], src[row_m1 + x], src[row_m1 + xp1],
+                      src[row_0 + xm1], center, src[row_0 + xp1],
+                      src[row_p1 + xm1], src[row_p1 + x], src[row_p1 + xp1])
+                block = [center] * 16
+                _xbrz_blend_pixel_rot(block, k3, bl, 0)
+                _xbrz_blend_pixel_rot(block, k3, bl, 1)
+                _xbrz_blend_pixel_rot(block, k3, bl, 2)
+                _xbrz_blend_pixel_rot(block, k3, bl, 3)
+            else:
+                block = None
+
+            dst_col_base = x * 4
+            for li in range(4):
+                row_off = ((dst_row_base + li) * dst_w + dst_col_base) * 4
+                for lj in range(4):
+                    px = center if block is None else block[li * 4 + lj]
+                    o2 = row_off + lj * 4
+                    dst[o2] = (px >> 16) & 0xFF
+                    dst[o2 + 1] = (px >> 8) & 0xFF
+                    dst[o2 + 2] = px & 0xFF
+                    dst[o2 + 3] = (px >> 24) & 0xFF
+
+    return dst
+
+
+# ---------------------------------------------------------------------------
 # STEP 5a: write the engine asset (HDPX raw RGBA format)
 # ---------------------------------------------------------------------------
 
@@ -567,7 +993,9 @@ def process_sprite_tables(palette_cache, manifest_frames):
     """
     Extract PLANET_SHAPES and FACE_SHAPES (SPRITE_TABLES) from tyrian.shp:
     decode each populated frame's RLE pixels, key transparency to alpha,
-    Lanczos-upscale 4x (RGBA), and write one hdplanet_NN.dat / hdface_NN.dat
+    xBRZ-upscale 4x (RGBA; edge-directed pixel-art scaling, so the title
+    logo gets smooth curved edges instead of blocky/blurry ones -- see the
+    "STEP 4b" xBRZ port above), and write one hdplanet_NN.dat / hdface_NN.dat
     HDPX-with-alpha asset per frame. Appends a manifest entry per frame to
     manifest_frames (in place). Returns the number of frames written.
     """
@@ -594,8 +1022,7 @@ def process_sprite_tables(palette_cache, manifest_frames):
 
             indices, src_w, src_h = decode_sprite_rle(sprite)
             rgba = colorize_rgba(indices, palette)
-            upscaled = lanczos_upscale(
-                rgba, src_w, src_h, src_w * SCALE, src_h * SCALE, a=3, channels=4)
+            upscaled = xbrz_scale_4x(rgba, src_w, src_h)
 
             out_name = "%s_%02d.dat" % (prefix, frame_index)
             out_path = os.path.join(DATA_DIR, out_name)
