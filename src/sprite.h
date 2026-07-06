@@ -118,11 +118,17 @@ void JE_loadCompShapesB(Sprite2_array *, FILE *f);
 void free_sprite2s(Sprite2_array *);
 
 // HD in-flight compositor: stable small ids for the sprite sheets that have HD
-// assets. Only sheet8 (player shots) is wired this increment; the rest are future
-// work (hd_sheet_id_for returns -1 for them).
+// assets. STATIC-IDENTITY sheets (loaded once at startup) are wired here; the
+// per-level enemy sheets (enemySpriteSheets[]) are dynamic identity and remain
+// future work (hd_sheet_id_for returns -1 for them, keeping them pure 8-bit).
 enum
 {
-	HD_SHEET_SHEET8 = 0,  // player shots (spriteSheet8)
+	HD_SHEET_SHEET8 = 0,    // player shots (spriteSheet8)
+	HD_SHEET_SHEET9,        // player ship (spriteSheet9)
+	HD_SHEET_SHEET10,       // spriteSheet10
+	HD_SHEET_SHEET11,       // spriteSheet11
+	HD_SHEET_SHEET12,       // spriteSheet12
+	HD_SHEET_EXPLOSION,     // explosionSpriteSheet
 };
 
 // Maps a Sprite2 sheet's stable `.data` pointer to its HD sheet id, or -1 if the

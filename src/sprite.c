@@ -490,10 +490,18 @@ void blit_sprite_dark(SDL_Surface *surface, int x, int y, unsigned int table, un
 
 int hd_sheet_id_for(const Uint8 *data)
 {
-	// This increment wires only sheet8 (player shots); every other sheet is
-	// future work and must be left unaffected, so return -1 for them.
-	if (data != NULL && data == spriteSheet8.data)
-		return HD_SHEET_SHEET8;
+	if (data == NULL)
+		return -1;
+
+	// STATIC-IDENTITY sheets loaded once at startup. The per-level enemy sheets
+	// (enemySpriteSheets[]) are dynamic identity and deliberately NOT matched here,
+	// so they stay pure 8-bit (return -1) until their own increment.
+	if (data == spriteSheet8.data)          return HD_SHEET_SHEET8;
+	if (data == spriteSheet9.data)          return HD_SHEET_SHEET9;
+	if (data == spriteSheet10.data)         return HD_SHEET_SHEET10;
+	if (data == spriteSheet11.data)         return HD_SHEET_SHEET11;
+	if (data == spriteSheet12.data)         return HD_SHEET_SHEET12;
+	if (data == explosionSpriteSheet.data)  return HD_SHEET_EXPLOSION;
 	return -1;
 }
 
@@ -501,8 +509,13 @@ const char *hd_sheet_stem(int sheet_id)
 {
 	switch (sheet_id)
 	{
-	case HD_SHEET_SHEET8: return "sheet8";
-	default:              return NULL;
+	case HD_SHEET_SHEET8:     return "sheet8";
+	case HD_SHEET_SHEET9:     return "sheet9";
+	case HD_SHEET_SHEET10:    return "sheet10";
+	case HD_SHEET_SHEET11:    return "sheet11";
+	case HD_SHEET_SHEET12:    return "sheet12";
+	case HD_SHEET_EXPLOSION:  return "explosion";
+	default:                  return NULL;
 	}
 }
 

@@ -475,6 +475,28 @@ static void interp_draw(float alpha)
 // HD in-flight overlay emit
 // ---------------------------------------------------------------------------
 
+// Emits a single 12x14 HD tile: loads the frame, and (on an atlas hit) pushes one
+// queue entry at the playfield-relative position (dx-24, dy) with the given
+// recolor params. A miss is a per-tile fallback (the 8-bit blit already drew it) --
+// never suppress the base blit. `index` is the 1-based Sprite2 frame index; HD
+// frame files are 0-based (hdcomp_<sheet>_00.dat == index 1).
+static void flight_emit_tile(int sheet, unsigned int index, int dx, int dy,
+                             SDL_BlendMode bm, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
+{
+	if (index < 1)
+		return;
+	int frame = (int)index - 1;
+
+	SDL_Texture *tex = load_hd_sheet_frame(sheet, frame);
+	if (tex == NULL)
+		return;
+
+	// The HD asset (48x56) is a 4x upscale of the 12x14 Sprite2 cell. The -24
+	// matches JE_starCompositeShow's `src += 24` playfield origin.
+	SDL_Rect src = { 0, 0, 48, 56 };
+	hd_flight_set(tex, src, dx - 24, dy, 12, 14, bm, r, g, b, a);
+}
+
 void interp_flight_emit(float alpha)
 {
 	// Rebuild the video flight queue for this presented frame.
@@ -492,32 +514,84 @@ void interp_flight_emit(float alpha)
 	{
 		const Op *op = &curr_ops[i];
 
-		// This increment: player shots only (spriteSheet8), plain blit variant only.
-		if (op->type != OP_SPRITE2 || (InterpSprite2Kind)op->variant != INTERP_SPRITE2)
+		if (op->type != OP_SPRITE2)
 			continue;
 
+		// Sheet identity: sheet8..12 + explosion are wired. Enemy sheets and any
+		// unwired sheet return -1 and stay pure 8-bit (no HD overlay).
 		int sheet = hd_sheet_id_for(op->s2.data);
-		if (sheet != HD_SHEET_SHEET8)
+		if (sheet < 0)
 			continue;
 
-		// The Sprite2 frame index is 1-based (blit uses index-1); the HD frame files
-		// are 0-based (hdcomp_sheet8_00.dat == frame index 0).
-		if (op->index < 1)
-			continue;
-		int frame = (int)op->index - 1;
+		// Map the recorded blit variant to an SDL2 recolor per the parity table in
+		// doc/REMASTER_FLIGHT_COMPOSITOR.md §3. `_filter`/hue-band parity is deferred
+		// (SDL colormod can't rotate hue) -- those variants stay pure 8-bit for now.
+		SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
+		Uint8 r = 255, g = 255, b = 255, a = 255;
+		bool is_2x2 = false;
 
-		SDL_Texture *tex = load_hd_sheet_frame(sheet, frame);
-		if (tex == NULL)
-			continue;
+		switch ((InterpSprite2Kind)op->variant)
+		{
+		case INTERP_SPRITE2:
+		case INTERP_SPRITE2_CLIP:
+			// plain: opaque copy. (_clip differs only in screen-edge clipping, which
+			// SDL's RenderCopy handles against the destination rect.)
+			break;
+		case INTERP_SPRITE2_DARKEN:
+			// shadow: the 8-bit op halves destination brightness in the silhouette.
+			// Approximate as the frame's own alpha mask drawn black at ~50%.
+			r = g = b = 0;
+			a = 128;
+			break;
+		case INTERP_SPRITE2_BLEND:
+			// translucency/explosions: 8-bit averages sprite+dest brightness. Draw the
+			// sprite at ~50% over the destination.
+			a = 128;
+			break;
+		case INTERP_SPRITE2X2:
+			is_2x2 = true;
+			break;
+		case INTERP_SPRITE2X2_DARKEN:
+			r = g = b = 0;
+			a = 128;
+			is_2x2 = true;
+			break;
+		case INTERP_SPRITE2X2_BLEND:
+			a = 128;
+			is_2x2 = true;
+			break;
+		case INTERP_SPRITE2_FILTER:
+		case INTERP_SPRITE2_FILTER_CLIP:
+		case INTERP_SPRITE2X2_FILTER:
+		case INTERP_SPRITE2X2_FILTER_CLIP:
+		default:
+			continue; // hue-band parity deferred
+		}
 
 		int dx, dy;
 		interp_op_pos(op, back, &dx, &dy);
 
-		// The HD asset (48x56) is a 4x upscale of the 12x14 Sprite2 cell, so its
-		// logical footprint is 12x14 at the playfield-relative position (op.x - 24,
-		// op.y). The -24 matches JE_starCompositeShow's `src += 24` playfield origin.
-		SDL_Rect src = { 0, 0, 48, 56 };
-		hd_flight_set(tex, src, dx - 24, dy, 12, 14, SDL_BLENDMODE_BLEND, 255, 255, 255, 255);
+		if (is_2x2)
+		{
+			// 2x2 ship sprite composed exactly as blit_sprite2x2 (sprite.c): four
+			// 12x14 tiles at base indices i, i+1, i+19, i+20 and pixel offsets
+			// (0,0), (12,0), (0,14), (12,14). Each tile is its own HD frame; a missing
+			// tile falls back to the 8-bit blit already drawn there.
+			//
+			// NOTE: in the current codebase blit_sprite2x2* is not a recording choke
+			// point -- it decomposes into four base blit_sprite2* calls that each
+			// record their own INTERP_SPRITE2/_DARKEN/_BLEND op, so the ship reaches
+			// here as four base-kind ops (handled below) and this 2x2 branch is a
+			// correctness-preserving fallback should a 2x2 kind ever be recorded.
+			flight_emit_tile(sheet, op->index,      dx,      dy,      bm, r, g, b, a);
+			flight_emit_tile(sheet, op->index + 1,  dx + 12, dy,      bm, r, g, b, a);
+			flight_emit_tile(sheet, op->index + 19, dx,      dy + 14, bm, r, g, b, a);
+			flight_emit_tile(sheet, op->index + 20, dx + 12, dy + 14, bm, r, g, b, a);
+		}
+		else
+		{
+			flight_emit_tile(sheet, op->index, dx, dy, bm, r, g, b, a);
+		}
 	}
 }
 
