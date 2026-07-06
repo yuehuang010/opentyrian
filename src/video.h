@@ -88,6 +88,27 @@ void hd_flight_begin(void);                                // reset the flight q
 void hd_flight_set(SDL_Texture *tex, SDL_Rect src, int lx, int ly, int lw, int lh, SDL_BlendMode blendmode, Uint8 r, Uint8 g, Uint8 b, Uint8 a); // push one entry (bounds-checked)
 void hd_flight_clear(void);                                // reset the flight queue (call after presenting)
 
+// HD font glyph compositor (Track C). Font glyphs are runtime-recolored exactly
+// like flight sprites: each classic draw passes a hue/colorbank band + a signed
+// brightness "value" into blit_sprite_hv / _hv_unsafe / _hv_blend / _dark
+// (src/sprite.c). hd_font_emit() synthesizes (and LRU-caches) one truecolor RGBA
+// texture reproducing that per-pixel index math from the grayscale brightness-map
+// asset (hdfont_<stem>_NN.dat) against the live palette, queues it at the glyph's
+// absolute VGA position, and returns true so the caller SKIPS its classic blit.
+// Returns false -- so the caller MUST fall back to the classic glyph -- whenever
+// HD text can't be produced or safely composited (hd_mode off, in-flight, a
+// non-presented surface, a missing/oversized asset, or the queue/cache full).
+// This is the guarded-fallback safety net: any failure -> classic text renders.
+typedef enum
+{
+	HD_FONT_MODE_HV = 0,    // opaque recolor (blit_sprite_hv / blit_sprite_hv_unsafe)
+	HD_FONT_MODE_HV_BLEND,  // ~50% recolor over destination (blit_sprite_hv_blend)
+	HD_FONT_MODE_DARK,      // ~50% black shadow (blit_sprite_dark, black == false)
+	HD_FONT_MODE_BLACK,     // solid black glyph (blit_sprite_dark, black == true)
+} HDFontMode;
+
+bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value);
+
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;
 extern SDL_Surface *game_screen;
 extern SDL_Surface *VGAScreen2;

@@ -20,6 +20,7 @@
 
 #include "fonthand.h"
 #include "sprite.h"
+#include "video.h"
 
 /**
  * \file font.c
@@ -172,7 +173,8 @@ void drawFontHv(SDL_Surface *surface, int x, int y, const char *text, Font font,
 		default:
 			if (sprite_id != -1 && sprite_exists(font, sprite_id))
 			{
-				blit_sprite_hv(surface, x, y, font, sprite_id, hue, value);
+				if (!hd_font_emit(surface, font, sprite_id, x, y, HD_FONT_MODE_HV, hue, value))
+					blit_sprite_hv(surface, x, y, font, sprite_id, hue, value);
 
 				x += sprite(font, sprite_id)->width + 1;
 			}
@@ -232,7 +234,8 @@ void drawFontHvBlend(SDL_Surface *surface, int x, int y, const char *text, Font 
 		default:
 			if (sprite_id != -1 && sprite_exists(font, sprite_id))
 			{
-				blit_sprite_hv_blend(surface, x, y, font, sprite_id, hue, value);
+				if (!hd_font_emit(surface, font, sprite_id, x, y, HD_FONT_MODE_HV_BLEND, hue, value))
+					blit_sprite_hv_blend(surface, x, y, font, sprite_id, hue, value);
 
 				x += sprite(font, sprite_id)->width + 1;
 			}
@@ -292,7 +295,8 @@ void drawFontDark(SDL_Surface *surface, int x, int y, const char *text, Font fon
 		default:
 			if (sprite_id != -1 && sprite_exists(font, sprite_id))
 			{
-				blit_sprite_dark(surface, x, y, font, sprite_id, black);
+				if (!hd_font_emit(surface, font, sprite_id, x, y, black ? HD_FONT_MODE_BLACK : HD_FONT_MODE_DARK, 0, 0))
+					blit_sprite_dark(surface, x, y, font, sprite_id, black);
 
 				x += sprite(font, sprite_id)->width + 1;
 			}

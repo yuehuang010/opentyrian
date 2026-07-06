@@ -84,8 +84,10 @@ void JE_dString(SDL_Surface * screen, int x, int y, const char *s, unsigned int 
 		default:
 			if (sprite_id != -1)
 			{
-				blit_sprite_dark(screen, x + 2, y + 2, font, sprite_id, false);
-				blit_sprite_hv_unsafe(screen, x, y, font, sprite_id, 0xf, defaultBrightness + bright);
+				if (!hd_font_emit(screen, font, sprite_id, x + 2, y + 2, HD_FONT_MODE_DARK, 0, 0))
+					blit_sprite_dark(screen, x + 2, y + 2, font, sprite_id, false);
+				if (!hd_font_emit(screen, font, sprite_id, x, y, HD_FONT_MODE_HV, 0xf, (Sint8)(defaultBrightness + bright)))
+					blit_sprite_hv_unsafe(screen, x, y, font, sprite_id, 0xf, defaultBrightness + bright);
 
 				x += sprite(font, sprite_id)->width + 1;
 			}
@@ -162,9 +164,15 @@ void JE_outText(SDL_Surface * screen, int x, int y, const char *s, unsigned int 
 			if (sprite_id != -1 && sprite_exists(TINY_FONT, sprite_id))
 			{
 				if (brightness >= 0)
-					blit_sprite_hv_unsafe(screen, x, y, TINY_FONT, sprite_id, colorbank, brightness + bright);
+				{
+					if (!hd_font_emit(screen, TINY_FONT, sprite_id, x, y, HD_FONT_MODE_HV, colorbank, (Sint8)(brightness + bright)))
+						blit_sprite_hv_unsafe(screen, x, y, TINY_FONT, sprite_id, colorbank, brightness + bright);
+				}
 				else
-					blit_sprite_dark(screen, x, y, TINY_FONT, sprite_id, true);
+				{
+					if (!hd_font_emit(screen, TINY_FONT, sprite_id, x, y, HD_FONT_MODE_BLACK, 0, 0))
+						blit_sprite_dark(screen, x, y, TINY_FONT, sprite_id, true);
+				}
 
 				x += sprite(TINY_FONT, sprite_id)->width + 1;
 			}
@@ -185,7 +193,8 @@ void JE_outTextModify(SDL_Surface * screen, int x, int y, const char *s, unsigne
 		}
 		else if (sprite_id != -1)
 		{
-			blit_sprite_hv_blend(screen, x, y, font, sprite_id, filter, brightness);
+			if (!hd_font_emit(screen, font, sprite_id, x, y, HD_FONT_MODE_HV_BLEND, filter, (Sint8)brightness))
+				blit_sprite_hv_blend(screen, x, y, font, sprite_id, filter, brightness);
 
 			x += sprite(font, sprite_id)->width + 1;
 		}
@@ -214,8 +223,12 @@ void JE_outTextAdjust(SDL_Surface * screen, int x, int y, const char *s, unsigne
 			if (sprite_id != -1 && sprite_exists(TINY_FONT, sprite_id))
 			{
 				if (shadow)
-					blit_sprite_dark(screen, x + 2, y + 2, font, sprite_id, false);
-				blit_sprite_hv(screen, x, y, font, sprite_id, filter, brightness + bright);
+				{
+					if (!hd_font_emit(screen, font, sprite_id, x + 2, y + 2, HD_FONT_MODE_DARK, 0, 0))
+						blit_sprite_dark(screen, x + 2, y + 2, font, sprite_id, false);
+				}
+				if (!hd_font_emit(screen, font, sprite_id, x, y, HD_FONT_MODE_HV, filter, (Sint8)(brightness + bright)))
+					blit_sprite_hv(screen, x, y, font, sprite_id, filter, brightness + bright);
 
 				x += sprite(font, sprite_id)->width + 1;
 			}
@@ -245,8 +258,10 @@ void JE_outTextAndDarken(SDL_Surface * screen, int x, int y, const char *s, unsi
 		default:
 			if (sprite_id != -1 && sprite_exists(TINY_FONT, sprite_id))
 			{
-				blit_sprite_dark(screen, x + 1, y + 1, font, sprite_id, false);
-				blit_sprite_hv_unsafe(screen, x, y, font, sprite_id, colorbank, brightness + bright);
+				if (!hd_font_emit(screen, font, sprite_id, x + 1, y + 1, HD_FONT_MODE_DARK, 0, 0))
+					blit_sprite_dark(screen, x + 1, y + 1, font, sprite_id, false);
+				if (!hd_font_emit(screen, font, sprite_id, x, y, HD_FONT_MODE_HV, colorbank, (Sint8)(brightness + bright)))
+					blit_sprite_hv_unsafe(screen, x, y, font, sprite_id, colorbank, brightness + bright);
 
 				x += sprite(font, sprite_id)->width + 1;
 			}

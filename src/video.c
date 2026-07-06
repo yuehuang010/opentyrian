@@ -1211,6 +1211,353 @@ void hd_flight_clear(void)
 	hd_flight_queue_count = 0;
 }
 
+// ---- HD font glyph synthesis (Track C: HD text) ----
+//
+// Font glyphs are runtime-recolored the same way flight sprites are: each classic
+// draw call (src/fonthand.c, src/font.c) passes a hue/colorbank band plus a signed
+// brightness "value" into one of blit_sprite_hv / _hv_unsafe / _hv_blend / _dark
+// (src/sprite.c), which compute the destination palette index per pixel from the
+// glyph byte's low nibble (a 0..15 brightness level). We reproduce that math
+// against the live palette (colors[]) starting from a grayscale brightness map
+// (hdfont_<stem>_NN.dat: R = brightness*17, A = coverage; xBRZ 4x), synthesizing
+// one RGBA texture per distinct (table, index, hue, value, mode) and caching it
+// LRU. Any failure returns NULL, so the caller keeps the classic glyph.
+
+#define HD_FONT_TABLE_COUNT 3          // FONT_SHAPES, SMALL_FONT_SHAPES, TINY_FONT
+#define HD_FONT_GLYPH_MAX   128        // TINY_FONT has 127 glyphs
+
+// Asset stems keyed by sprite-table index (FONT_SHAPES=0, SMALL_FONT_SHAPES=1,
+// TINY_FONT=2); confirmed against tyrian21/hd_font_manifest.json prefixes.
+static const char *const hd_font_stems[HD_FONT_TABLE_COUNT] = { "font", "small", "tiny" };
+
+typedef struct { Uint8 *pixels; int w, h; } HDFontBrightness;
+static HDFontBrightness hd_font_brightness[HD_FONT_TABLE_COUNT][HD_FONT_GLYPH_MAX];
+static bool hd_font_brightness_load_failed[HD_FONT_TABLE_COUNT][HD_FONT_GLYPH_MAX];
+
+// Lazily loads and caches one glyph's raw brightness-map pixels ("hdfont_<stem>_NN.dat").
+// Fail-once, never-retry (mirrors load_hd_sheet_frame_brightness).
+static const HDFontBrightness *load_hd_font_brightness(unsigned int table, unsigned int index)
+{
+	if (table >= HD_FONT_TABLE_COUNT || index >= HD_FONT_GLYPH_MAX)
+		return NULL;
+
+	HDFontBrightness *slot = &hd_font_brightness[table][index];
+	if (slot->pixels != NULL)
+		return slot;
+	if (hd_font_brightness_load_failed[table][index])
+		return NULL;
+
+	char name[32];
+	snprintf(name, sizeof name, "hdfont_%s_%02u.dat", hd_font_stems[table], index);
+
+	bool ok = false;
+	Uint8 *pixels = NULL;
+	int gw = 0, gh = 0;
+
+	FILE *f = dir_fopen(data_dir(), name, "rb");
+	if (f != NULL)
+	{
+		Uint8 magic[4];
+		Uint8 dims[8];
+
+		if (fread(magic, 1, 4, f) == 4 && memcmp(magic, "HDPX", 4) == 0 &&
+		    fread(dims, 1, 8, f) == 8)
+		{
+			Uint32 width, height;
+			memcpy(&width, &dims[0], 4);
+			memcpy(&height, &dims[4], 4);
+			width = SDL_SwapLE32(width);
+			height = SDL_SwapLE32(height);
+
+			if (width > 0 && height > 0 && width <= 1024 && height <= 1024)
+			{
+				size_t pixel_bytes = (size_t)width * height * 4;
+				pixels = malloc(pixel_bytes);
+				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
+				{
+					gw = (int)width;
+					gh = (int)height;
+					ok = true;
+				}
+			}
+		}
+
+		fclose(f);
+	}
+
+	if (!ok)
+	{
+		free(pixels);
+		fprintf(stderr, "warning: HD font glyph %s unavailable; falling back\n", name);
+		hd_font_brightness_load_failed[table][index] = true;
+		return NULL;
+	}
+
+	slot->pixels = pixels;
+	slot->w = gw;
+	slot->h = gh;
+	return slot;
+}
+
+// Synthesized glyph textures, keyed (table, index, hue, value, mode). LRU-capped.
+// As with the filtered flight cache, the cache MUST be >= the font queue: a glyph
+// texture is handed to the queue during draw-emit and not drawn until the next
+// scale_and_flip(), so evicting one synthesized earlier in the SAME frame would
+// dangle a queue pointer. Sizing cache == queue guarantees no intra-frame eviction
+// (distinct glyphs emitted this frame <= queue capacity).
+#define HD_FONT_QUEUE_COUNT 4096
+#define HD_FONT_CACHE_COUNT HD_FONT_QUEUE_COUNT
+
+typedef struct
+{
+	bool used;
+	unsigned int table, index;
+	Uint8 hue;
+	Sint8 value;
+	int mode;
+	SDL_Texture *tex;
+	int w, h;
+	Uint32 last_touch;
+} HDFontCacheEntry;
+static HDFontCacheEntry hd_font_cache[HD_FONT_CACHE_COUNT];
+static Uint32 hd_font_cache_clock = 0;
+
+// Reproduce blit_sprite_hv's clamp/wrap of (nibble + value) into a 0..15 shade:
+// underflow (as Uint8, >= 0x1f) wraps to 0, mild overflow (0x10..0x1e) pins to 15.
+// (blit_sprite_hv_unsafe has no clamp, but for every real font draw the nibble+value
+// range never overflows/underflows, so this is byte-identical to the unsafe path too.)
+static Uint8 hd_font_hv_shade(int nibble, Sint8 value)
+{
+	Uint8 temp = (Uint8)((nibble & 0x0f) + value);
+	if (temp > 0xf)
+		temp = (temp >= 0x1f) ? 0x0 : 0xf;
+	return temp;
+}
+
+static SDL_Texture *synth_hd_font_glyph(unsigned int table, unsigned int index, Uint8 hue, Sint8 value, int mode, int *out_w, int *out_h)
+{
+	const HDFontBrightness *b = load_hd_font_brightness(table, index);
+	if (b == NULL)
+		return NULL;
+
+	// Precompute the 16 recolored shades for the recolor (HV / HV_BLEND) modes.
+	SDL_Color shade[16];
+	if (mode == HD_FONT_MODE_HV || mode == HD_FONT_MODE_HV_BLEND)
+	{
+		Uint8 hue_hi = (Uint8)(hue << 4);
+		for (int k = 0; k < 16; ++k)
+			shade[k] = colors[(Uint8)(hue_hi | hd_font_hv_shade(k, value))];
+	}
+
+	size_t count = (size_t)b->w * b->h;
+	Uint8 *rgba = malloc(count * 4);
+	if (rgba == NULL)
+		return NULL;
+
+	for (size_t p = 0; p < count; ++p)
+	{
+		Uint8 cov = b->pixels[p * 4 + 3];  // coverage / anti-aliased alpha
+		if (cov == 0)
+		{
+			memset(&rgba[p * 4], 0, 4);
+			continue;
+		}
+
+		Uint8 rr, gg, bb, aa;
+		if (mode == HD_FONT_MODE_DARK)
+		{
+			rr = gg = bb = 0;
+			aa = (Uint8)(cov / 2);   // ~50% black shadow (blit_sprite_dark darken)
+		}
+		else if (mode == HD_FONT_MODE_BLACK)
+		{
+			rr = gg = bb = 0;
+			aa = cov;                // solid black glyph (blit_sprite_dark black)
+		}
+		else
+		{
+			// Smooth brightness from R; interpolate between the two nearest shades.
+			// At an integer-brightness pixel (R = brightness*17) pos is exact, t == 0,
+			// and the result equals colors[(hue<<4) | clamp(brightness+value)] -- i.e.
+			// parity-exact with the 8-bit blit.
+			Uint8 rchan = b->pixels[p * 4 + 0];  // R = G = B = brightness
+			float pos = (rchan / 255.0f) * 15.0f;
+			int lo = (int)pos;
+			if (lo > 14)
+				lo = 14;
+			int hi = lo + 1;
+			float t = pos - (float)lo;
+			rr = (Uint8)lrintf(shade[lo].r + (shade[hi].r - shade[lo].r) * t);
+			gg = (Uint8)lrintf(shade[lo].g + (shade[hi].g - shade[lo].g) * t);
+			bb = (Uint8)lrintf(shade[lo].b + (shade[hi].b - shade[lo].b) * t);
+			aa = (mode == HD_FONT_MODE_HV_BLEND) ? (Uint8)(cov / 2) : cov;
+		}
+
+		rgba[p * 4 + 0] = rr;
+		rgba[p * 4 + 1] = gg;
+		rgba[p * 4 + 2] = bb;
+		rgba[p * 4 + 3] = aa;
+	}
+
+	SDL_Texture *tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+		SDL_TEXTUREACCESS_STATIC, b->w, b->h);
+	if (tex == NULL)
+	{
+		free(rgba);
+		return NULL;
+	}
+	if (SDL_UpdateTexture(tex, NULL, rgba, b->w * 4) != 0)
+	{
+		SDL_DestroyTexture(tex);
+		free(rgba);
+		return NULL;
+	}
+	SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+	free(rgba);
+
+	*out_w = b->w;
+	*out_h = b->h;
+	return tex;
+}
+
+static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, Uint8 hue, Sint8 value, int mode, int *out_w, int *out_h)
+{
+	// DARK / BLACK ignore hue+value; normalize the key so they dedupe.
+	if (mode == HD_FONT_MODE_DARK || mode == HD_FONT_MODE_BLACK)
+	{
+		hue = 0;
+		value = 0;
+	}
+
+	++hd_font_cache_clock;
+
+	for (int i = 0; i < HD_FONT_CACHE_COUNT; ++i)
+	{
+		HDFontCacheEntry *e = &hd_font_cache[i];
+		if (e->used && e->table == table && e->index == index &&
+		    e->hue == hue && e->value == value && e->mode == mode)
+		{
+			e->last_touch = hd_font_cache_clock;
+			*out_w = e->w;
+			*out_h = e->h;
+			return e->tex;
+		}
+	}
+
+	int gw = 0, gh = 0;
+	SDL_Texture *tex = synth_hd_font_glyph(table, index, hue, value, mode, &gw, &gh);
+	if (tex == NULL)
+		return NULL;
+
+	int slot = -1;
+	for (int i = 0; i < HD_FONT_CACHE_COUNT; ++i)
+	{
+		if (!hd_font_cache[i].used)
+		{
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0)
+	{
+		Uint32 oldest = 0xffffffffu;
+		for (int i = 0; i < HD_FONT_CACHE_COUNT; ++i)
+		{
+			if (hd_font_cache[i].last_touch < oldest)
+			{
+				oldest = hd_font_cache[i].last_touch;
+				slot = i;
+			}
+		}
+		SDL_DestroyTexture(hd_font_cache[slot].tex);
+	}
+
+	hd_font_cache[slot].used = true;
+	hd_font_cache[slot].table = table;
+	hd_font_cache[slot].index = index;
+	hd_font_cache[slot].hue = hue;
+	hd_font_cache[slot].value = value;
+	hd_font_cache[slot].mode = mode;
+	hd_font_cache[slot].tex = tex;
+	hd_font_cache[slot].w = gw;
+	hd_font_cache[slot].h = gh;
+	hd_font_cache[slot].last_touch = hd_font_cache_clock;
+
+	*out_w = gw;
+	*out_h = gh;
+	return tex;
+}
+
+// Per-present queue of HD glyphs, in absolute logical VGA-space rects. Rebuilt
+// every present by the font choke points (immediate mode); drained (as the topmost
+// layer) by scale_and_flip() in all three present branches.
+typedef struct { SDL_Texture *tex; int lx, ly, lw, lh; } HDFontQueueEntry;
+static HDFontQueueEntry hd_font_queue[HD_FONT_QUEUE_COUNT];
+static int hd_font_queue_count = 0;
+static bool hd_font_queue_overflow_warned = false;
+
+bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value)
+{
+	if (!hd_mode)
+		return false;
+
+	// Only claim glyphs drawn directly to the surface that scale_and_flip presents
+	// verbatim in full-screen VGA coordinates (VGAScreenSeg), and only outside the
+	// in-flight loop. Text drawn to a background buffer (VGAScreen2) or the playfield
+	// buffer (game_screen) reaches the screen via a memcpy / a shifted+clipped
+	// composite that a full-screen HD quad can't reproduce, and in-flight overlay
+	// text on VGAScreenSeg is persistent (drawn once, not re-emitted per frame) so an
+	// immediate-mode HD queue would drop it after one frame. All those keep the
+	// classic path (correct, and never vanishing).
+	if (screen != VGAScreenSeg || hd_flight_active)
+		return false;
+
+	if (table >= HD_FONT_TABLE_COUNT || index >= HD_FONT_GLYPH_MAX)
+		return false;
+
+	int gw = 0, gh = 0;
+	SDL_Texture *tex = load_hd_font_glyph(table, index, hue, value, (int)mode, &gw, &gh);
+	if (tex == NULL)
+		return false;
+
+	if (hd_font_queue_count >= HD_FONT_QUEUE_COUNT)
+	{
+		if (!hd_font_queue_overflow_warned)
+		{
+			fprintf(stderr, "warning: HD font queue full; falling back to classic glyphs\n");
+			hd_font_queue_overflow_warned = true;
+		}
+		return false;
+	}
+
+	HDFontQueueEntry *e = &hd_font_queue[hd_font_queue_count++];
+	e->tex = tex;
+	e->lx = lx;
+	e->ly = ly;
+	e->lw = gw / 4;  // HD assets are xBRZ 4x; logical footprint == classic glyph size
+	e->lh = gh / 4;
+	return true;
+}
+
+// Draws (and drains) the HD font queue as the topmost UI layer, mapping each
+// glyph's absolute logical VGA rect into the window exactly as the other queues do.
+static void draw_hd_font_queue(const SDL_Rect *dst_rect)
+{
+	for (int i = 0; i < hd_font_queue_count; ++i)
+	{
+		HDFontQueueEntry *e = &hd_font_queue[i];
+
+		SDL_Rect window_rect;
+		window_rect.x = dst_rect->x + e->lx * dst_rect->w / vga_width;
+		window_rect.y = dst_rect->y + e->ly * dst_rect->h / vga_height;
+		window_rect.w = e->lw * dst_rect->w / vga_width;
+		window_rect.h = e->lh * dst_rect->h / vga_height;
+
+		SDL_RenderCopy(main_window_renderer, e->tex, NULL, &window_rect);
+	}
+	hd_font_queue_count = 0;
+}
+
 static void deinit_crt_overlay(void)
 {
 	if (crt_scanline_tex != NULL)
@@ -1443,6 +1790,9 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_RenderCopy(main_window_renderer, entry->tex, &entry->src, &window_rect);
 		}
 
+		// HD text on top of the flight sprites (topmost UI layer).
+		draw_hd_font_queue(&dst_rect);
+
 		apply_crt_overlay(&dst_rect);
 		SDL_RenderPresent(main_window_renderer);
 		hd_flight_clear();
@@ -1504,6 +1854,9 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_DestroyTexture(overlay);
 		}
 
+		// HD text on top of the indexed menu overlay (topmost UI layer).
+		draw_hd_font_queue(&dst_rect);
+
 		apply_crt_overlay(&dst_rect);
 
 		SDL_RenderPresent(main_window_renderer);
@@ -1520,6 +1873,10 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	// Do software scaling and blit the output texture to the window.
 	SDL_Rect dst_rect;
 	classic_scale_base(src_surface, &dst_rect);
+	// HD text on top of the classic base (topmost UI layer). Drains the queue even
+	// when empty (HD mode off / nothing emitted), so it can never leak into a later
+	// frame; with an empty queue this draws nothing and stays byte-identical.
+	draw_hd_font_queue(&dst_rect);
 	apply_crt_overlay(&dst_rect);
 	SDL_RenderPresent(main_window_renderer);
 
