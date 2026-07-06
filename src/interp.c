@@ -526,6 +526,13 @@ void interp_flight_emit(float alpha)
 	if (!hd_mode || curr_count == 0)
 		return;
 
+	// Mirror (1) / light (2) levels transform the whole 8-bit composite in
+	// JE_starCompositeShow in ways window-space HD quads can't follow. Emit no HD
+	// overlay these frames: the scaled 8-bit base already carries the transformed
+	// sprites, so they render correctly (just not upscaled) instead of misplaced.
+	if (starShowVGASpecialCode != 0)
+		return;
+
 	if (have_prev && !hash_built)
 		hash_build_prev();
 
