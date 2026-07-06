@@ -39,6 +39,8 @@ extern const char *const scaling_mode_names[ScalingMode_MAX];
 extern int fullscreen_display; // -1 means windowed
 extern ScalingMode scaling_mode;
 
+extern int window_width, window_height; // last free (windowed) window size chosen by the user; 0 means unset
+
 extern bool hd_mode;             // master HD-remaster toggle
 extern bool hd_backdrop_active;  // set while an HD backdrop should composite
 extern int  hd_backdrop_id;      // which PIC (1..13) is the active HD backdrop

@@ -40,6 +40,8 @@ const char *const scaling_mode_names[ScalingMode_MAX] = {
 
 int fullscreen_display;
 ScalingMode scaling_mode = SCALE_INTEGER;
+
+int window_width = 0, window_height = 0; // saved free (windowed) window size; 0 = unset
 static SDL_Rect last_output_rect = { 0, 0, vga_width, vga_height };
 
 bool hd_mode = true;
@@ -125,6 +127,16 @@ void init_video(void)
 	init_texture();
 	init_scaler(scaler);
 
+	// init_scaler() just snapped the window to the scaler's fixed size; if the
+	// user had previously resized the window and we saved that size, restore
+	// it now instead (free scaling, Phase 5).
+	if (fullscreen_display == -1 &&
+	    window_width >= scalers[scaler].width && window_height >= scalers[scaler].height)
+	{
+		SDL_SetWindowSize(main_window, window_width, window_height);
+		window_center_in_display(window_get_display_index());
+	}
+
 	SDL_ShowWindow(main_window);
 
 	SDL_SetRenderDrawColor(main_window_renderer, 0, 0, 0, 255);
@@ -134,6 +146,14 @@ void init_video(void)
 
 void deinit_video(void)
 {
+	// Capture the final free-form window size in case the last resize wasn't
+	// otherwise observed (e.g. the window closed mid-drag), so it can be
+	// persisted by saveConfiguration(), which runs after this.
+	if (fullscreen_display == -1)
+	{
+		SDL_GetWindowSize(main_window, &window_width, &window_height);
+	}
+
 	deinit_texture();
 	deinit_renderer();
 
@@ -231,7 +251,18 @@ void reinit_fullscreen(int new_display)
 	}
 
 	SDL_SetWindowFullscreen(main_window, SDL_FALSE);
-	SDL_SetWindowSize(main_window, scalers[scaler].width, scalers[scaler].height);
+
+	// When returning to windowed mode, restore the user's last free-form
+	// window size (Phase 5) rather than snapping back to the scaler's fixed
+	// size; fall back to the scaler size if no valid saved size exists.
+	int w = scalers[scaler].width;
+	int h = scalers[scaler].height;
+	if (fullscreen_display == -1 && window_width >= w && window_height >= h)
+	{
+		w = window_width;
+		h = window_height;
+	}
+	SDL_SetWindowSize(main_window, w, h);
 
 	if (fullscreen_display == -1)
 	{
@@ -267,6 +298,16 @@ void video_on_win_resize(void)
 		h = h < scaler_h ? scaler_h : h;
 
 		SDL_SetWindowSize(main_window, w, h);
+	}
+
+	// Persist the free-form size (Phase 5) so it can be restored on the next
+	// launch or when returning from fullscreen. Fullscreen-desktop sizing
+	// reflects the display resolution, not a size the user actually chose, so
+	// don't record it as the "free" size.
+	if (fullscreen_display == -1)
+	{
+		window_width = w;
+		window_height = h;
 	}
 }
 

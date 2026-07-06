@@ -200,6 +200,11 @@ void handleSdlEvents(void)
 					break;
 
 				case SDL_WINDOWEVENT_RESIZED:
+				case SDL_WINDOWEVENT_SIZE_CHANGED:
+					// RESIZED fires only for user-driven resizes; SIZE_CHANGED
+					// also covers programmatic/fullscreen/DPI changes. Route
+					// both through the same handler, which itself ignores
+					// fullscreen-desktop sizes when persisting.
 					video_on_win_resize();
 					break;
 				}

@@ -260,6 +260,8 @@ bool load_opentyrian_config(void)
 	fullscreen_display = -1;
 	hd_mode = true;
 	crt_mode = false;
+	window_width = 0;
+	window_height = 0;
 	set_scaler_by_name("Scale2x");
 	memcpy(keySettings, defaultKeySettings, sizeof(keySettings));
 	
@@ -282,6 +284,13 @@ bool load_opentyrian_config(void)
 	if (section != NULL)
 	{
 		config_get_int_option(section, "fullscreen", &fullscreen_display);
+
+		config_get_int_option(section, "window_width", &window_width);
+		config_get_int_option(section, "window_height", &window_height);
+		if (window_width < 0)
+			window_width = 0;
+		if (window_height < 0)
+			window_height = 0;
 
 		config_get_bool_option(section, "hd", &hd_mode);
 
@@ -327,6 +336,9 @@ bool save_opentyrian_config(void)
 		exit(EXIT_FAILURE);  // out of memory
 	
 	config_set_int_option(section, "fullscreen", fullscreen_display);
+
+	config_set_int_option(section, "window_width", window_width);
+	config_set_int_option(section, "window_height", window_height);
 
 	config_set_bool_option(section, "hd", hd_mode, FALSE_TRUE);
 
