@@ -874,24 +874,12 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		SDL_SetTextureColorMod(hd_tex, f, f, f);
 		SDL_RenderCopy(main_window_renderer, hd_tex, NULL, &dst_rect);
 
-		// Indexed overlay (logo/version/menu) on top, with palette index 0 keyed transparent.
-		// src_surface is the 8-bit VGAScreen. Colour it with the *full* target palette
-		// (not the live, mid-fade one) so the overlay dims only via the colour-mod `f`
-		// below — dimming it by both the fading palette and `f` would fade it quadratically,
-		// lagging behind the linearly-fading backdrop.
-		SDL_SetPaletteColors(src_surface->format->palette, colors, 0, 256);
-		SDL_SetColorKey(src_surface, SDL_TRUE, 0);
-		SDL_Texture *overlay = SDL_CreateTextureFromSurface(main_window_renderer, src_surface);
-		SDL_SetColorKey(src_surface, SDL_FALSE, 0);
-		if (overlay != NULL)
-		{
-			SDL_SetTextureColorMod(overlay, f, f, f);
-			SDL_RenderCopy(main_window_renderer, overlay, NULL, &dst_rect);
-			SDL_DestroyTexture(overlay);
-		}
-
-		// HD sprite overlays (e.g. title logo), on top of the indexed overlay, sharing
-		// the same fade factor `f` so nothing fades out of lockstep with the backdrop.
+		// HD sprite overlays (e.g. title logo) go *between* the backdrop and the indexed
+		// overlay: the original z-order draws the logo first, then menu text, then the
+		// mouse cursor on top. The indexed overlay carries the menu text and the baked-in
+		// mouse cursor (index 0 keyed transparent everywhere the logo was suppressed), so
+		// drawing the HD sprite before it lets those composite on top -- otherwise the HD
+		// logo paints over the menu items and hides the cursor. Shares the fade factor `f`.
 		for (int i = 0; i < hd_sprite_queue_count; ++i)
 		{
 			HDSpriteQueueEntry *entry = &hd_sprite_queue[i];
@@ -906,6 +894,22 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_RenderCopy(main_window_renderer, entry->tex, NULL, &window_rect);
 		}
 		hd_sprite_queue_count = 0;
+
+		// Indexed overlay (menu text / version / mouse) on top, with palette index 0 keyed
+		// transparent. src_surface is the 8-bit VGAScreen. Colour it with the *full* target
+		// palette (not the live, mid-fade one) so the overlay dims only via the colour-mod
+		// `f` below — dimming it by both the fading palette and `f` would fade it
+		// quadratically, lagging behind the linearly-fading backdrop.
+		SDL_SetPaletteColors(src_surface->format->palette, colors, 0, 256);
+		SDL_SetColorKey(src_surface, SDL_TRUE, 0);
+		SDL_Texture *overlay = SDL_CreateTextureFromSurface(main_window_renderer, src_surface);
+		SDL_SetColorKey(src_surface, SDL_FALSE, 0);
+		if (overlay != NULL)
+		{
+			SDL_SetTextureColorMod(overlay, f, f, f);
+			SDL_RenderCopy(main_window_renderer, overlay, NULL, &dst_rect);
+			SDL_DestroyTexture(overlay);
+		}
 
 		apply_crt_overlay(&dst_rect);
 

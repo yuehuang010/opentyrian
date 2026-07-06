@@ -89,10 +89,17 @@ SHP_NUM = 12
 PLANET_SHAPES = 3
 FACE_SHAPES = 4
 
-# Sprite tables to extract as HD overlays: (table index, output prefix).
+# Sprite tables to extract as HD overlays: (table index, output prefix, palette).
+# The palette is the one *active on screen where the sprite is drawn*, not palette
+# 0: the engine blits these against whatever palette the current screen loaded. The
+# title logo (PLANET_SHAPES frame 146) is drawn on the title screen, which loads pic
+# 4 -> palettes[PCXPAL[4-1]] = palettes[8] (gold); baking it with palette 0 turns it
+# silver. FACE_SHAPES portraits are recolored per-face via facepal[] at draw time
+# (game_menu.c) and are not wired yet, so palette 0 is a placeholder for them.
+SPRITE_TABLE_PAL_TITLE = PCXPAL[4 - 1]  # palettes[8], the title-screen palette
 SPRITE_TABLES = [
-    (PLANET_SHAPES, "hdplanet"),
-    (FACE_SHAPES, "hdface"),
+    (PLANET_SHAPES, "hdplanet", SPRITE_TABLE_PAL_TITLE),
+    (FACE_SHAPES, "hdface", 0),
 ]
 
 
@@ -556,7 +563,7 @@ def process_pic(n, palette_cache, want_preview):
         return False
 
 
-def process_sprite_tables(palette, manifest_frames):
+def process_sprite_tables(palette_cache, manifest_frames):
     """
     Extract PLANET_SHAPES and FACE_SHAPES (SPRITE_TABLES) from tyrian.shp:
     decode each populated frame's RLE pixels, key transparency to alpha,
@@ -571,10 +578,15 @@ def process_sprite_tables(palette, manifest_frames):
     data, shp_pos = load_shp_table_offsets(SHP_PATH)
 
     written = 0
-    for table_index, prefix in SPRITE_TABLES:
+    for table_index, prefix, pal_index in SPRITE_TABLES:
+        palette = palette_cache.get(pal_index)
+        if palette is None:
+            palette = load_palette(PALETTE_PATH, pal_index)
+            palette_cache[pal_index] = palette
+
         sprites = load_sprite_table(data, shp_pos[table_index])
-        print("Table %d (%s): %d frames -> %s_NN.dat ..." %
-              (table_index, prefix, len(sprites), prefix))
+        print("Table %d (%s): %d frames, palette %d -> %s_NN.dat ..." %
+              (table_index, prefix, len(sprites), pal_index, prefix))
 
         for frame_index, sprite in enumerate(sprites):
             if sprite is None:
@@ -644,9 +656,8 @@ def main():
             failed.append(n)
 
     os.makedirs(DATA_DIR, exist_ok=True)
-    main_palette = load_palette(PALETTE_PATH, 0)
     manifest_frames = []
-    sprite_count = process_sprite_tables(main_palette, manifest_frames)
+    sprite_count = process_sprite_tables(palette_cache, manifest_frames)
     if sprite_count:
         with open(SPRITE_MANIFEST_PATH, "w") as f:
             json.dump({"scale": SCALE, "frames": manifest_frames}, f, indent=2)
