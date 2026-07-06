@@ -1582,6 +1582,11 @@ void JE_itemScreen(void)
 
 	} while (!(quit || gameLoaded || jumpSection));
 
+	// This screen has no HD backdrop wired yet, so hd_set_sprite() calls above
+	// always no-op; clear defensively so nothing lingers queued once a backdrop
+	// is added here in a future phase.
+	hd_clear_sprites();
+
 #ifdef WITH_NETWORK
 	if (!quit && isNetworkGame)
 	{
@@ -1978,7 +1983,10 @@ void JE_updateNavScreen(void)
 	if (mapOrigin > 11)
 		JE_drawPlanet(mapOrigin - 1);
 
-	blit_sprite(VGAScreenSeg, 0, 0, OPTION_SHAPES, 28);  // navigation screen interface
+	if (!(hd_mode && hd_set_sprite("hdoption_28.dat", 0, 0,
+	                                get_sprite_width(OPTION_SHAPES, 28),
+	                                get_sprite_height(OPTION_SHAPES, 28))))
+		blit_sprite(VGAScreenSeg, 0, 0, OPTION_SHAPES, 28);  // navigation screen interface
 
 	if (curSel[MENU_PLAY_NEXT_LEVEL] < menuChoices[MENU_PLAY_NEXT_LEVEL])
 	{
@@ -2146,7 +2154,16 @@ void JE_drawDots(void)
 			tempX = planetDotX[x][y] - tempNavX + 66 - 2;
 			tempY = planetDotY[x][y] - tempNavY + 85 - 2;
 			if (tempX > 0 && tempX < 140 && tempY > 0 && tempY < 168)
-				blit_sprite(VGAScreenSeg, tempX, tempY, OPTION_SHAPES, (x == curSel[MENU_PLAY_NEXT_LEVEL]-2 && y < currentDotNum) ? 30 : 29);  // navigation dots
+			{
+				const int dot_sprite = (x == curSel[MENU_PLAY_NEXT_LEVEL]-2 && y < currentDotNum) ? 30 : 29;
+
+				char hd_name[32];
+				snprintf(hd_name, sizeof(hd_name), "hdoption_%02d.dat", dot_sprite);
+				if (!(hd_mode && hd_set_sprite(hd_name, tempX, tempY,
+				                                get_sprite_width(OPTION_SHAPES, dot_sprite),
+				                                get_sprite_height(OPTION_SHAPES, dot_sprite))))
+					blit_sprite(VGAScreenSeg, tempX, tempY, OPTION_SHAPES, dot_sprite);  // navigation dots
+			}
 		}
 	}
 }
@@ -2163,7 +2180,13 @@ void JE_drawPlanet(JE_byte planetNum)
 			tempZ += planetAni;
 
 		blit_sprite_dark(VGAScreenSeg, tempX + 3, tempY + 3, PLANET_SHAPES, tempZ, false);
-		blit_sprite(VGAScreenSeg, tempX, tempY, PLANET_SHAPES, tempZ);  // planets
+
+		char hd_name[32];
+		snprintf(hd_name, sizeof(hd_name), (tempZ < 100) ? "hdplanet_%02d.dat" : "hdplanet_%03d.dat", tempZ);
+		if (!(hd_mode && hd_set_sprite(hd_name, tempX, tempY,
+		                                get_sprite_width(PLANET_SHAPES, tempZ),
+		                                get_sprite_height(PLANET_SHAPES, tempZ))))
+			blit_sprite(VGAScreenSeg, tempX, tempY, PLANET_SHAPES, tempZ);  // planets
 	}
 }
 
@@ -2356,7 +2379,10 @@ JE_boolean JE_quitRequest(void)
 			// TODO: Rework this for smoother mouse movement.
 			setFrameCount(4);
 
-			blit_sprite(VGAScreen, 50, 50, OPTION_SHAPES, 35);  // message box
+			if (!(hd_mode && hd_set_sprite("hdoption_35.dat", 50, 50,
+			                                get_sprite_width(OPTION_SHAPES, 35),
+			                                get_sprite_height(OPTION_SHAPES, 35))))
+				blit_sprite(VGAScreen, 50, 50, OPTION_SHAPES, 35);  // message box
 			JE_textShade(VGAScreen, 70, 66, miscText[28], 0, 5, FULL_SHADE);
 			JE_helpBox(VGAScreen, 70, 90, miscText[30], 30, 7, 12, 1, FULL_SHADE);
 
@@ -3082,7 +3108,10 @@ void JE_weaponSimUpdate(void)
 		}
 		else
 		{
-			blit_sprite(VGAScreenSeg, 24, 149, OPTION_SHAPES, 13);  // downgrade disabled
+			if (!(hd_mode && hd_set_sprite("hdoption_13.dat", 24, 149,
+			                                get_sprite_width(OPTION_SHAPES, 13),
+			                                get_sprite_height(OPTION_SHAPES, 13))))
+				blit_sprite(VGAScreenSeg, 24, 149, OPTION_SHAPES, 13);  // downgrade disabled
 		}
 
 		if (rightPower)
@@ -3091,7 +3120,10 @@ void JE_weaponSimUpdate(void)
 			{
 				sprintf(buf, "%d", upgradeCost);
 				JE_outText(VGAScreen, 108, 137, buf, 7, 4);
-				blit_sprite(VGAScreenSeg, 119, 149, OPTION_SHAPES, 14);  // upgrade disabled
+				if (!(hd_mode && hd_set_sprite("hdoption_14.dat", 119, 149,
+				                                get_sprite_width(OPTION_SHAPES, 14),
+				                                get_sprite_height(OPTION_SHAPES, 14))))
+					blit_sprite(VGAScreenSeg, 119, 149, OPTION_SHAPES, 14);  // upgrade disabled
 			}
 			else
 			{
@@ -3101,7 +3133,10 @@ void JE_weaponSimUpdate(void)
 		}
 		else
 		{
-			blit_sprite(VGAScreenSeg, 119, 149, OPTION_SHAPES, 14);  // upgrade disabled
+			if (!(hd_mode && hd_set_sprite("hdoption_14.dat", 119, 149,
+			                                get_sprite_width(OPTION_SHAPES, 14),
+			                                get_sprite_height(OPTION_SHAPES, 14))))
+				blit_sprite(VGAScreenSeg, 119, 149, OPTION_SHAPES, 14);  // upgrade disabled
 		}
 
 		temp = player[0].items.weapon[curSel[MENU_UPGRADES]-3].power;
@@ -3121,7 +3156,10 @@ void JE_weaponSimUpdate(void)
 	{
 		leftPower = false;
 		rightPower = false;
-		blit_sprite(VGAScreenSeg, 20, 146, OPTION_SHAPES, 17);  // hide power level interface
+		if (!(hd_mode && hd_set_sprite("hdoption_17.dat", 20, 146,
+		                                get_sprite_width(OPTION_SHAPES, 17),
+		                                get_sprite_height(OPTION_SHAPES, 17))))
+			blit_sprite(VGAScreenSeg, 20, 146, OPTION_SHAPES, 17);  // hide power level interface
 	}
 
 	JE_drawItem(1, player[0].items.ship, player[0].x - 5, player[0].y - 7);
@@ -3201,7 +3239,10 @@ void JE_weaponViewFrame(void)
 
 	simulate_player_shots();
 
-	blit_sprite(VGAScreenSeg, 0, 0, OPTION_SHAPES, 12); // upgrade interface
+	if (!(hd_mode && hd_set_sprite("hdoption_12.dat", 0, 0,
+	                                get_sprite_width(OPTION_SHAPES, 12),
+	                                get_sprite_height(OPTION_SHAPES, 12))))
+		blit_sprite(VGAScreenSeg, 0, 0, OPTION_SHAPES, 12); // upgrade interface
 
 	/*========================Power Bar=========================*/
 
