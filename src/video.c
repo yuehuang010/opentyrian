@@ -864,6 +864,217 @@ bool hd_flight_lookup(int sheet_id, int index)
 	return load_hd_sheet_frame(sheet_id, index) != NULL;
 }
 
+// ---- _filter (hue-band) recoloring parity: on-demand recolored-frame cache ----
+//
+// blit_sprite2_filter (src/sprite.c) draws `*pixels = filter | (*data & 0x0f)`:
+// the *raw* filter byte is OR'd with the sprite data's low nibble (0..15,
+// "brightness"), verbatim -- not a clean high-nibble/low-nibble split. Observed
+// filter bytes confirm this: 0x70 (Magneto RePulse) is high-nibble-only, but
+// 0x09 (iced/frozen tint, tyrian2.c:375) and the event-type-27 "Enemy Global
+// AccelRev" values (tyrian2.c:4714, raw eventdat3 in 1..16, unshifted) have low
+// bits set too. `hd_filter_manifest.json` documents the same generic formula:
+// output = live_palette[filter | brightness_nibble]. So synthesis below uses
+// `filter | k` for k in 0..15 literally, which reproduces the engine's output
+// for every filter byte actually seen (clean bands included, since OR with a
+// zero low nibble degenerates to the simple case).
+
+// Raw brightness-map pixels (RGBA, R=G=B=brightness, A=coverage), loaded from
+// "hdcompb_<stem>_NN.dat" and cached per (sheet, index) -- same "load once,
+// remember failure, never retry" pattern as load_hd_sheet_frame. Only the enemy
+// sheets have this asset (blit_sprite2_filter is only ever called from
+// blit_enemy(), tyrian2.c); any other sheet id fails to open the file once and
+// is cheaply remembered as unavailable. Fixed 48x56 (12x14 base tile * 4x scale,
+// matching the hdcomp_* colour assets); any other size is treated as malformed.
+#define HD_FILTER_BRIGHTNESS_W 48
+#define HD_FILTER_BRIGHTNESS_H 56
+static Uint8 *hd_sheet_frame_brightness[HD_FLIGHT_SHEET_COUNT][HD_FLIGHT_FRAME_MAX];
+static bool hd_sheet_frame_brightness_load_failed[HD_FLIGHT_SHEET_COUNT][HD_FLIGHT_FRAME_MAX];
+
+static const Uint8 *load_hd_sheet_frame_brightness(int sheet_id, int index)
+{
+	if (sheet_id < 0 || sheet_id >= HD_FLIGHT_SHEET_COUNT || index < 0 || index >= HD_FLIGHT_FRAME_MAX)
+		return NULL;
+
+	if (hd_sheet_frame_brightness[sheet_id][index] != NULL)
+		return hd_sheet_frame_brightness[sheet_id][index];
+
+	if (hd_sheet_frame_brightness_load_failed[sheet_id][index])
+		return NULL;
+
+	const char *stem = hd_sheet_stem(sheet_id);
+	if (stem == NULL)
+	{
+		hd_sheet_frame_brightness_load_failed[sheet_id][index] = true;
+		return NULL;
+	}
+
+	char name[32];
+	snprintf(name, sizeof name, "hdcompb_%s_%02d.dat", stem, index);
+
+	bool ok = false;
+	Uint8 *pixels = NULL;
+
+	FILE *f = dir_fopen(data_dir(), name, "rb");
+	if (f != NULL)
+	{
+		Uint8 magic[4];
+		Uint8 dims[8];
+
+		if (fread(magic, 1, 4, f) == 4 &&
+		    memcmp(magic, "HDPX", 4) == 0 &&
+		    fread(dims, 1, 8, f) == 8)
+		{
+			Uint32 width, height;
+			memcpy(&width, &dims[0], 4);
+			memcpy(&height, &dims[4], 4);
+			width = SDL_SwapLE32(width);
+			height = SDL_SwapLE32(height);
+
+			if (width == HD_FILTER_BRIGHTNESS_W && height == HD_FILTER_BRIGHTNESS_H)
+			{
+				size_t pixel_bytes = (size_t)width * height * 4;
+				pixels = malloc(pixel_bytes);
+
+				if (pixels != NULL && fread(pixels, 1, pixel_bytes, f) == pixel_bytes)
+					ok = true;
+			}
+		}
+
+		fclose(f);
+	}
+
+	if (!ok)
+	{
+		free(pixels);
+		fprintf(stderr, "warning: HD brightness map %s unavailable; falling back\n", name);
+		hd_sheet_frame_brightness_load_failed[sheet_id][index] = true;
+		return NULL;
+	}
+
+	hd_sheet_frame_brightness[sheet_id][index] = pixels;
+	return pixels;
+}
+
+// Synthesized (sheet, index, filter) recolor textures. LRU-capped; the working
+// set of distinct (index, filter) pairs on screen at once is small (tens). MUST
+// be >= HD_FLIGHT_QUEUE_COUNT: these textures are handed to the flight queue
+// during queue-build and not drawn until scale_and_flip, so evicting (and
+// destroying) an entry synthesized earlier in the SAME frame would leave a
+// dangling pointer in the queue. Sizing the cache >= the queue guarantees no
+// intra-frame eviction (distinct filtered entries this frame <= queue capacity).
+#define HD_FILTERED_CACHE_COUNT HD_FLIGHT_QUEUE_COUNT
+typedef struct
+{
+	bool used;
+	int sheet_id;
+	int index;
+	Uint8 filter;
+	SDL_Texture *tex;
+	Uint32 last_touch;
+} HDFilteredCacheEntry;
+static HDFilteredCacheEntry hd_filtered_cache[HD_FILTERED_CACHE_COUNT];
+static Uint32 hd_filtered_cache_clock = 0;
+
+SDL_Texture *load_hd_sheet_frame_filtered(int sheet_id, int index, Uint8 filter)
+{
+	if (sheet_id < 0 || sheet_id >= HD_FLIGHT_SHEET_COUNT || index < 0 || index >= HD_FLIGHT_FRAME_MAX)
+		return NULL;
+
+	++hd_filtered_cache_clock;
+
+	for (int i = 0; i < HD_FILTERED_CACHE_COUNT; ++i)
+	{
+		HDFilteredCacheEntry *e = &hd_filtered_cache[i];
+		if (e->used && e->sheet_id == sheet_id && e->index == index && e->filter == filter)
+		{
+			e->last_touch = hd_filtered_cache_clock;
+			return e->tex;
+		}
+	}
+
+	const Uint8 *brightness = load_hd_sheet_frame_brightness(sheet_id, index);
+	if (brightness == NULL)
+		return NULL;
+
+	// Palette source: the live VGA palette (colors[256]), sampled at synthesis
+	// time. Enemies use the stable level palette throughout flight, so this is
+	// exact almost always; the one caveat is an enemy hit/recolored mid-fade
+	// (level transition, death sequence) could show the pre/post-fade tint for
+	// one synth instead of the exact interpolated fade value. Accepted per the
+	// design doc rather than wiring a palette-generation cache-invalidation hook.
+	SDL_Color shade[16];
+	for (int k = 0; k < 16; ++k)
+		shade[k] = colors[(Uint8)(filter | k)];
+
+	static Uint8 rgba[HD_FILTER_BRIGHTNESS_W * HD_FILTER_BRIGHTNESS_H * 4];
+	for (int p = 0; p < HD_FILTER_BRIGHTNESS_W * HD_FILTER_BRIGHTNESS_H; ++p)
+	{
+		Uint8 a = brightness[p * 4 + 3];
+		if (a == 0)
+		{
+			memset(&rgba[p * 4], 0, 4);
+			continue;
+		}
+
+		Uint8 r_chan = brightness[p * 4 + 0]; // R = G = B = brightness (see manifest)
+		float pos = (r_chan / 255.0f) * 15.0f;
+		int lo = (int)pos;
+		if (lo > 14)
+			lo = 14;
+		int hi = lo + 1;
+		float t = pos - (float)lo;
+
+		rgba[p * 4 + 0] = (Uint8)lrintf(shade[lo].r + (shade[hi].r - shade[lo].r) * t);
+		rgba[p * 4 + 1] = (Uint8)lrintf(shade[lo].g + (shade[hi].g - shade[lo].g) * t);
+		rgba[p * 4 + 2] = (Uint8)lrintf(shade[lo].b + (shade[hi].b - shade[lo].b) * t);
+		rgba[p * 4 + 3] = a;
+	}
+
+	SDL_Texture *tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+		SDL_TEXTUREACCESS_STATIC, HD_FILTER_BRIGHTNESS_W, HD_FILTER_BRIGHTNESS_H);
+	if (tex == NULL)
+		return NULL;
+
+	if (SDL_UpdateTexture(tex, NULL, rgba, HD_FILTER_BRIGHTNESS_W * 4) != 0)
+	{
+		SDL_DestroyTexture(tex);
+		return NULL;
+	}
+	SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+
+	int slot = -1;
+	for (int i = 0; i < HD_FILTERED_CACHE_COUNT; ++i)
+	{
+		if (!hd_filtered_cache[i].used)
+		{
+			slot = i;
+			break;
+		}
+	}
+	if (slot < 0)
+	{
+		Uint32 oldest = 0xffffffffu;
+		for (int i = 0; i < HD_FILTERED_CACHE_COUNT; ++i)
+		{
+			if (hd_filtered_cache[i].last_touch < oldest)
+			{
+				oldest = hd_filtered_cache[i].last_touch;
+				slot = i;
+			}
+		}
+		SDL_DestroyTexture(hd_filtered_cache[slot].tex);
+	}
+
+	hd_filtered_cache[slot].used = true;
+	hd_filtered_cache[slot].sheet_id = sheet_id;
+	hd_filtered_cache[slot].index = index;
+	hd_filtered_cache[slot].filter = filter;
+	hd_filtered_cache[slot].tex = tex;
+	hd_filtered_cache[slot].last_touch = hd_filtered_cache_clock;
+
+	return tex;
+}
+
 void hd_flight_begin(void)
 {
 	hd_flight_queue_count = 0;

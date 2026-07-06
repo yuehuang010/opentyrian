@@ -67,6 +67,15 @@ void hd_clear_sprites(void);       // drop any queued HD sprite overlays (e.g. w
 // the interp display list and drained by scale_and_flip().
 SDL_Texture *load_hd_sheet_frame(int sheet_id, int index); // load+cache one HD sheet frame; NULL if unavailable
 bool hd_flight_lookup(int sheet_id, int index);            // true iff a frame texture is available (loading it if needed)
+
+// Recoloring parity for blit_sprite2_filter's hue-band remap (enemy tints; see
+// doc/REMASTER_FLIGHT_COMPOSITOR.md §3). Synthesizes (and caches, LRU-capped) an
+// RGBA texture for one (sheet, frame index, filter byte) combination from the
+// "hdcompb_<stem>_NN.dat" brightness-map asset + the live palette (`colors[]`),
+// smoothly interpolating between the two nearest of the filter byte's 16 shades.
+// Returns NULL (never suppressing the 8-bit fallback) if the brightness asset is
+// missing, the cache is full, or synthesis fails for any reason.
+SDL_Texture *load_hd_sheet_frame_filtered(int sheet_id, int index, Uint8 filter);
 void hd_flight_begin(void);                                // reset the flight queue (call once per present, before recording)
 void hd_flight_set(SDL_Texture *tex, SDL_Rect src, int lx, int ly, int lw, int lh, SDL_BlendMode blendmode, Uint8 r, Uint8 g, Uint8 b, Uint8 a); // push one entry (bounds-checked)
 void hd_flight_clear(void);                                // reset the flight queue (call after presenting)

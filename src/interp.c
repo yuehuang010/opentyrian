@@ -497,6 +497,27 @@ static void flight_emit_tile(int sheet, unsigned int index, int dx, int dy,
 	hd_flight_set(tex, src, dx - 24, dy, 12, 14, bm, r, g, b, a);
 }
 
+// Emits a single 12x14 HD tile through the hue-band recoloring parity path
+// (blit_sprite2_filter's `filter | brightness` remap; see
+// doc/REMASTER_FLIGHT_COMPOSITOR.md §3 and load_hd_sheet_frame_filtered's
+// comment in video.c for the exact byte-layout derivation). Synthesized frames
+// already carry the final RGB + coverage alpha, so they draw opaque/BLEND with
+// no colormod, same as flight_emit_tile's plain case. A cache/asset miss is a
+// per-tile fallback (the 8-bit filtered blit already drew it) -- never suppress.
+static void flight_emit_tile_filtered(int sheet, unsigned int index, Uint8 filter, int dx, int dy)
+{
+	if (index < 1)
+		return;
+	int frame = (int)index - 1;
+
+	SDL_Texture *tex = load_hd_sheet_frame_filtered(sheet, frame, filter);
+	if (tex == NULL)
+		return;
+
+	SDL_Rect src = { 0, 0, 48, 56 };
+	hd_flight_set(tex, src, dx - 24, dy, 12, 14, SDL_BLENDMODE_BLEND, 255, 255, 255, 255);
+}
+
 void interp_flight_emit(float alpha)
 {
 	// Rebuild the video flight queue for this presented frame.
@@ -531,6 +552,7 @@ void interp_flight_emit(float alpha)
 		SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
 		Uint8 r = 255, g = 255, b = 255, a = 255;
 		bool is_2x2 = false;
+		bool is_filter = false;
 
 		switch ((InterpSprite2Kind)op->variant)
 		{
@@ -564,16 +586,43 @@ void interp_flight_emit(float alpha)
 			break;
 		case INTERP_SPRITE2_FILTER:
 		case INTERP_SPRITE2_FILTER_CLIP:
+			// hue-band remap (enemy tints): resolved via the on-demand recolored-frame
+			// cache (load_hd_sheet_frame_filtered, video.c) keyed on op->filter, which
+			// is only ever produced by blit_enemy() -- see doc/REMASTER_FLIGHT_COMPOSITOR.md §3.
+			is_filter = true;
+			break;
 		case INTERP_SPRITE2X2_FILTER:
 		case INTERP_SPRITE2X2_FILTER_CLIP:
+			is_filter = true;
+			is_2x2 = true;
+			break;
 		default:
-			continue; // hue-band parity deferred
+			continue;
 		}
 
 		int dx, dy;
 		interp_op_pos(op, back, &dx, &dy);
 
-		if (is_2x2)
+		if (is_filter)
+		{
+			// Same 2x2 decomposition note as the plain case below: blit_sprite2x2_filter*
+			// (sprite.c) currently decomposes into four base blit_sprite2_filter* calls,
+			// each recording its own INTERP_SPRITE2_FILTER[_CLIP] op, so enemies reach
+			// here as four base-kind filtered ops; this 2x2 branch is a
+			// correctness-preserving fallback should a 2x2 filter kind ever be recorded.
+			if (is_2x2)
+			{
+				flight_emit_tile_filtered(sheet, op->index,      op->filter, dx,      dy);
+				flight_emit_tile_filtered(sheet, op->index + 1,  op->filter, dx + 12, dy);
+				flight_emit_tile_filtered(sheet, op->index + 19, op->filter, dx,      dy + 14);
+				flight_emit_tile_filtered(sheet, op->index + 20, op->filter, dx + 12, dy + 14);
+			}
+			else
+			{
+				flight_emit_tile_filtered(sheet, op->index, op->filter, dx, dy);
+			}
+		}
+		else if (is_2x2)
 		{
 			// 2x2 ship sprite composed exactly as blit_sprite2x2 (sprite.c): four
 			// 12x14 tiles at base indices i, i+1, i+19, i+20 and pixel offsets
