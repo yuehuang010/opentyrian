@@ -109,6 +109,19 @@ new notes/issues there rather than to per-user memory.
 - **`internal/issue/`** — known issues, **one markdown file per issue**, each with a
   `status` field in its front-matter (e.g. `status: Fixed` / `fixed-in: <sha>`).
 
+## Git
+
+- **Keep history single-parent (linear).** Every commit on a working branch should
+  have exactly one parent — **no merge commits.** Integrate branches by **rebasing**
+  (`git rebase master`, `git pull --rebase`), never `git merge`. When combining
+  side-branch/worktree work (e.g. the S1/S2 standalone tracks), rebase or
+  cherry-pick it onto the branch tip instead of merging.
+- The only merge commits that may remain are the **ancient upstream OpenTyrian
+  ones** already baked into `master`/`origin/master` (`Merge with default`, etc.) —
+  never rewrite those; they're shared history.
+- Before any history rewrite, tag a backup (`git tag backup/<branch>-<why>`) and
+  verify the resulting tree is unchanged (`git rev-parse <ref>^{tree}` matches).
+
 ## Reference
 
 - `doc/files.txt` — describes the original Tyrian data file formats (levels, shapes, music, palettes, etc.). Essential when touching asset loading or level scripting.
