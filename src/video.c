@@ -867,6 +867,44 @@ void hd_clear_sprites(void)
 	hd_sprite_queue_count = 0;
 }
 
+// Immediate-mode HD mouse cursor overlay: a single slot (only one cursor ever
+// exists) holding the four shopSpriteSheet sub-sprite textures of the classic
+// 2x2 cursor blit (index, index+1, index+19, index+20 -- blit_sprite2x2's
+// layout) plus the cursor's logical VGA top-left. Re-armed by
+// JE_mouseStart(Filter) each frame it draws the classic cursor and drained by
+// scale_and_flip(); if the cursor isn't re-emitted before the next present
+// (JE_mouseReplace erased it and nothing re-showed it), nothing is drawn --
+// mirroring the classic erase/redraw cycle.
+static SDL_Texture *hd_cursor_tex[4];
+static int hd_cursor_lx, hd_cursor_ly;
+static bool hd_cursor_valid = false;
+
+void hd_set_cursor(int sprite_index, int lx, int ly)
+{
+	if (!hd_mode)
+		return;
+
+	const int sub_index[4] = { sprite_index, sprite_index + 1, sprite_index + 19, sprite_index + 20 };
+
+	SDL_Texture *tex[4];
+	for (int i = 0; i < 4; ++i)
+	{
+		char name[32];
+		snprintf(name, sizeof name, "hdcomp_shop_%02d.dat", sub_index[i]);
+		tex[i] = load_hd_sprite(name);
+
+		// All four quadrants or nothing: a partially-HD cursor would render
+		// with holes, so any missing sub-sprite keeps the classic cursor.
+		if (tex[i] == NULL)
+			return;
+	}
+
+	memcpy(hd_cursor_tex, tex, sizeof hd_cursor_tex);
+	hd_cursor_lx = lx;
+	hd_cursor_ly = ly;
+	hd_cursor_valid = true;
+}
+
 /**
  * Lazily loads and caches one HD sheet frame ("hdcomp_<stem>_NN.dat") for the
  * given (sheet id, frame index). Returns the cached texture, or NULL if the asset
@@ -1558,6 +1596,39 @@ static void draw_hd_font_queue(const SDL_Rect *dst_rect)
 	hd_font_queue_count = 0;
 }
 
+// Draws (and drains) the HD mouse cursor above the HD text -- the true topmost
+// layer, matching the classic z-order where the cursor is blitted last. Each of
+// the four quadrants maps its own logical edges into the window (rather than
+// scaling a fixed 12x14 extent) so adjacent quads share edges without rounding
+// seams; the render clip keeps an edge-clamped cursor inside the game area
+// (the classic blit clips at the VGA edges, the HD quad must not spill into
+// the letterbox bars).
+static void draw_hd_cursor(const SDL_Rect *dst_rect)
+{
+	if (!hd_cursor_valid)
+		return;
+	hd_cursor_valid = false;
+
+	static const int off_x[4] = { 0, 12, 0, 12 };
+	static const int off_y[4] = { 0, 0, 14, 14 };
+
+	SDL_RenderSetClipRect(main_window_renderer, dst_rect);
+	for (int i = 0; i < 4; ++i)
+	{
+		const int lx = hd_cursor_lx + off_x[i];
+		const int ly = hd_cursor_ly + off_y[i];
+
+		SDL_Rect window_rect;
+		window_rect.x = dst_rect->x + lx * dst_rect->w / vga_width;
+		window_rect.y = dst_rect->y + ly * dst_rect->h / vga_height;
+		window_rect.w = dst_rect->x + (lx + 12) * dst_rect->w / vga_width - window_rect.x;
+		window_rect.h = dst_rect->y + (ly + 14) * dst_rect->h / vga_height - window_rect.y;
+
+		SDL_RenderCopy(main_window_renderer, hd_cursor_tex[i], NULL, &window_rect);
+	}
+	SDL_RenderSetClipRect(main_window_renderer, NULL);
+}
+
 static void deinit_crt_overlay(void)
 {
 	if (crt_scanline_tex != NULL)
@@ -1790,8 +1861,9 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_RenderCopy(main_window_renderer, entry->tex, &entry->src, &window_rect);
 		}
 
-		// HD text on top of the flight sprites (topmost UI layer).
+		// HD text on top of the flight sprites, HD cursor above the text.
 		draw_hd_font_queue(&dst_rect);
+		draw_hd_cursor(&dst_rect);
 
 		apply_crt_overlay(&dst_rect);
 		SDL_RenderPresent(main_window_renderer);
@@ -1854,8 +1926,9 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_DestroyTexture(overlay);
 		}
 
-		// HD text on top of the indexed menu overlay (topmost UI layer).
+		// HD text on top of the indexed menu overlay, HD cursor above the text.
 		draw_hd_font_queue(&dst_rect);
+		draw_hd_cursor(&dst_rect);
 
 		apply_crt_overlay(&dst_rect);
 
@@ -1877,6 +1950,7 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	// when empty (HD mode off / nothing emitted), so it can never leak into a later
 	// frame; with an empty queue this draws nothing and stays byte-identical.
 	draw_hd_font_queue(&dst_rect);
+	draw_hd_cursor(&dst_rect);
 	apply_crt_overlay(&dst_rect);
 	SDL_RenderPresent(main_window_renderer);
 

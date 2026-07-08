@@ -128,6 +128,9 @@ void JE_mouseStart(void)  // FKA NewShape.mouseStart
 		const Sint32 x = mouseX - spriteInfo->x - spriteInfo->fx;
 		const Sint32 y = mouseY - spriteInfo->y - spriteInfo->fy;
 		blit_sprite2x2_clip(VGAScreen, x, y, shopSpriteSheet, spriteInfo->index);
+
+		if (hd_mode)
+			hd_set_cursor(spriteInfo->index, x, y);
 	}
 }
 
@@ -148,6 +151,12 @@ void JE_mouseStartFilter(Uint8 filter)
 		const Sint32 x = mouseX - spriteInfo->x - spriteInfo->fx;
 		const Sint32 y = mouseY - spriteInfo->y - spriteInfo->fy;
 		blit_sprite2x2_filter_clip(VGAScreen, x, y, shopSpriteSheet, spriteInfo->index, filter);
+
+		// No HD counterpart for the filter/hue recolor exists, so this draws the
+		// plain unfiltered HD cursor over the filtered classic one -- accepted,
+		// deferred behaviour (see JE_mouseStart).
+		if (hd_mode)
+			hd_set_cursor(spriteInfo->index, x, y);
 	}
 }
 

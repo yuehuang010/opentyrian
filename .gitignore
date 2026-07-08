@@ -45,3 +45,6 @@ tyrian.sav
 
 # macOS
 .DS_Store
+
+# Local double-click launcher (symlinks the built ./opentyrian binary)
+/OpenTyrian.app/

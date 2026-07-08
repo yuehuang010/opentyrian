@@ -68,6 +68,8 @@ void hd_anim_end(void);                                      // deactivate + des
 bool hd_set_sprite(const char *asset_name, int lx, int ly, int lw, int lh); // queue an HD sprite overlay at the given logical VGA rect; returns success
 void hd_clear_sprites(void);       // drop any queued HD sprite overlays (e.g. when leaving a screen)
 
+void hd_set_cursor(int sprite_index, int lx, int ly); // arm the HD mouse cursor overlay (a 2x2 shopSpriteSheet blit at logical x,y); drawn topmost, drained every present
+
 // HD in-flight sprite compositor (Track B). load_hd_sheet_frame lazily loads and
 // caches one HDPX frame of an HD sheet (keyed by sheet id + frame index), mirroring
 // the "load once, remember failure, never retry" pattern of the menu HD sprite
