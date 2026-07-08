@@ -889,8 +889,11 @@ void hd_set_cursor(int sprite_index, int lx, int ly)
 	SDL_Texture *tex[4];
 	for (int i = 0; i < 4; ++i)
 	{
+		// Engine Sprite2 indices are 1-based (blit_sprite2 reads entry
+		// [index - 1]); the hdcomp files are numbered by 0-based data entry,
+		// same as interp.c's frame = index - 1 conversion.
 		char name[32];
-		snprintf(name, sizeof name, "hdcomp_shop_%02d.dat", sub_index[i]);
+		snprintf(name, sizeof name, "hdcomp_shop_%02d.dat", sub_index[i] - 1);
 		tex[i] = load_hd_sprite(name);
 
 		// All four quadrants or nothing: a partially-HD cursor would render
