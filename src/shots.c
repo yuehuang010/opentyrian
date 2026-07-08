@@ -41,9 +41,22 @@ void simulate_player_shots(void)
 				PlayerShotDataType* shot = &playerShotData[z];
 
 				shot->shotXM += shot->shotXC;
+				shot->shotX += shot->shotXM;
 
-				if (shot->shotXM <= 100)
-					shot->shotX += shot->shotXM;
+				if (shot->shotXM > 100)
+				{
+					if (shot->shotXM == 101)
+					{
+						shot->shotX -= 101;
+						shot->shotX += player[0].delta_x_shot_move;
+						shot->shotY += player[0].delta_y_shot_move;
+					}
+					else
+					{
+						shot->shotX -= 120;
+						shot->shotX += player[0].delta_x_shot_move;
+					}
+				}
 
 				shot->shotYM += shot->shotYC;
 				shot->shotY += shot->shotYM;

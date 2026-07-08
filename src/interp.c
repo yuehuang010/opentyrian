@@ -538,12 +538,27 @@ void interp_flight_emit(float alpha)
 
 	const float back = 1.0f - alpha;
 
+	// Ground structures are drawn before the foreground background layer (e.g. the
+	// clouds of level 1, background2over==1) and are occluded by it in the 8-bit
+	// composite. Backgrounds aren't HD, so re-drawing those sprites in the HD overlay
+	// would float them on top of the clouds. Find the last background-row op; any
+	// sprite op a later background layer paints over stays pure 8-bit (correctly
+	// occluded), and only sprites above the last background layer (player, sky/top
+	// enemies, shots, explosions) get the HD overlay.
+	int last_bg = -1;
+	for (int i = 0; i < curr_count; ++i)
+		if (curr_ops[i].type == OP_BG_ROW || curr_ops[i].type == OP_BG_ROW_BLEND)
+			last_bg = i;
+
 	for (int i = 0; i < curr_count; ++i)
 	{
 		const Op *op = &curr_ops[i];
 
 		if (op->type != OP_SPRITE2)
 			continue;
+
+		if (i < last_bg)
+			continue;  // a later background layer occludes this sprite; stays 8-bit
 
 		// Sheet identity: sheet8..12, explosion, and the 31 dynamic per-level
 		// enemy banks (enemySpriteSheets[]) are wired. Any unresolved sheet (e.g.

@@ -1827,6 +1827,17 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		SDL_Rect dst_rect;
 		classic_scale_base(src_surface, &dst_rect);
 
+		// Clip the HD overlay to the 264x184 playfield (VGA cols [0,264), rows
+		// [0,184)); JE_starCompositeShow copies exactly that region into the 8-bit
+		// base, so without this clip the overlay spills onto the HUD sidebar/bar.
+		SDL_Rect play_clip = {
+			dst_rect.x,
+			dst_rect.y,
+			264 * dst_rect.w / vga_width,
+			184 * dst_rect.h / vga_height,
+		};
+		SDL_RenderSetClipRect(main_window_renderer, &play_clip);
+
 		SDL_Texture *cur_tex = NULL;
 		SDL_BlendMode cur_bm = SDL_BLENDMODE_NONE;
 		Uint8 cur_r = 0, cur_g = 0, cur_b = 0, cur_a = 0;
@@ -1839,8 +1850,8 @@ static void scale_and_flip(SDL_Surface *src_surface)
 			SDL_Rect window_rect;
 			window_rect.x = dst_rect.x + entry->lx * dst_rect.w / vga_width;
 			window_rect.y = dst_rect.y + entry->ly * dst_rect.h / vga_height;
-			window_rect.w = entry->lw * dst_rect.w / vga_width;
-			window_rect.h = entry->lh * dst_rect.h / vga_height;
+			window_rect.w = dst_rect.x + (entry->lx + entry->lw) * dst_rect.w / vga_width - window_rect.x;
+			window_rect.h = dst_rect.y + (entry->ly + entry->lh) * dst_rect.h / vga_height - window_rect.y;
 
 			// Cheap dedupe: only re-set mod state on the texture when it changed since
 			// the previous entry (SDL texture mod is sticky per texture).
@@ -1865,6 +1876,8 @@ static void scale_and_flip(SDL_Surface *src_surface)
 
 			SDL_RenderCopy(main_window_renderer, entry->tex, &entry->src, &window_rect);
 		}
+
+		SDL_RenderSetClipRect(main_window_renderer, NULL);
 
 		// HD text on top of the flight sprites, HD cursor above the text.
 		draw_hd_font_queue(&dst_rect);
