@@ -28,6 +28,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Vendored OGG Vorbis decoder for the HD streamed-music path (Phase S1). The
+// implementation lives in its own translation unit (obj/stb_vorbis.o); here we
+// pull in declarations only.
+#define STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis.c"
+
 #define OUTPUT_QUALITY 4  // 44.1 kHz
 
 int audioSampleRate = 0;
@@ -72,9 +78,183 @@ static size_t channelSampleCount[CHANNEL_COUNT] = { 0 };
 static Uint8 channelVolume[CHANNEL_COUNT];
 #define CHANNEL_VOLUME_LEVELS 8
 
+// --- HD streamed music (Phase S1) -----------------------------------------
+//
+// When hd_music is on and an "hdmusic_NN.ogg" exists for the playing track
+// (NN = song_num + 1, matching tools/render_music.c's 1-based output), the
+// audio callback decodes that OGG in place of running the LDS/OPL2 synth. The
+// OGGs are pre-rendered from the *same* sequencer (see tools/render_music.c),
+// stereo 44.1 kHz, with LOOPSTART/LOOPLENGTH Vorbis comments (per-channel
+// sample offsets) marking the sequencer's natural loop-back point.
+//
+// Fallback is per-song: any missing/undecodable OGG, or a sample-rate that
+// doesn't match the audio device, leaves hd_active false so the LDS synth
+// (still loaded by load_song) plays that track exactly as before. The
+// hd_music master toggle (default on) gates the whole path.
+bool hd_music = true;
+
+static stb_vorbis *hd_vorbis = NULL;  // decoder for the current OGG, or NULL
+static Uint8 *hd_ogg_data = NULL;     // in-memory OGG backing hd_vorbis (owned)
+static bool hd_active = false;        // an OGG is loaded and should be decoded
+static bool hd_ended = false;         // a non-looping OGG has played to its end
+static bool hd_has_loop = false;
+static Uint32 hd_loop_start = 0;      // per-channel sample offset to loop back to
+static Uint32 hd_loop_end = 0;        // per-channel sample offset of loop end
+
+// Fade-out for the HD path (fade_song): a Q12 gain ramped down to zero, at
+// which point the track is stopped. Mirrors what lds_fade() does for the synth.
+static bool hd_fade_active = false;
+static Sint32 hd_fade_gain = 0;       // Q12; 4096 == unity
+static Sint32 hd_fade_step = 0;       // per-frame decrement
+
+// Scratch for interleaved-stereo decode before downmix to the engine's mono
+// mixing buffer. Sized for a generous callback; larger callbacks decode in
+// chunks against it.
+#define HD_DECODE_FRAMES 4096
+static short hd_stereo[HD_DECODE_FRAMES * 2];
+
 static void audioCallback(void *userdata, Uint8 *stream, int size);
 
 static void load_song(unsigned int song_num);
+
+// Releases the current OGG decoder and its backing memory. Caller must hold the
+// audio lock (or be certain the callback can't run).
+static void hd_music_close(void)
+{
+	if (hd_vorbis != NULL)
+	{
+		stb_vorbis_close(hd_vorbis);
+		hd_vorbis = NULL;
+	}
+	free(hd_ogg_data);
+	hd_ogg_data = NULL;
+	hd_active = false;
+	hd_ended = false;
+	hd_has_loop = false;
+	hd_fade_active = false;
+}
+
+// Parses LOOPSTART / LOOPLENGTH Vorbis comments into hd_loop_*.
+static void hd_parse_loop_comments(stb_vorbis *v)
+{
+	hd_has_loop = false;
+	hd_loop_start = 0;
+	hd_loop_end = 0;
+
+	stb_vorbis_comment vc = stb_vorbis_get_comment(v);
+	long loopStart = -1, loopLength = -1;
+	for (int i = 0; i < vc.comment_list_length; ++i)
+	{
+		const char *c = vc.comment_list[i];
+		if (c == NULL)
+			continue;
+		if (SDL_strncasecmp(c, "LOOPSTART=", 10) == 0)
+			loopStart = strtol(c + 10, NULL, 10);
+		else if (SDL_strncasecmp(c, "LOOPLENGTH=", 11) == 0)
+			loopLength = strtol(c + 11, NULL, 10);
+	}
+
+	if (loopStart >= 0 && loopLength > 0)
+	{
+		hd_loop_start = (Uint32)loopStart;
+		hd_loop_end = (Uint32)(loopStart + loopLength);
+		hd_has_loop = true;
+	}
+}
+
+// Tries to load hdmusic_(song_num+1).ogg into an HD decoder. On success sets
+// hd_active; on any failure leaves hd_active false (LDS fallback). Caller must
+// hold the audio lock (or be certain the callback can't run).
+static void hd_music_load_song(unsigned int song_num)
+{
+	hd_music_close();
+
+	if (!hd_music || music_disabled)
+		return;
+
+	char filename[32];
+	snprintf(filename, sizeof(filename), "hdmusic_%02u.ogg", song_num + 1);
+
+	FILE *f = dir_fopen(data_dir(), filename, "rb");
+	if (f == NULL)
+		return;  // no HD track for this song: LDS fallback
+
+	long size = ftell_eof(f);
+	if (size <= 0 || size > 64 * 1024 * 1024)
+	{
+		fclose(f);
+		return;
+	}
+
+	Uint8 *data = malloc((size_t)size);
+	if (data == NULL || fread(data, 1, (size_t)size, f) != (size_t)size)
+	{
+		free(data);
+		fclose(f);
+		return;
+	}
+	fclose(f);
+
+	int err = 0;
+	stb_vorbis *v = stb_vorbis_open_memory(data, (int)size, &err, NULL);
+	if (v == NULL)
+	{
+		fprintf(stderr, "warning: hd_music: failed to open %s (err %d); using synth\n", filename, err);
+		free(data);
+		return;
+	}
+
+	stb_vorbis_info info = stb_vorbis_get_info(v);
+	if (info.channels != 2 || (int)info.sample_rate != audioSampleRate)
+	{
+		// The renderer emits stereo at the device rate; anything else would
+		// need resampling we don't do -- fall back to the synth instead.
+		fprintf(stderr, "warning: hd_music: %s is %dch/%dHz (want 2ch/%dHz); using synth\n",
+		        filename, info.channels, info.sample_rate, audioSampleRate);
+		stb_vorbis_close(v);
+		free(data);
+		return;
+	}
+
+	hd_vorbis = v;
+	hd_ogg_data = data;
+	hd_active = true;
+	hd_ended = false;
+	hd_fade_active = false;
+	hd_parse_loop_comments(v);
+}
+
+// Decodes `count` mono frames of the current OGG into `out`, handling looping
+// and end-of-stream. Runs on the audio thread.
+static void hd_music_decode(Sint16 *out, int count)
+{
+	int filled = 0;
+	while (filled < count)
+	{
+		if (hd_ended)
+		{
+			// Non-looping track finished: silence for the rest.
+			memset(out + filled, 0, (count - filled) * sizeof(Sint16));
+			return;
+		}
+
+		int want = MIN(count - filled, HD_DECODE_FRAMES);
+		int got = stb_vorbis_get_samples_short_interleaved(hd_vorbis, 2, hd_stereo, want * 2);
+
+		for (int i = 0; i < got; ++i)
+			out[filled + i] = (Sint16)(((Sint32)hd_stereo[2 * i] + hd_stereo[2 * i + 1]) / 2);
+		filled += got;
+
+		if (got < want)
+		{
+			// Reached end of stream mid-request.
+			if (hd_has_loop)
+				stb_vorbis_seek(hd_vorbis, hd_loop_start);
+			else
+				hd_ended = true;
+		}
+	}
+}
 
 bool init_audio(void)
 {
@@ -132,7 +312,31 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 	Sint16 *const samples = (Sint16 *)stream;
 	const int samplesCount = size / sizeof (Sint16);
 
-	if (!music_disabled && !music_stopped)
+	if (!music_disabled && !music_stopped && hd_active)
+	{
+		// HD streamed path: decode the OGG in place of the synth.
+		hd_music_decode(samples, samplesCount);
+
+		if (hd_fade_active)
+		{
+			for (int i = 0; i < samplesCount; ++i)
+			{
+				samples[i] = (Sint16)FIXED_TO_INT((Sint32)samples[i] * hd_fade_gain);
+				hd_fade_gain -= hd_fade_step;
+				if (hd_fade_gain <= 0)
+				{
+					hd_fade_gain = 0;
+					hd_fade_active = false;
+					music_stopped = true;
+					// Zero the tail once faded out.
+					for (int j = i + 1; j < samplesCount; ++j)
+						samples[j] = 0;
+					break;
+				}
+			}
+		}
+	}
+	else if (!music_disabled && !music_stopped)
 	{
 		Sint16 *remaining = samples;
 		int remainingCount = samplesCount;
@@ -172,7 +376,8 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 	}
 
 	Sint32 musicVolumeFactor = volumeFactorTable[musicVolume];
-	musicVolumeFactor *= 2;  // OPL emulator is too quiet
+	if (!hd_active)
+		musicVolumeFactor *= 2;  // OPL emulator is too quiet; HD audio is already full-scale
 
 	if (samples_disabled && !music_disabled)
 	{
@@ -240,6 +445,7 @@ void deinit_audio(void)
 
 	memset(channelSampleCount, 0, sizeof channelSampleCount);
 
+	hd_music_close();
 	lds_free();
 }
 
@@ -286,6 +492,9 @@ void play_song(unsigned int song_num)  // FKA NortSong.playSong
 		SDL_UnlockAudioDevice(audioDevice);
 
 		load_song(song_num);
+		// music_stopped is true here, so the callback won't touch HD/LDS state
+		// while we swap it -- same reasoning as load_song above.
+		hd_music_load_song(song_num);
 
 		song_playing = song_num;
 	}
@@ -304,7 +513,16 @@ void restart_song(void)  // FKA Player.selectSong(1)
 
 	SDL_LockAudioDevice(audioDevice);
 
-	lds_rewind();
+	if (hd_active)
+	{
+		stb_vorbis_seek_start(hd_vorbis);
+		hd_ended = false;
+		hd_fade_active = false;
+	}
+	else
+	{
+		lds_rewind();
+	}
 
 	music_stopped = false;
 
@@ -330,7 +548,17 @@ void fade_song(void)  // FKA Player.selectSong($C001)
 
 	SDL_LockAudioDevice(audioDevice);
 
-	lds_fade(1);
+	if (hd_active)
+	{
+		// Ramp the HD gain to zero over ~1.5 s, then stop (see the callback).
+		hd_fade_active = true;
+		hd_fade_gain = 1 << 12;  // unity, Q12
+		hd_fade_step = (1 << 12) / (audioSampleRate * 3 / 2) + 1;
+	}
+	else
+	{
+		lds_fade(1);
+	}
 
 	SDL_UnlockAudioDevice(audioDevice);
 }

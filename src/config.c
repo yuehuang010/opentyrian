@@ -263,6 +263,7 @@ bool load_opentyrian_config(void)
 	crt_mode = false;
 	highfps_mode = false;
 	hd_sfx = true;
+	hd_music = true;
 	window_width = 0;
 	window_height = 0;
 	set_scaler_by_name("Scale2x");
@@ -329,6 +330,7 @@ bool load_opentyrian_config(void)
 	if (section != NULL)
 	{
 		config_get_bool_option(section, "hd_sfx", &hd_sfx);
+		config_get_bool_option(section, "hd_music", &hd_music);
 	}
 
 	fclose(file);
@@ -378,6 +380,7 @@ bool save_opentyrian_config(void)
 		exit(EXIT_FAILURE);  // out of memory
 
 	config_set_bool_option(section, "hd_sfx", hd_sfx, FALSE_TRUE);
+	config_set_bool_option(section, "hd_music", hd_music, FALSE_TRUE);
 
 #ifndef TARGET_WIN32
 	mkdir(get_user_directory(), 0700);

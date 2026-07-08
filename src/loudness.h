@@ -30,6 +30,11 @@ extern unsigned int song_playing;
 
 extern bool audio_disabled, music_disabled, samples_disabled;
 
+// master toggle for the HD (streamed OGG Vorbis) music remaster (Phase S1);
+// default on, falls back to the live LDS/OPL2 synth per-song if the OGG for the
+// playing track is missing or fails to decode.
+extern bool hd_music;
+
 bool init_audio(void);
 void deinit_audio(void);
 
