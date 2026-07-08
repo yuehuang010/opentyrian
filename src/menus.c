@@ -76,6 +76,15 @@ bool gameplaySelect(void)
 
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, gameplay_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
+
+			// In HD mode, fade in before the items are drawn: the fade's presents
+			// drain the immediate-mode HD glyph queue, so items emitted before
+			// fade_palette would be missing from the held post-fade frame.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+			}
 		}
 
 		// Restore background and header.
@@ -100,7 +109,8 @@ bool gameplaySelect(void)
 		{
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
-			fade_palette(colors, 10, 0, 255);
+			if (!hd_mode)
+				fade_palette(colors, 10, 0, 255);
 
 			restart = false;
 		}
@@ -265,6 +275,13 @@ bool episodeSelect(void)
 
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, episode_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
+
+			// See gameplaySelect: in HD mode the fade must precede the item draws.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+			}
 		}
 
 		// Restore background and header.
@@ -288,7 +305,8 @@ bool episodeSelect(void)
 		{
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
-			fade_palette(colors, 10, 0, 255);
+			if (!hd_mode)
+				fade_palette(colors, 10, 0, 255);
 
 			restart = false;
 		}
@@ -445,6 +463,13 @@ bool difficultySelect(void)
 
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, difficulty_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
+
+			// See gameplaySelect: in HD mode the fade must precede the item draws.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+			}
 		}
 
 		// Restore background and header.
@@ -468,7 +493,8 @@ bool difficultySelect(void)
 		{
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
-			fade_palette(colors, 10, 0, 255);
+			if (!hd_mode)
+				fade_palette(colors, 10, 0, 255);
 
 			restart = false;
 		}
