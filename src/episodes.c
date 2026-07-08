@@ -24,6 +24,8 @@
 #include "lvlmast.h"
 #include "opentyr.h"
 
+#include <string.h>
+
 /* MAIN Weapons Data */
 JE_WeaponPortType weaponPort;
 JE_WeaponType     weapons[WEAP_NUM + 1]; /* [0..weapnum] */
@@ -108,6 +110,36 @@ void JE_loadItemDat(void)
 		fread_u16_die(&weaponPort[i].cost,        1, f);
 		fread_u16_die(&weaponPort[i].itemgraphic, 1, f);
 		fread_u16_die(&weaponPort[i].poweruse,    1, f);
+	}
+
+	// Recenter the front Vulcan Cannon's shots. The stock data ships it as the
+	// only front weapon whose barrel offset is off the ship centerline (bx =
+	// -4..-8; every other front weapon has bx == 0), so its stream fires visibly
+	// left of the ship -- obvious in HD and in the shop preview where the ship is
+	// parked. Zero the bx of its power-level weapons so it fires from center like
+	// the rest. Scoped strictly to the FIRST port named "Vulcan Cannon" (the
+	// front one; the rear Vulcan is a later port and its high-power form uses a
+	// deliberately symmetric bx spread we must not touch), and only its active
+	// firing modes (opnum) so unused op[] slots can't drag in other weapons. The
+	// front Vulcan is multi==1 at every power, so bx is a pure offset -- zeroing
+	// it changes nothing but the horizontal spawn position. Fails closed: if no
+	// such port exists in the loaded data, nothing changes.
+	for (int i = 0; i < PORT_NUM + 1; ++i)
+	{
+		if (strncmp(weaponPort[i].name, "Vulcan Cannon", 13) != 0)
+			continue;
+
+		for (int mode = 0; mode < weaponPort[i].opnum && mode < 2; ++mode)
+		{
+			for (int pw = 0; pw < 11; ++pw)
+			{
+				JE_word wi = weaponPort[i].op[mode][pw];
+				if (wi != 0 && wi <= WEAP_NUM)
+					for (int s = 0; s < 8; ++s)
+						weapons[wi].bx[s] = 0;
+			}
+		}
+		break;  // only the first (front) Vulcan Cannon
 	}
 
 	for (int i = 0; i < SPECIAL_NUM + 1; ++i)
