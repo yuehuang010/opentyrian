@@ -127,6 +127,7 @@ void setupMenu(void)
 		MENU_ITEM_SOUND_VOLUME,
 		MENU_ITEM_HD_MUSIC,
 		MENU_ITEM_HD_SFX,
+		MENU_ITEM_HD_TILES,
 	} MenuItemId;
 
 	typedef enum
@@ -170,6 +171,7 @@ void setupMenu(void)
 				{ MENU_ITEM_DISPLAY, "Display:", "Change the display mode.", getDisplayPickerItemsCount, getDisplayPickerItem },
 				{ MENU_ITEM_SCALER, "Scaler:", "Change the pixel art scaling algorithm.", getScalerPickerItemsCount, getScalerPickerItem },
 				{ MENU_ITEM_SCALING_MODE, "Scaling Mode:", "Change the scaling mode.", getScalingModePickerItemsCount, getScalingModePickerItem },
+				{ MENU_ITEM_HD_TILES, "HD Tiles:", "Upscale in-flight level backgrounds (Off = classic).", getOnOffPickerItemsCount, getOnOffPickerItem },
 				{ MENU_ITEM_DONE, "Done", "Return to the previous menu." },
 				{ -1 }
 			},
@@ -309,6 +311,10 @@ void setupMenu(void)
 
 			case MENU_ITEM_HD_SFX:
 				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_sfx ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				break;
+
+			case MENU_ITEM_HD_TILES:
+				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_tiles ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			default:
@@ -642,6 +648,14 @@ void setupMenu(void)
 					pickerSelectedIndex = hd_sfx ? 1 : 0;
 					break;
 				}
+				case MENU_ITEM_HD_TILES:
+				{
+					JE_playSampleNum(S_CLICK);
+
+					currentPicker = selectedMenuItemId;
+					pickerSelectedIndex = hd_tiles ? 1 : 0;
+					break;
+				}
 				case MENU_ITEM_MUSIC_VOLUME:
 				{
 					JE_playSampleNum(S_CLICK);
@@ -812,6 +826,14 @@ void setupMenu(void)
 						hd_sfx = value;
 						reload_sound_samples(xmas);  // rebuild the sample banks now
 					}
+					break;
+				}
+				case MENU_ITEM_HD_TILES:
+				{
+					// Applies live: interp_flight_emit reads hd_tiles each present, so
+					// no reload is needed -- the next flight frame composites (or stops
+					// compositing) HD tiles.
+					hd_tiles = pickerSelectedIndex == 1;
 					break;
 				}
 				default:
