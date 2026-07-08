@@ -56,5 +56,6 @@ tyrian.sav
 # Local double-click launcher (symlinks the built ./opentyrian binary)
 /OpenTyrian.app/
 
-# S0 standalone bundle (generated artifact)
+# S0/S5 standalone bundles (generated artifacts)
 tyrian.base
+tyrian.hd
