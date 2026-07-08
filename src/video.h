@@ -79,7 +79,7 @@ SDL_Texture *load_hd_sheet_frame(int sheet_id, int index); // load+cache one HD 
 bool hd_flight_lookup(int sheet_id, int index);            // true iff a frame texture is available (loading it if needed)
 
 // Recoloring parity for blit_sprite2_filter's hue-band remap (enemy tints; see
-// doc/REMASTER_FLIGHT_COMPOSITOR.md §3). Synthesizes (and caches, LRU-capped) an
+// internal/plan/REMASTER_FLIGHT_COMPOSITOR.md §3). Synthesizes (and caches, LRU-capped) an
 // RGBA texture for one (sheet, frame index, filter byte) combination from the
 // "hdcompb_<stem>_NN.dat" brightness-map asset + the live palette (`colors[]`),
 // smoothly interpolating between the two nearest of the filter byte's 16 shades.

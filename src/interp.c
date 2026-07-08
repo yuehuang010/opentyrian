@@ -499,7 +499,7 @@ static void flight_emit_tile(int sheet, unsigned int index, int dx, int dy,
 
 // Emits a single 12x14 HD tile through the hue-band recoloring parity path
 // (blit_sprite2_filter's `filter | brightness` remap; see
-// doc/REMASTER_FLIGHT_COMPOSITOR.md §3 and load_hd_sheet_frame_filtered's
+// internal/plan/REMASTER_FLIGHT_COMPOSITOR.md §3 and load_hd_sheet_frame_filtered's
 // comment in video.c for the exact byte-layout derivation). Synthesized frames
 // already carry the final RGB + coverage alpha, so they draw opaque/BLEND with
 // no colormod, same as flight_emit_tile's plain case. A cache/asset miss is a
@@ -554,7 +554,7 @@ void interp_flight_emit(float alpha)
 			continue;
 
 		// Map the recorded blit variant to an SDL2 recolor per the parity table in
-		// doc/REMASTER_FLIGHT_COMPOSITOR.md §3. `_filter`/hue-band parity is deferred
+		// internal/plan/REMASTER_FLIGHT_COMPOSITOR.md §3. `_filter`/hue-band parity is deferred
 		// (SDL colormod can't rotate hue) -- those variants stay pure 8-bit for now.
 		SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
 		Uint8 r = 255, g = 255, b = 255, a = 255;
@@ -595,7 +595,7 @@ void interp_flight_emit(float alpha)
 		case INTERP_SPRITE2_FILTER_CLIP:
 			// hue-band remap (enemy tints): resolved via the on-demand recolored-frame
 			// cache (load_hd_sheet_frame_filtered, video.c) keyed on op->filter, which
-			// is only ever produced by blit_enemy() -- see doc/REMASTER_FLIGHT_COMPOSITOR.md §3.
+			// is only ever produced by blit_enemy() -- see internal/plan/REMASTER_FLIGHT_COMPOSITOR.md §3.
 			is_filter = true;
 			break;
 		case INTERP_SPRITE2X2_FILTER:

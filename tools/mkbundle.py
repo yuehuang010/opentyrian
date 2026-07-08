@@ -2,7 +2,7 @@
 """
 mkbundle.py -- build the OpenTyrian standalone asset bundle (`tyrian.base`).
 
-Phase S0 of doc/STANDALONE_PLAN.md: pack the classic required game-data /
+Phase S0 of internal/plan/STANDALONE_PLAN.md: pack the classic required game-data /
 asset set into a single archive that the engine's `dir_fopen` choke point
 falls back to when no loose file is found on disk. This lets a checkout with
 no `--data` dir still boot.

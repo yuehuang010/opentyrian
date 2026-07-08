@@ -68,7 +68,7 @@ byte-for-byte against every sheet listed below -- zero decode anomalies):
     }
 
 --------------------------------------------------------------------------
-SHEETS EXTRACTED (see doc/REMASTER_ASSETS.md sec.3; source call sites are
+SHEETS EXTRACTED (see internal/plan/REMASTER_ASSETS.md sec.3; source call sites are
 src/sprite.c JE_loadMainShapeTables()/JE_loadCompShapes(), src/tyrian2.c,
 src/destruct.c, src/game_menu.c):
 

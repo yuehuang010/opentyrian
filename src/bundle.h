@@ -22,7 +22,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-// Standalone asset bundle (Phase S0 of doc/STANDALONE_PLAN.md).
+// Standalone asset bundle (Phase S0 of internal/plan/STANDALONE_PLAN.md).
 //
 // `tyrian.base` is a single archive built by tools/mkbundle.py. When a loose
 // file is not found on disk, `dir_fopen` in file.c falls back to the bundle so

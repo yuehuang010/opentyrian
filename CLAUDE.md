@@ -87,10 +87,27 @@ Rules of thumb:
   invasive or correctness-sensitive diff, review it from the main session (Opus) or
   spawn an Opus reviewer before merging.
 - **Scope each subagent tightly** — one phase / one well-bounded change, with the
-  design decided up front (see `doc/REMASTER_PLAN.md`). Ambiguous scope wastes the
-  cheaper tiers. Use `isolation: "worktree"` when subagents edit files in parallel.
+  design decided up front (see `internal/plan/REMASTER_PLAN.md`). Ambiguous scope
+  wastes the cheaper tiers. Use `isolation: "worktree"` when subagents edit files in parallel.
 - Delegating remaster implementation to Sonnet subagents is the established pattern
   for this repo.
+
+## Internal docs, plans & issues
+
+Project working knowledge that isn't obvious from the code or git history lives in
+**`internal/`** (version-controlled; relocated from Claude Code's per-user memory).
+**Read `internal/README.md` at the start of a session** for current context, and add
+new notes/issues there rather than to per-user memory.
+
+- **`internal/`** — short notes: run-flag gotchas, agent-orchestration conventions,
+  and one-line pointers into the plan docs. `internal/README.md` indexes them.
+- **`internal/plan/`** — the design & planning docs (moved here from `doc/`):
+  - `REMASTER_PLAN.md` — HD remaster architecture & phases ("HD skin, plays identical").
+  - `REMASTER_ASSETS.md` — per-asset HD status/inventory & wiring checklist.
+  - `REMASTER_FLIGHT_COMPOSITOR.md` — in-flight HD sprite compositor design (referenced from `src/interp.c`, `src/video.h`).
+  - `STANDALONE_PLAN.md` — zero-external-data effort, phases S0–S5 (referenced from `src/bundle.h`, `tools/mkbundle.py`).
+- **`internal/issue/`** — known issues, **one markdown file per issue**, each with a
+  `status` field in its front-matter (e.g. `status: Fixed` / `fixed-in: <sha>`).
 
 ## Reference
 
