@@ -142,6 +142,16 @@ display + human A/B rather than a headless run.
   atlas loads, `hd_bg=1`, **177k tile lookups 0 misses**, no crash over 90 s.
   Builds clean `make` + `make debug` (`-Werror`). **Seam quality (nearest vs
   lanczos) is the only remaining gate — needs a display + human A/B.**
+- **Palette is ALWAYS `palettes[5]` in gameplay** (verified static + runtime):
+  `tyrian2.c:790` unconditionally calls `JE_loadPic(twoPlayerMode ? 6 : 3)` right
+  after `JE_loadMap()` and before any tile draws; `JE_loadPic` sets
+  `colors = palettes[pcxpal[PCXnumber]]` and `pcxpal[2]==pcxpal[5]==5`, so both
+  1P and 2P resolve to palette 5 every level/episode — the flow script's
+  P/U/V/R/C palette is clobbered first. So **only 5 atlases exist** (`)wxyz`
+  × p05), one per shape bank. The runtime `current_palette_index()` keying is
+  kept anyway (robust: a transient filter/fade that diverges `colors[]` from
+  `palettes[5]` falls back to classic that frame). Bank↔level mapping +
+  provenance: `tools/hd_tile_manifest.py` → `tyrian21/hd_tile_manifest.json`.
 
 Effort: S ≈ days · M ≈ weeks, hobby-pace. S0 and S4 are the same tool at
 two moments; S1–S3 are independent and parallelizable (separate subagents).
