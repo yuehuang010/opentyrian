@@ -1330,6 +1330,24 @@ def process_extra_shapes(palette_cache, manifest_frames):
     return written
 
 
+def write_credits_backdrop_filler():
+    """
+    Write a solid-black dummy HD backdrop asset (hdpcx_credblack.dat) used
+    only to *activate* HD compositing (hd_backdrop_active) for the credits
+    screen (src/mainint.c JE_playCredits()), which has no full-screen picture
+    of its own -- it's a scrolling black background with a small EXTRA_SHAPES
+    corner picture. The hd_set_sprite() overlay queue is only drawn while an
+    HD backdrop is active (see src/video.c scale_and_flip()), so credits
+    needs *some* backdrop asset to unlock the per-frame hdextra_NN.dat corner
+    sprite; a flat black filler is visually identical to the classic black
+    background it sits behind. No source file required -- always (re)written.
+    """
+    pixels = bytes([0, 0, 0, 255]) * (8 * 8)
+    out_path = os.path.join(DATA_DIR, "hdpcx_credblack.dat")
+    write_hdpx_asset(out_path, pixels, 8, 8, channels=4)
+    print("Wrote credits filler backdrop -> %s" % out_path)
+
+
 def parse_pics_arg(value):
     result = []
     for part in value.split(","):
@@ -1371,6 +1389,8 @@ def main():
             failed.append(n)
 
     os.makedirs(DATA_DIR, exist_ok=True)
+
+    write_credits_backdrop_filler()
 
     skipped_pcx = []
     failed_pcx = []

@@ -2581,6 +2581,19 @@ void JE_playCredits(void)
 
 	//tempScreenSeg = VGAScreenSeg;
 
+	// HD: the credits screen has no full-screen picture of its own (it's a
+	// scrolling black background with a small EXTRA_SHAPES corner picture,
+	// crossfading between frames), so there's no natural "backdrop" to hang
+	// hd_set_sprite() off -- that overlay queue is only drawn while an HD
+	// backdrop is active (see src/video.c scale_and_flip()). Activate HD
+	// compositing with a flat black filler backdrop (hdpcx_credblack.dat,
+	// see tools/hd_extract.py write_credits_backdrop_filler()) purely to
+	// unlock the corner-sprite overlay; it's visually identical to the
+	// classic black background it sits behind. hd_clear_backdrop() below
+	// always runs, so this is a no-op when hd_mode is off or the asset
+	// failed to load.
+	const bool hd_credits = hd_mode && hd_set_backdrop_asset("credblack");
+
 	const int ticks_max = lines * 20 * 3;
 	for (int ticks = 0; ticks < ticks_max; ++ticks)
 	{
@@ -2588,7 +2601,21 @@ void JE_playCredits(void)
 
 		JE_clr256(VGAScreen);
 
-		blit_sprite_hv(VGAScreenSeg, 319 - sprite(EXTRA_SHAPES, currentpic)->width, 100 - (sprite(EXTRA_SHAPES, currentpic)->height / 2), EXTRA_SHAPES, currentpic, 0x0, fade - 15);
+		// Classic per-picture crossfade brightness (fade, 0..15) maps directly
+		// onto the HD backdrop's 0..255 fade factor, which scale_and_flip()
+		// applies uniformly to both the backdrop and any queued HD sprites --
+		// safe here since only one corner picture is ever queued at a time.
+		if (hd_credits)
+			hd_backdrop_fade = fade * 17;
+
+		char hd_extra_name[24];
+		snprintf(hd_extra_name, sizeof hd_extra_name, "hdextra_%02d.dat", currentpic);
+		if (!(hd_credits && hd_set_sprite(hd_extra_name,
+				319 - sprite(EXTRA_SHAPES, currentpic)->width, 100 - (sprite(EXTRA_SHAPES, currentpic)->height / 2),
+				sprite(EXTRA_SHAPES, currentpic)->width, sprite(EXTRA_SHAPES, currentpic)->height)))
+		{
+			blit_sprite_hv(VGAScreenSeg, 319 - sprite(EXTRA_SHAPES, currentpic)->width, 100 - (sprite(EXTRA_SHAPES, currentpic)->height / 2), EXTRA_SHAPES, currentpic, 0x0, fade - 15);
+		}
 
 		fade += fadechg;
 		if (fade == 0 && fadechg == -1)
@@ -2705,6 +2732,15 @@ void JE_playCredits(void)
 		if (waitUntilGetInputOrElapsed())
 			break;
 	}
+
+	// Closing bake: fade_black() below dims via the classic palette only (no
+	// HD-backdrop lock-step once we clear it), so bake the last-shown corner
+	// picture into VGAScreen classically before dropping HD compositing --
+	// otherwise it would have only ever been drawn via the HD sprite overlay
+	// and would pop out one frame early as we transition to fade_black.
+	if (hd_credits)
+		blit_sprite_hv(VGAScreenSeg, 319 - sprite(EXTRA_SHAPES, currentpic)->width, 100 - (sprite(EXTRA_SHAPES, currentpic)->height / 2), EXTRA_SHAPES, currentpic, 0x0, fade - 15);
+	hd_clear_backdrop();
 
 	fade_black(10);
 
