@@ -89,7 +89,7 @@ covers every consumer.
 |------:|------|------|:------:|:----:|
 | **S0** | Bundle VFS | `dir_fopen` falls back to a bundled pak; game boots with no data dir | S | Low |
 | **S1** | Music remaster | 41 tracks rendered/remastered to streamed OGG behind a toggle | M | Med |
-| **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low |
+| **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low — 🔨 experiment done, method chosen (see §S2) |
 | **S3** | Remaining art | `shapes?.dat` tilesets, `estsc.shp`, `tshp2.pcx`, menu-sprite dormancy | M | Med |
 | **S4** | Data bundling | All required game-data files packed into the bundle | S | Low |
 | **S5** | Packaging & zero-data boot | Compressed asset formats, repo/release hosting, clean-checkout verification | M | Med |
@@ -155,20 +155,43 @@ callback; keep the LDS path untouched and A/B by toggle.
 
 Small format, big win: samples are signed 8-bit mono @ 11025 Hz.
 
-1. **Extractor** `tools/hd_extract_snd.py`: split `tyrian.snd` (~38
-   effects) + `voices.snd` + `voicesc.snd` into WAVs (names from
-   `sndmast.c`), replicating the engine's quirks (last-100-bytes strip on
-   voices).
-2. **Enhance:** 16-bit conversion, DC/click cleanup, gentle
-   upsample-with-filtering (or AI audio super-resolution if a model is
-   available — curate, don't bulk-trust).
-3. **Package** as `hdsfx_NN.dat`/WAV in the bundle; `loadSndFile()` in
-   `nortsong.c` prefers the HD sample per index, falls back per-sample to
-   classic. Same 8-channel mixer, same trigger points → cadence identical.
+**Status: upsampling experiment complete (2026-07-08); method chosen.**
+Prototype tooling + full metrics live on worktree branch
+`worktree-agent-ae4e628680beb001d` (`tools/hd_extract_snd.py`,
+`tools/hd_upsample_snd.py`, `tools/HDSFX_EXPERIMENT.md`,
+`tools/hdsfx_previews/`) — pending review/promotion into `hd-remaster`.
+
+1. **Extractor** `tools/hd_extract_snd.py` *(built, verified)*: splits
+   `tyrian.snd` + `voices.snd` + `voicesc.snd` into WAVs (names from
+   `sndmast.c`), replicating the last-100-bytes voice strip. Actual counts,
+   verified against `SFX_COUNT`/`VOICE_COUNT`: **29 SFX + 9 voices + 9
+   Christmas voices = 47 samples**.
+2. **Enhance — chosen method: DC-offset removal + soxr VHQ polyphase
+   resample + TPDF dither, NO extra low-pass.** Findings from the 5-method
+   experiment (47 samples × 5 candidates, per-sample metrics):
+   - The naive linear control (≈ today's `SDL_ConvertAudio`) leaves ~90×
+     more above-Nyquist imaging fizz than soxr (0.175% vs 0.002% of energy
+     above the source's 5.5 kHz band) — the status quo is measurably bad.
+   - Voices carry large DC offsets (up to 0.36 normalized) → audible
+     clicks; DC removal is a genuine repair, not a tonal change (the
+     ~−0.3 dB RMS delta is DC energy leaving).
+   - An extra Butterworth low-pass was **rejected on evidence**: it rings
+     and migrates explosion transient peaks. soxr/linear keep the
+     full-scale peak on the exact sample.
+   - Offline-tooling deps: soxr + scipy in a venv (engine untouched);
+     `scipy.signal.resample_poly` is the dependency-lighter fallback.
+   - AI super-resolution remains an optional later curation pass.
+3. **Package** as a baked 16-bit/44.1 kHz bank mirroring the `.snd`
+   layout (count + offsets + PCM); `loadSndFile()` in `nortsong.c` prefers
+   the HD bank per index, falls back per-sample to classic. Same 8-channel
+   mixer, same trigger points → cadence identical.
 
 **Exit criteria:** side-by-side listen of every effect; no timing change
-(sample *durations* must match the originals closely — gameplay cues like
-the item-screen voices are timed by sample length).
+(sample *durations* must match the originals exactly — gameplay cues like
+the item-screen voices are timed by sample length). The duration
+constraint is already proven for the pipeline: all 235 experiment outputs
+are exactly 4× the source sample count. Remaining: the human listening
+pass and the engine-side loader wiring.
 
 ### Phase S3 — Remaining art (closing the visual inventory)
 
@@ -241,7 +264,7 @@ output, unshippable as a distribution (ending anim alone ≈ 450 MB raw).
 | Risk | Mitigation |
 |---|---|
 | Music loop seams / jukebox regressions | Render intro+loop segments; A/B toggle vs live LDS; test all 41 in `jukebox.c` |
-| SFX duration drift changes game feel | Keep remastered sample lengths matched to originals; per-sample fallback |
+| SFX duration drift changes game feel | ✅ retired for the resample pipeline (all 235 experiment outputs exactly 4× source length); constraint re-applies if AI enhancement is added later |
 | Tileset upscale shows grid seams | Upscale with neighbor-tile padding or whole-row assembly; visual A/B per level |
 | Bundle too big to host | Two-tier pak (classic ≈ 6 MB committed; HD as release artifact), QOI/atlas + zstd |
 | VFS fallback breaks an exotic loader | Single choke point (`file.c`); exhaustive call-site inventory already done (this doc §2) |
