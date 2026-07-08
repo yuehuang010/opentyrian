@@ -18,6 +18,7 @@
  */
 #include "file.h"
 
+#include "bundle.h"
 #include "opentyr.h"
 #include "varz.h"
 
@@ -76,6 +77,12 @@ FILE *dir_fopen(const char *dir, const char *file, const char *mode)
 	FILE *f = fopen(path, mode);
 
 	free(path);
+
+	// Loose files on disk always win. Only when the disk lookup fails do we
+	// fall back to the bundled asset (Phase S0). Write modes never hit the
+	// bundle -- it is read-only, and savegames/config must reach disk.
+	if (f == NULL && strchr(mode, 'r') != NULL && strpbrk(mode, "wa+") == NULL)
+		f = bundle_fopen(file);
 
 	return f;
 }

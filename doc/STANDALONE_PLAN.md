@@ -87,11 +87,11 @@ covers every consumer.
 
 | Phase | Name | Goal | Effort | Risk |
 |------:|------|------|:------:|:----:|
-| **S0** | Bundle VFS | `dir_fopen` falls back to a bundled pak; game boots with no data dir | S | Low |
+| **S0** | Bundle VFS | `dir_fopen` falls back to a bundled pak; game boots with no data dir | S | Low | ✅ **done** |
 | **S1** | Music remaster | 41 tracks rendered/remastered to streamed OGG behind a toggle | M | Med |
 | **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low — 🔨 experiment done, method chosen (see §S2) |
 | **S3** | Remaining art | `shapes?.dat` tilesets, `estsc.shp`, `tshp2.pcx`, menu-sprite dormancy | M | Med |
-| **S4** | Data bundling | All required game-data files packed into the bundle | S | Low |
+| **S4** | Data bundling | All required game-data files packed into the bundle | S | Low | ✅ **satisfied by S0** (bundle already packs the byte-exact set) |
 | **S5** | Packaging & zero-data boot | Compressed asset formats, repo/release hosting, clean-checkout verification | M | Med |
 
 Effort: S ≈ days · M ≈ weeks, hobby-pace. S0 and S4 are the same tool at
@@ -122,6 +122,29 @@ phase just adds files to it.
 **Exit criteria:** delete/rename `tyrian21/`, run
 `SDL_VIDEODRIVER=dummy ./opentyrian` with a bundle containing the classic
 required set — full boot to title, attract demo runs.
+
+**✅ Landed.** Implementation:
+- `tools/mkbundle.py` builds `tyrian.base` — magic `TYBUNDL1`, LE index
+  (name → compression byte → uncompressed/compressed size → absolute
+  offset) then concatenated blobs. S0 ships everything STORE; the
+  compression byte + split sizes are forward-compat for S5's zstd. Packs a
+  glob-minus-exclusions of the source dir (drops the DOS-tool + generated
+  HD files), 79 files / 11.3 MiB from `tyrian21`.
+- `src/bundle.c`/`.h`: the bundle is slurped fully resident on first miss
+  (search order mirrors `data_dir`: `custom_data_dir`, `TYRIAN_DIR`,
+  `data`, `.`, then `SDL_GetBasePath()`). `bundle_fopen` hands out a
+  zero-copy read-only `fmemopen` slice over the resident blob (Windows
+  fallback: `tmpfile`). `bundle_available`/`bundle_has` for existence.
+- `src/file.c`: `dir_fopen` tries `fopen` on disk first, then falls back to
+  `bundle_fopen` for read-only modes only. Loose files always win;
+  savegame/config writes never touch the bundle. `dir_file_exists` inherits
+  the fallback for free (it routes through `dir_fopen`).
+
+Verified: `make` + `make debug` (`-Werror`) both clean; headless boot with
+**no `--data`** runs to the title/attract loop from the bundle alone;
+removing `tyrian.base` restores the graceful "required data files could not
+be found" halt; `--data ./tyrian21` still loads HD assets from disk (zero
+bundle fallbacks) → Invariant 2 intact.
 
 ### Phase S1 — Music remaster
 
