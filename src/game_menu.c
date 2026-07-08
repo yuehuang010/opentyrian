@@ -155,6 +155,21 @@ void JE_itemScreen(void)
 {
 	bool quit = false;
 
+	// The shop has no HD backdrop of its own (see the hd_set_sprite() calls
+	// below, which are already dead in the intended case -- ordinarily reached
+	// with no backdrop active, so they always no-op). But difficulty-select --
+	// or, when the shop is opened mid-game via a level-script 'I' command, an
+	// earlier HD screen -- can leave hd_backdrop_active true on entry here.
+	// That leaked backdrop doesn't match this screen's own palette/picture, so
+	// the composited path in scale_and_flip() (src/video.c) both color-keys
+	// index 0 transparent (bleeding the mismatched backdrop through anywhere
+	// the shop intentionally draws solid black, e.g. JE_drawShipSpecs's tech
+	// screen) and tints it with a stale fade factor -- the ship-spec zoom's
+	// white-flash bug. Clear it once on entry so the whole shop renders on the
+	// plain classic 8-bit path, where held/re-presented frames simply persist.
+	if (hd_mode)
+		hd_clear_backdrop();
+
 	if (shopSpriteSheet.data == NULL)
 		JE_loadCompShapes(&shopSpriteSheet, '1');
 
@@ -2325,6 +2340,20 @@ void JE_doShipSpecs(void)
 
 	//reset VGAScreen2, which we clobbered
 	JE_loadPic(VGAScreen2, 1, false);
+
+	// The ship-spec tech screen is built on game_screen (8-bit) and zoom-blitted
+	// onto VGAScreen by JE_scaleInPicture, which ends in an 8-bit->8-bit
+	// SDL_BlitSurface. That blit only copies indices verbatim while both surfaces
+	// share the same SDL palette. If an HD backdrop is still active here, the
+	// backdrop branch of scale_and_flip() (src/video.c) re-sets VGAScreen's SDL
+	// palette to the live colors[] every present, desyncing it from game_screen's
+	// palette -- SDL then silently remaps the blit by nearest-RGB and the whole
+	// tech screen turns solid white. Force the classic present path for the
+	// duration of this screen so the zoom + held frame stay the plain 8-bit tech
+	// screen. (The entry clear in JE_itemScreen isn't enough: a mid-shop path can
+	// leave the backdrop re-activated by the time specs is selected.)
+	if (hd_mode)
+		hd_clear_backdrop();
 
 	//draw it
 	JE_playSampleNum(S_SPRING);

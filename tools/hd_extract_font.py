@@ -246,6 +246,96 @@ def decode_sprite_rle(sprite):
 
 
 # ---------------------------------------------------------------------------
+# STEP 1b: corner-softening normalization (HD consistency fix)
+#
+# The original Tyrian tiny-font art anti-aliases glyphs by dimming CONVEX-CORNER
+# pixels to a lower brightness level (3, vs. 7 for straight strokes) while the
+# bulk of each stroke stays at full brightness. Most glyphs carry this gradient,
+# but ~30 of the 127 tiny glyphs (the pure straight-stroke shapes: '4'=idx 73,
+# 'E'/'F'/'H'/'I'=idx 4/5/7/8, etc.) ship FLAT -- every opaque pixel is a single
+# brightness level, with no corner dimming. At HD 4x these flat glyphs read
+# brighter/bolder than their anti-aliased neighbours (e.g. the '4' in a jukebox
+# song number pops brighter than the '0'). This pass reproduces the original AA
+# convention ON THE SOURCE NIBBLE GRID for flat glyphs only, so the HD output is
+# consistent; gradient glyphs (>1 brightness level) are left completely
+# untouched and their .dat bytes stay byte-identical.
+# ---------------------------------------------------------------------------
+
+def corner_soften_flat_glyph(indices, width, height):
+    """
+    If every opaque pixel of this glyph shares a single brightness level L
+    (a FLAT glyph), dim each CONVEX-CORNER opaque pixel to the font's AA level
+    and return a new indices list; otherwise (a gradient glyph, using >1
+    brightness level) return the input list UNCHANGED so its output stays
+    byte-identical.
+
+    A convex corner is an opaque pixel that has transparent-or-out-of-bounds
+    neighbours on TWO PERPENDICULAR orthogonal sides (one of {up&left},
+    {up&right}, {down&left}, {down&right}). A pixel transparent only on
+    OPPOSITE sides (a thin straight stroke) is NOT a corner and keeps level L.
+
+    AA corner level: 3 when L==7 (the level the gradient tiny glyphs use for
+    their corners -- verified: this exactly reproduces the '0' glyph's four
+    level-3 corners); for any other flat level, corner_level = max(1,
+    round(L * 3/7)) so the dimming scales proportionally.
+
+    Only the low nibble (brightness) is rewritten; the high nibble (unused by
+    every font draw path) is preserved.
+    """
+    levels = set()
+    for raw in indices:
+        if raw is not None:
+            levels.add(raw & 0x0f)
+
+    if len(levels) != 1:
+        return indices  # gradient glyph -> untouched, byte-identical output
+
+    L = next(iter(levels))
+    if L == 7:
+        corner_level = 3
+    else:
+        corner_level = max(1, int(round(L * 3.0 / 7.0)))
+    if corner_level >= L:
+        return indices  # nothing to dim (degenerate; leaves output unchanged)
+
+    def opaque(x, y):
+        if x < 0 or y < 0 or x >= width or y >= height:
+            return False
+        return indices[y * width + x] is not None
+
+    corners = []
+    core_pixels = 0
+    for y in range(height):
+        for x in range(width):
+            if not opaque(x, y):
+                continue
+            up = opaque(x, y - 1)
+            dn = opaque(x, y + 1)
+            lf = opaque(x - 1, y)
+            rt = opaque(x + 1, y)
+            # Convex corner: transparent on two PERPENDICULAR sides.
+            is_corner = ((not up and not lf) or (not up and not rt)
+                         or (not dn and not lf) or (not dn and not rt))
+            if is_corner:
+                corners.append(y * width + x)
+            else:
+                core_pixels += 1
+
+    # AA dims convex corners RELATIVE to a full-brightness straight-stroke core.
+    # A glyph with no core -- an isolated dot / 1px-wide punctuation mark ('.',
+    # ',', ':') where every opaque pixel is a "corner" -- has nothing to
+    # contrast against; dimming it whole would just make punctuation faint. Such
+    # glyphs are left at full brightness (output stays byte-identical).
+    if core_pixels == 0:
+        return indices
+
+    out = list(indices)
+    for p in corners:
+        out[p] = (indices[p] & 0xf0) | corner_level
+    return out
+
+
+# ---------------------------------------------------------------------------
 # STEP 2: raw glyph bytes -> flat RGBA brightness-map bytearray
 # (R=G=B=brightness*17 (0..15 -> 0..255), alpha=0/255 coverage)
 # ---------------------------------------------------------------------------
@@ -694,6 +784,10 @@ def process_font_tables(want_preview):
             indices, src_w, src_h = decode_sprite_rle(glyph)
             if src_w == 0 or src_h == 0:
                 continue
+
+            # Corner-soften flat glyphs for HD consistency (no-op on gradient
+            # glyphs, which stay byte-identical). See corner_soften_flat_glyph.
+            indices = corner_soften_flat_glyph(indices, src_w, src_h)
 
             rgba = brightness_map_rgba(indices)
             upscaled = xbrz_scale_4x(rgba, src_w, src_h)

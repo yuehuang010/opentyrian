@@ -1418,6 +1418,15 @@ typedef struct
 	Uint8 hue;
 	Sint8 value;
 	int mode;
+	// Shadow spec baked into the SAME texture (see synth_hd_font_combined). A drop
+	// shadow / 4-way outline is the same glyph offset by (sdx,sdy) logical px; when
+	// shadow_mode < 0 the entry is a plain (unshadowed) glyph. ox/oy are the logical
+	// offset from the glyph's draw position to the combined texture's top-left (0,0
+	// for a drop shadow; negative for a full outline that extends up/left).
+	int shadow_mode;
+	int sdx, sdy;
+	bool full;
+	int ox, oy;
 	SDL_Texture *tex;
 	int w, h;
 	Uint32 last_touch;
@@ -1523,13 +1532,186 @@ static SDL_Texture *synth_hd_font_glyph(unsigned int table, unsigned int index, 
 	return tex;
 }
 
-static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, Uint8 hue, Sint8 value, int mode, int *out_w, int *out_h)
+// Synthesize ONE truecolor texture containing the main glyph composited OVER its
+// own drop shadow / outline, with the shadow KNOCKED OUT under the glyph. This is
+// the HD analogue of the classic two-pass "shadow blit, then opaque glyph blit":
+// there the opaque 8-bit glyph fully overwrites the shadow beneath it, so the
+// shadow only survives in its offset halo. In HD the glyph is anti-aliased (alpha =
+// coverage), so drawing an AA glyph as a separate translucent quad OVER a separate
+// black-shadow quad lets the shadow bleed through every partially-covered glyph
+// edge -- darkening dense descenders ('g','p','q','y','j'). Baking both into one
+// texture and reducing the shadow's alpha by (1 - glyph_coverage) restores the
+// classic look: the glyph's AA edges blend against the BACKGROUND, not the shadow.
+//
+// The shadow is the SAME glyph index offset by (sdx,sdy) logical px (full => a
+// 4-way {(0,-d),(+d,0),(0,+d),(-d,0)} outline). The canvas is grown to bound the
+// glyph (placed so its origin maps to the caller's draw position) plus every shadow
+// copy; *out_ox/*out_oy give the logical shift from the draw position to the
+// canvas top-left (0,0 for a drop shadow, negative for an outline).
+static SDL_Texture *synth_hd_font_combined(
+	unsigned int table, unsigned int index, Uint8 hue, Sint8 value, int glyph_mode,
+	int shadow_mode, int sdx, int sdy, bool full,
+	int *out_w, int *out_h, int *out_ox, int *out_oy)
 {
-	// DARK / BLACK ignore hue+value; normalize the key so they dedupe.
+	const HDFontBrightness *b = load_hd_font_brightness(table, index);
+	if (b == NULL)
+		return NULL;
+
+	const int bw = b->w, bh = b->h;
+
+	// Precompute the 16 recolored shades for the glyph's HV / HV_BLEND recolor.
+	SDL_Color shade[16];
+	if (glyph_mode == HD_FONT_MODE_HV || glyph_mode == HD_FONT_MODE_HV_BLEND)
+	{
+		Uint8 hue_hi = (Uint8)(hue << 4);
+		for (int k = 0; k < 16; ++k)
+			shade[k] = colors[(Uint8)(hue_hi | hd_font_hv_shade(k, value))];
+	}
+
+	// Shadow copies, in HD px (assets are xBRZ 4x, so 1 logical px == 4 HD px).
+	int offx[4], offy[4], noff;
+	const int dxh = sdx * 4, dyh = sdy * 4;
+	if (full)
+	{
+		offx[0] = 0;    offy[0] = -dyh;
+		offx[1] = dxh;  offy[1] = 0;
+		offx[2] = 0;    offy[2] = dyh;
+		offx[3] = -dxh; offy[3] = 0;
+		noff = 4;
+	}
+	else
+	{
+		offx[0] = dxh; offy[0] = dyh;
+		noff = 1;
+	}
+
+	// Canvas bounds = union of the glyph (at 0,0) and every shadow copy.
+	int x0 = 0, x1 = bw, y0 = 0, y1 = bh;
+	for (int i = 0; i < noff; ++i)
+	{
+		if (offx[i] < x0)      x0 = offx[i];
+		if (offx[i] + bw > x1) x1 = offx[i] + bw;
+		if (offy[i] < y0)      y0 = offy[i];
+		if (offy[i] + bh > y1) y1 = offy[i] + bh;
+	}
+	const int W = x1 - x0, H = y1 - y0;
+	const int gx = -x0, gy = -y0;  // glyph placement within the canvas
+
+	Uint8 *rgba = calloc((size_t)W * H, 4);
+	if (rgba == NULL)
+		return NULL;
+
+	for (int Y = 0; Y < H; ++Y)
+	{
+		for (int X = 0; X < W; ++X)
+		{
+			// --- glyph sample (top layer) ---
+			float ag = 0.f, Gr = 0.f, Gg = 0.f, Gb = 0.f;
+			int sxg = X - gx, syg = Y - gy;
+			if (sxg >= 0 && sxg < bw && syg >= 0 && syg < bh)
+			{
+				size_t sp = (size_t)syg * bw + sxg;
+				Uint8 cov = b->pixels[sp * 4 + 3];
+				if (cov != 0)
+				{
+					if (glyph_mode == HD_FONT_MODE_DARK)
+						ag = (cov / 2) / 255.f;              // black, ~50%
+					else if (glyph_mode == HD_FONT_MODE_BLACK)
+						ag = cov / 255.f;                    // black, solid
+					else
+					{
+						Uint8 rchan = b->pixels[sp * 4 + 0];
+						float pos = (rchan / 255.0f) * 15.0f;
+						int lo = (int)pos;
+						if (lo > 14)
+							lo = 14;
+						int hi = lo + 1;
+						float t = pos - (float)lo;
+						Gr = shade[lo].r + (shade[hi].r - shade[lo].r) * t;
+						Gg = shade[lo].g + (shade[hi].g - shade[lo].g) * t;
+						Gb = shade[lo].b + (shade[hi].b - shade[lo].b) * t;
+						ag = (glyph_mode == HD_FONT_MODE_HV_BLEND) ? (cov / 2) / 255.f : cov / 255.f;
+					}
+				}
+			}
+
+			// --- shadow sample (bottom layer): black, union of the copies ---
+			float as = 0.f;
+			for (int i = 0; i < noff; ++i)
+			{
+				int sxs = X - (offx[i] - x0), sys = Y - (offy[i] - y0);
+				if (sxs >= 0 && sxs < bw && sys >= 0 && sys < bh)
+				{
+					size_t sp = (size_t)sys * bw + sxs;
+					Uint8 cov = b->pixels[sp * 4 + 3];
+					if (cov != 0)
+					{
+						float a = (shadow_mode == HD_FONT_MODE_BLACK) ? cov / 255.f : (cov / 2) / 255.f;
+						if (a > as)
+							as = a;  // opaque black -> union is max coverage
+					}
+				}
+			}
+
+			// --- knockout + composite (glyph OVER shadow, premultiplied) ---
+			// Knock the shadow out under the glyph: as_eff = as*(1-ag). Then Porter-
+			// Duff "over" (glyph on top): A = ag + as_eff*(1-ag). The shadow is black
+			// so it contributes no color; premultiplied glyph color is G*ag. Where the
+			// glyph is absent (ag==0) A==as, color==black -> the shadow halo is byte-
+			// identical to the old separate shadow quad. Where the shadow is absent
+			// (as==0) A==ag, color==G -> the glyph is byte-identical to a plain glyph.
+			// Only in the overlap does the shadow's pull-to-black relax, which is the fix.
+			float as_eff = as * (1.f - ag);
+			float A = ag + as_eff * (1.f - ag);
+			size_t dp = ((size_t)Y * W + X) * 4;
+			if (A <= 0.f)
+				continue;  // calloc already zeroed
+			rgba[dp + 0] = (Uint8)lrintf(Gr * ag / A);
+			rgba[dp + 1] = (Uint8)lrintf(Gg * ag / A);
+			rgba[dp + 2] = (Uint8)lrintf(Gb * ag / A);
+			rgba[dp + 3] = (Uint8)lrintf(A * 255.f);
+		}
+	}
+
+	SDL_Texture *tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+		SDL_TEXTUREACCESS_STATIC, W, H);
+	if (tex == NULL)
+	{
+		free(rgba);
+		return NULL;
+	}
+	if (SDL_UpdateTexture(tex, NULL, rgba, W * 4) != 0)
+	{
+		SDL_DestroyTexture(tex);
+		free(rgba);
+		return NULL;
+	}
+	SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+	free(rgba);
+
+	*out_w = W;
+	*out_h = H;
+	*out_ox = x0 / 4;
+	*out_oy = y0 / 4;
+	return tex;
+}
+
+static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, Uint8 hue, Sint8 value, int mode,
+	int shadow_mode, int sdx, int sdy, bool full, int *out_w, int *out_h, int *out_ox, int *out_oy)
+{
+	// DARK / BLACK glyphs ignore hue+value; normalize the key so they dedupe.
 	if (mode == HD_FONT_MODE_DARK || mode == HD_FONT_MODE_BLACK)
 	{
 		hue = 0;
 		value = 0;
+	}
+	// Normalize the shadow spec for plain glyphs so they dedupe regardless of the
+	// (unused) offset arguments.
+	if (shadow_mode < 0)
+	{
+		shadow_mode = -1;
+		sdx = sdy = 0;
+		full = false;
 	}
 
 	++hd_font_cache_clock;
@@ -1538,17 +1720,22 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 	{
 		HDFontCacheEntry *e = &hd_font_cache[i];
 		if (e->used && e->table == table && e->index == index &&
-		    e->hue == hue && e->value == value && e->mode == mode)
+		    e->hue == hue && e->value == value && e->mode == mode &&
+		    e->shadow_mode == shadow_mode && e->sdx == sdx && e->sdy == sdy && e->full == full)
 		{
 			e->last_touch = hd_font_cache_clock;
 			*out_w = e->w;
 			*out_h = e->h;
+			*out_ox = e->ox;
+			*out_oy = e->oy;
 			return e->tex;
 		}
 	}
 
-	int gw = 0, gh = 0;
-	SDL_Texture *tex = synth_hd_font_glyph(table, index, hue, value, mode, &gw, &gh);
+	int gw = 0, gh = 0, ox = 0, oy = 0;
+	SDL_Texture *tex = (shadow_mode < 0)
+		? synth_hd_font_glyph(table, index, hue, value, mode, &gw, &gh)
+		: synth_hd_font_combined(table, index, hue, value, mode, shadow_mode, sdx, sdy, full, &gw, &gh, &ox, &oy);
 	if (tex == NULL)
 		return NULL;
 
@@ -1581,6 +1768,12 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 	hd_font_cache[slot].hue = hue;
 	hd_font_cache[slot].value = value;
 	hd_font_cache[slot].mode = mode;
+	hd_font_cache[slot].shadow_mode = shadow_mode;
+	hd_font_cache[slot].sdx = sdx;
+	hd_font_cache[slot].sdy = sdy;
+	hd_font_cache[slot].full = full;
+	hd_font_cache[slot].ox = ox;
+	hd_font_cache[slot].oy = oy;
 	hd_font_cache[slot].tex = tex;
 	hd_font_cache[slot].w = gw;
 	hd_font_cache[slot].h = gh;
@@ -1588,6 +1781,8 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 
 	*out_w = gw;
 	*out_h = gh;
+	*out_ox = ox;
+	*out_oy = oy;
 	return tex;
 }
 
@@ -1601,11 +1796,14 @@ static bool hd_font_queue_overflow_warned = false;
 
 bool hd_font_force_classic = false;
 
-bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value)
+// True iff hd_font_emit* will claim glyphs for this surface right now. Callers that
+// draw shadowed text as separate classic passes (JE_textShade, drawFontHvShadow)
+// use this to keep the exact classic multi-pass ordering when HD is inactive, and
+// switch to the single-quad combined path only when it is active.
+bool hd_font_active(SDL_Surface *screen)
 {
 	if (!hd_mode || hd_font_force_classic)
 		return false;
-
 	// Only claim glyphs drawn directly to the surface that scale_and_flip presents
 	// verbatim in full-screen VGA coordinates (VGAScreenSeg), and only outside the
 	// in-flight loop. Text drawn to a background buffer (VGAScreen2) or the playfield
@@ -1614,14 +1812,19 @@ bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, i
 	// text on VGAScreenSeg is persistent (drawn once, not re-emitted per frame) so an
 	// immediate-mode HD queue would drop it after one frame. All those keep the
 	// classic path (correct, and never vanishing).
-	if (screen != VGAScreenSeg || hd_flight_active)
-		return false;
+	return screen == VGAScreenSeg && !hd_flight_active;
+}
 
+// Queues one HD glyph texture (already synthesized). Returns false if the glyph is
+// out of range, the asset is missing, or the queue is full.
+static bool hd_font_queue_glyph(unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode,
+	Uint8 hue, Sint8 value, int shadow_mode, int sdx, int sdy, bool full)
+{
 	if (table >= HD_FONT_TABLE_COUNT || index >= HD_FONT_GLYPH_MAX)
 		return false;
 
-	int gw = 0, gh = 0;
-	SDL_Texture *tex = load_hd_font_glyph(table, index, hue, value, (int)mode, &gw, &gh);
+	int gw = 0, gh = 0, ox = 0, oy = 0;
+	SDL_Texture *tex = load_hd_font_glyph(table, index, hue, value, (int)mode, shadow_mode, sdx, sdy, full, &gw, &gh, &ox, &oy);
 	if (tex == NULL)
 		return false;
 
@@ -1637,11 +1840,36 @@ bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, i
 
 	HDFontQueueEntry *e = &hd_font_queue[hd_font_queue_count++];
 	e->tex = tex;
-	e->lx = lx;
-	e->ly = ly;
+	e->lx = lx + ox;  // combined textures may extend up/left of the draw position
+	e->ly = ly + oy;
 	e->lw = gw / 4;  // HD assets are xBRZ 4x; logical footprint == classic glyph size
 	e->lh = gh / 4;
 	return true;
+}
+
+// TINY_FONT flat glyphs (the pure straight-stroke shapes, e.g. '4') are
+// corner-softened in tools/hd_extract_font.py so their HD assets carry the same
+// anti-aliased convex corners as their gradient neighbours; the tiny font can
+// therefore use the HD path uniformly (no per-glyph brightness disparity).
+bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value)
+{
+	if (!hd_font_active(screen))
+		return false;
+
+	return hd_font_queue_glyph(table, index, lx, ly, mode, hue, value, -1, 0, 0, false);
+}
+
+// Emit a glyph composited with its own drop shadow / outline as a SINGLE quad (see
+// synth_hd_font_combined). shadow_mode is HD_FONT_MODE_DARK or HD_FONT_MODE_BLACK;
+// lx,ly is the MAIN glyph's draw position (the combined texture places itself
+// relative to that). Returns false -> caller must draw the classic shadow+glyph.
+bool hd_font_emit_shadowed(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly,
+	HDFontMode glyph_mode, Uint8 hue, Sint8 value, HDFontMode shadow_mode, int sdx, int sdy, bool full)
+{
+	if (!hd_font_active(screen))
+		return false;
+
+	return hd_font_queue_glyph(table, index, lx, ly, glyph_mode, hue, value, (int)shadow_mode, sdx, sdy, full);
 }
 
 // Draws (and drains) the HD font queue as the topmost UI layer, mapping each
@@ -1995,10 +2223,20 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		// palette (not the live, mid-fade one) so the overlay dims only via the colour-mod
 		// `f` below — dimming it by both the fading palette and `f` would fade it
 		// quadratically, lagging behind the linearly-fading backdrop.
+		// Snapshot the surface's SDL palette and restore it after building the
+		// overlay texture. The classic scaler reads the global rgb_palette[], never
+		// this SDL palette, so leaving it mutated has no effect on rendering -- but
+		// it silently breaks any later 8-bit->8-bit SDL_BlitSurface (which matches by
+		// palette RGB): e.g. JE_scaleInPicture's ship-spec blit would remap green to
+		// white once this desynced VGAScreen's palette from game_screen's. Save/restore
+		// keeps every 8-bit surface's SDL palette at its creation default.
+		SDL_Color saved_palette[256];
+		memcpy(saved_palette, src_surface->format->palette->colors, sizeof(saved_palette));
 		SDL_SetPaletteColors(src_surface->format->palette, colors, 0, 256);
 		SDL_SetColorKey(src_surface, SDL_TRUE, 0);
 		SDL_Texture *overlay = SDL_CreateTextureFromSurface(main_window_renderer, src_surface);
 		SDL_SetColorKey(src_surface, SDL_FALSE, 0);
+		SDL_SetPaletteColors(src_surface->format->palette, saved_palette, 0, 256);
 		if (overlay != NULL)
 		{
 			SDL_SetTextureColorMod(overlay, f, f, f);

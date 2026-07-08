@@ -530,7 +530,17 @@ static void flight_emit_bg_row(const Op *op, int bank, int palette, int dx, int 
 	if (atlas == NULL)
 		return;
 
-	SDL_BlendMode bm = blend ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE;
+	// Always alpha-blend: the atlas stores index 0 (the tileset transparency key)
+	// as alpha 0, exactly mirroring the classic blit's `if (*data != 0)` skip
+	// (blit_background_row / _blend, src/backgrnd.c). SDL_BLENDMODE_NONE would
+	// *ignore* that alpha channel and paint index-0 texels as opaque black,
+	// blacking out whatever a lower layer already drew in the tile's transparent
+	// gaps (e.g. ground structures showing through the level-1 clouds) -- the
+	// "clouds lost their alpha channel" bug. A genuine black backing in a tile is
+	// a non-zero (opaque, alpha 255) index and stays opaque under BLEND too, so
+	// background black remains opaque in HD, same as classic. `blend` rows differ
+	// only in alpha (translucent 128 vs opaque 255), not in blend mode.
+	SDL_BlendMode bm = SDL_BLENDMODE_BLEND;
 	Uint8 a = blend ? 128 : 255;
 
 	for (int tile = 0; tile < 12; ++tile)

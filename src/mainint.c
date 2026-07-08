@@ -3003,6 +3003,24 @@ void JE_operation(JE_byte slot)
 			// TODO: Rework this so that cursor blink timing is independent of input.
 			while (true)
 			{
+				// HD: the compositor doesn't hold text pixels across presents
+				// (see internal/issue/hd-text-vanish.md), so every presented
+				// frame needs a full redraw of the box + header + captions,
+				// not just once per outer iteration as classic does above.
+				if (hd_mode)
+				{
+					blit_sprite(VGAScreen, 50, 50, OPTION_SHAPES, 35);  // message box
+
+					JE_textShade(VGAScreen, 60, 55, miscText[1-1], 11, 4, DARKEN);
+					JE_textShade(VGAScreen, 70, 70, levelName, 11, 4, DARKEN);
+
+					text_x = 54 + 45 - (JE_textWidth(miscText[9], FONT_SHAPES) / 2);
+					JE_outTextAdjust(VGAScreen, text_x, 128, miscText[9], 15, -5, FONT_SHAPES, true);
+
+					text_x = 149 + 45 - (JE_textWidth(miscText[10], FONT_SHAPES) / 2);
+					JE_outTextAdjust(VGAScreen, text_x, 128, miscText[10], 15, -5, FONT_SHAPES, true);
+				}
+
 				flash = (flash == 8 * 16 + 10) ? 8 * 16 + 2 : 8 * 16 + 10;
 				temp3 = (temp3 == 6) ? 2 : 6;
 
@@ -3025,6 +3043,12 @@ void JE_operation(JE_byte slot)
 						break;
 
 					setFrameCount(1);
+
+					// HD: break so the outer loop redraws the next frame
+					// instead of re-presenting the same stale composited
+					// frame (the source of the text-flash bug).
+					if (hd_mode)
+						break;
 				}
 
 				if (hasInput(INPUT_NO_MOTION))

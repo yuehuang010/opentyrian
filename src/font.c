@@ -56,9 +56,51 @@
  */
 void drawFontHvShadow(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value, bool black, int shadowDist)
 {
-	drawFontDark(surface, x + shadowDist, y + shadowDist, text, font, black);
+	// Classic: two independent passes (opaque glyph overwrites the shadow beneath).
+	// Byte-identical when HD is inactive.
+	if (!hd_font_active(surface))
+	{
+		drawFontDark(surface, x + shadowDist, y + shadowDist, text, font, black);
+		drawFontHv(surface, x, y, text, font, hue, value);
+		return;
+	}
 
-	drawFontHv(surface, x, y, text, font, hue, value);
+	// HD: composite each glyph over its own drop shadow as ONE quad (no bleed).
+	const HDFontMode shadow_mode = black ? HD_FONT_MODE_BLACK : HD_FONT_MODE_DARK;
+	bool highlight = false;
+
+	for (; *text != '\0'; ++text)
+	{
+		int sprite_id = fontMap[(unsigned char)*text];
+
+		switch (*text)
+		{
+		case ' ':
+			x += 6;
+			break;
+
+		case '~':
+			highlight = !highlight;
+			if (highlight)
+				value += 4;
+			else
+				value -= 4;
+			break;
+
+		default:
+			if (sprite_id != -1 && sprite_exists(font, sprite_id))
+			{
+				if (!hd_font_emit_shadowed(surface, font, sprite_id, x, y, HD_FONT_MODE_HV, hue, value, shadow_mode, shadowDist, shadowDist, false))
+				{
+					blit_sprite_dark(surface, x + shadowDist, y + shadowDist, font, sprite_id, black);
+					blit_sprite_hv(surface, x, y, font, sprite_id, hue, value);
+				}
+
+				x += sprite(font, sprite_id)->width + 1;
+			}
+			break;
+		}
+	}
 }
 
 void drawFontHvShadowAligned(SDL_Surface *surface, int x, int y, const char *text, Font font, FontAlignment alignment, Uint8 hue, Sint8 value, bool black, int shadowDist)
@@ -105,12 +147,58 @@ void drawFontHvShadowAligned(SDL_Surface *surface, int x, int y, const char *tex
  */
 void drawFontHvFullShadow(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value, bool black, int shadowDist)
 {
-	drawFontDark(surface, x,              y - shadowDist, text, font, black);
-	drawFontDark(surface, x + shadowDist, y,              text, font, black);
-	drawFontDark(surface, x,              y + shadowDist, text, font, black);
-	drawFontDark(surface, x - shadowDist, y,              text, font, black);
+	// Classic: four independent black passes + the opaque glyph. Byte-identical
+	// when HD is inactive.
+	if (!hd_font_active(surface))
+	{
+		drawFontDark(surface, x,              y - shadowDist, text, font, black);
+		drawFontDark(surface, x + shadowDist, y,              text, font, black);
+		drawFontDark(surface, x,              y + shadowDist, text, font, black);
+		drawFontDark(surface, x - shadowDist, y,              text, font, black);
 
-	drawFontHv(surface, x, y, text, font, hue, value);
+		drawFontHv(surface, x, y, text, font, hue, value);
+		return;
+	}
+
+	// HD: composite each glyph over its own 4-way outline as ONE quad (no bleed).
+	const HDFontMode shadow_mode = black ? HD_FONT_MODE_BLACK : HD_FONT_MODE_DARK;
+	bool highlight = false;
+
+	for (; *text != '\0'; ++text)
+	{
+		int sprite_id = fontMap[(unsigned char)*text];
+
+		switch (*text)
+		{
+		case ' ':
+			x += 6;
+			break;
+
+		case '~':
+			highlight = !highlight;
+			if (highlight)
+				value += 4;
+			else
+				value -= 4;
+			break;
+
+		default:
+			if (sprite_id != -1 && sprite_exists(font, sprite_id))
+			{
+				if (!hd_font_emit_shadowed(surface, font, sprite_id, x, y, HD_FONT_MODE_HV, hue, value, shadow_mode, shadowDist, shadowDist, true))
+				{
+					blit_sprite_dark(surface, x,              y - shadowDist, font, sprite_id, black);
+					blit_sprite_dark(surface, x + shadowDist, y,              font, sprite_id, black);
+					blit_sprite_dark(surface, x,              y + shadowDist, font, sprite_id, black);
+					blit_sprite_dark(surface, x - shadowDist, y,              font, sprite_id, black);
+					blit_sprite_hv(surface, x, y, font, sprite_id, hue, value);
+				}
+
+				x += sprite(font, sprite_id)->width + 1;
+			}
+			break;
+		}
+	}
 }
 
 void drawFontHvFullShadowAligned(SDL_Surface *surface, int x, int y, const char *text, Font font, FontAlignment alignment, Uint8 hue, Sint8 value, bool black, int shadowDist)

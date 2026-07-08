@@ -20,4 +20,4 @@ shared.
 Known issues, one file per issue, in [issue/](issue/). Each carries a `status` field.
 
 - [issue/hd-text-vanish.md](issue/hd-text-vanish.md) — **Fixed (f064a6c)** — HD-mode text vanished on screens that draw once then hold/re-present a frame
-- [issue/vulcan-front-offcenter.md](issue/vulcan-front-offcenter.md) — **Fixed** — front Vulcan Cannon fires left of center (stock-data `bx` asymmetry); recentered in `src/episodes.c` `JE_loadItemDat` (front port only; rear Vulcan untouched)
+- [issue/vulcan-front-offcenter.md](issue/vulcan-front-offcenter.md) — **Reverted / Not-a-bug** — the `ed29a62` "recenter" was a misdiagnosis (`bx[]` is a symmetric sweep table indexed by `shotMultiPos`, not a constant offset); zeroing it killed the Vulcan's wave. Reverted in `src/episodes.c`; stock data restored

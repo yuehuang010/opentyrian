@@ -123,6 +123,23 @@ typedef enum
 
 bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value);
 
+// True iff hd_font_emit*() will claim glyphs for this surface right now (HD mode on,
+// not forced classic, targeting the presented VGAScreenSeg outside the flight loop).
+// Lets multi-pass shadowed-text callers preserve exact classic ordering when HD is
+// off and switch to the single-quad combined path only when it is on.
+bool hd_font_active(SDL_Surface *screen);
+
+// Emit a glyph composited with its own drop shadow / 4-way outline as a SINGLE HD
+// quad, with the shadow knocked out under the glyph so anti-aliased glyph edges
+// blend against the background (not the black shadow) -- matching the classic
+// opaque-glyph-over-shadow look. shadow_mode is HD_FONT_MODE_DARK or
+// HD_FONT_MODE_BLACK; the shadow is the same glyph offset by (sdx,sdy) logical px
+// (full => a 4-direction {(0,-d),(+d,0),(0,+d),(-d,0)} outline with d==sdx==sdy).
+// lx,ly is the MAIN glyph's draw position. Returns false -> caller must draw the
+// classic shadow + glyph passes itself.
+bool hd_font_emit_shadowed(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly,
+	HDFontMode glyph_mode, Uint8 hue, Sint8 value, HDFontMode shadow_mode, int sdx, int sdy, bool full);
+
 // Set while text must paint persistent classic pixels even though it targets
 // VGAScreenSeg outside the flight loop -- e.g. the level-start HUD text, which is
 // drawn once before hd_flight_active goes true and must survive every present of

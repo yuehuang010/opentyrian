@@ -253,6 +253,27 @@ void setupMenu(void)
 		size_t *const selectedMenuItemIndex = &selectedMenuItemIndexes[currentMenu];
 		const MenuItem *const menuItems = menu->items;
 
+		// Compute the picker box geometry up front (it depends only on the selected
+		// item and its picker length) so both the box-drawing code below and the
+		// menu-item loop can consult it. The box anchors at the selected row, clamped
+		// so it never runs past the status line at the screen bottom.
+		size_t pickerItemsCount = 0;
+		int hPicker = 0;
+		int pickerBoxTop = 0, pickerBoxBottom = -1;
+		yPicker = yMenuItems + dyMenuItems * (int)(*selectedMenuItemIndex);
+		if (currentPicker != MENU_ITEM_NONE)
+		{
+			pickerItemsCount = menuItems[*selectedMenuItemIndex].getPickerItemsCount();
+			hPicker = dyPickerItem * (int)pickerItemsCount - dyPickerItemPadding;
+			yPicker = MIN(yPicker, 200 - 10 - (hPicker + 5 + 2));
+			// Outer extent of the drawn box, including its 5px border rings (see the
+			// JE_rectangle calls below at yPicker-5 .. yPicker+hPicker+5). A tall
+			// picker gets clamped upward and its top border overlaps the row above,
+			// so the suppression band must cover the whole border, not just the fill.
+			pickerBoxTop = yPicker - 5;
+			pickerBoxBottom = yPicker + hPicker + 5;
+		}
+
 		// Draw menu items.
 
 		size_t menuItemsCount = 0;
@@ -267,8 +288,14 @@ void setupMenu(void)
 			const bool selected = i == *selectedMenuItemIndex;
 			const bool disabled = currentPicker != MENU_ITEM_NONE && !selected;
 
-			if (selected)
-				yPicker = y;
+			// In HD, the opaque picker box lives in the indexed-overlay layer, below
+			// the topmost HD-font glyphs, so a value-column glyph the box covers would
+			// bleed on top of it. Classic draws the box into the same surface last, so
+			// it already occludes these values. Suppress any value row whose glyph span
+			// [y, y+hMenuItem] overlaps the box's outer extent so a row the box only
+			// partially clips (e.g. "Window" under a tall Scaler picker) is hidden too.
+			const bool valueHiddenByPicker = hd_mode && currentPicker != MENU_ITEM_NONE
+				&& y + hMenuItem > pickerBoxTop && y < pickerBoxBottom;
 
 			const char *const name = menuItem->name;
 
@@ -284,15 +311,18 @@ void setupMenu(void)
 					value = buffer;
 				}
 
-				drawFontHvShadow(VGAScreen, xMenuItemValue, y, value, FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, value, FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			case MENU_ITEM_SCALER:
-				drawFontHvShadow(VGAScreen, xMenuItemValue, y, scalers[scaler].name, FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, scalers[scaler].name, FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			case MENU_ITEM_SCALING_MODE:
-				drawFontHvShadow(VGAScreen, xMenuItemValue, y, scaling_mode_names[scaling_mode], FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, scaling_mode_names[scaling_mode], FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			case MENU_ITEM_MUSIC_VOLUME:
@@ -306,15 +336,18 @@ void setupMenu(void)
 				break;
 
 			case MENU_ITEM_HD_MUSIC:
-				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_music ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_music ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			case MENU_ITEM_HD_SFX:
-				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_sfx ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_sfx ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			case MENU_ITEM_HD_TILES:
-				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_tiles ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_tiles ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			default:
@@ -330,10 +363,6 @@ void setupMenu(void)
 		if (currentPicker != MENU_ITEM_NONE)
 		{
 			const MenuItem *selectedMenuItem = &menuItems[*selectedMenuItemIndex];
-			const size_t pickerItemsCount = selectedMenuItem->getPickerItemsCount();
-
-			const int hPicker = dyPickerItem * pickerItemsCount - dyPickerItemPadding;
-			yPicker = MIN(yPicker, 200 - 10 - (hPicker + 5 + 2));
 
 			JE_rectangle(VGAScreen, xMenuItemValue - 5, yPicker- 3, xMenuItemValue + wMenuItemValue + 5 - 1, yPicker + hPicker + 3 - 1, 248);
 			JE_rectangle(VGAScreen, xMenuItemValue - 4, yPicker- 4, xMenuItemValue + wMenuItemValue + 4 - 1, yPicker + hPicker + 4 - 1, 250);
