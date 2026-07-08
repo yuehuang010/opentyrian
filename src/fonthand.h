@@ -54,4 +54,17 @@ void JE_outTextAndDarken(SDL_Surface * screen, int x, int y, const char *s, unsi
 void JE_updateWarning(SDL_Surface * screen);
 void JE_outTextGlow(SDL_Surface * screen, int x, int y, const char *s);
 
+// HD held-text registry. In HD mode glyphs live in an immediate-mode queue that
+// drains every present, so screens built incrementally by JE_outTextGlow (which
+// presents per animation step) would erase each line as the next one animates.
+// Completed glow lines self-register; before every glow present the registry is
+// re-emitted. Screens mixing static text with glow lines register the static
+// text through the JE_hold* wrappers (identical classic pixels), and screens
+// that present between glow calls (e.g. the end-of-level cube animation)
+// re-emit explicitly with JE_holdTextRedraw. Clear at each screen's start.
+void JE_holdTextClear(void);
+void JE_holdTextRedraw(SDL_Surface *screen);
+void JE_holdDString(SDL_Surface *screen, int x, int y, const char *s, unsigned int font);
+void JE_holdTextShade(SDL_Surface *screen, int x, int y, const char *s, unsigned int colorbank, int brightness, unsigned int shadetype);
+
 #endif /* FONTHAND_H */

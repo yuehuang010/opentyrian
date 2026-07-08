@@ -25,6 +25,9 @@
 #include "vga256d.h"
 #include "video.h"
 
+#include <stdio.h>
+#include <string.h>
+
 // Mapping from CP437 to font sprite index.
 const Sint8 fontMap[256] = /* [33..168] */
 {
@@ -300,10 +303,107 @@ void JE_updateWarning(SDL_Surface * screen)
 	}
 }
 
+// HD held-text registry (see fonthand.h). Entries re-emit through the same
+// classic draw functions, so a redraw paints pixel-identical text; redraws only
+// happen in HD mode, where those functions route glyphs to the HD queue instead.
+enum { HOLD_TEXT_MAX = 24, HOLD_TEXT_LEN = 64 };
+
+typedef enum { HOLD_GLOW, HOLD_DSTRING, HOLD_TEXTSHADE } HoldTextStyle;
+
+typedef struct
+{
+	HoldTextStyle style;
+	int x, y;
+	char text[HOLD_TEXT_LEN];
+	unsigned int font;       // HOLD_GLOW, HOLD_DSTRING
+	unsigned int colorbank;  // HOLD_GLOW, HOLD_TEXTSHADE
+	int brightness;          // HOLD_GLOW (final adjust value), HOLD_TEXTSHADE
+	unsigned int shadetype;  // HOLD_TEXTSHADE
+} HoldTextEntry;
+
+static HoldTextEntry holdText[HOLD_TEXT_MAX];
+static int holdTextCount = 0;
+
+void JE_holdTextClear(void)
+{
+	holdTextCount = 0;
+}
+
+// Overflowing entries are dropped: their one-shot HD glyphs still show until the
+// next present, and the capacity comfortably exceeds every registering screen.
+static void holdTextAdd(const HoldTextEntry *entry)
+{
+	if (holdTextCount >= HOLD_TEXT_MAX)
+		return;
+
+	holdText[holdTextCount++] = *entry;
+}
+
+void JE_holdTextRedraw(SDL_Surface *screen)
+{
+	for (int i = 0; i < holdTextCount; ++i)
+	{
+		const HoldTextEntry *e = &holdText[i];
+
+		switch (e->style)
+		{
+		case HOLD_GLOW:
+			JE_outTextAdjust(screen, e->x - 1, e->y,     e->text, 0, -12, e->font, false);
+			JE_outTextAdjust(screen, e->x,     e->y - 1, e->text, 0, -12, e->font, false);
+			JE_outTextAdjust(screen, e->x + 1, e->y,     e->text, 0, -12, e->font, false);
+			JE_outTextAdjust(screen, e->x,     e->y + 1, e->text, 0, -12, e->font, false);
+			JE_outTextAdjust(screen, e->x, e->y, e->text, e->colorbank, e->brightness, e->font, false);
+			break;
+		case HOLD_DSTRING:
+			JE_dString(screen, e->x, e->y, e->text, e->font);
+			break;
+		case HOLD_TEXTSHADE:
+			JE_textShade(screen, e->x, e->y, e->text, e->colorbank, e->brightness, e->shadetype);
+			break;
+		}
+	}
+}
+
+static void holdTextInit(HoldTextEntry *entry, HoldTextStyle style, int x, int y, const char *s)
+{
+	memset(entry, 0, sizeof *entry);
+	entry->style = style;
+	entry->x = x;
+	entry->y = y;
+	snprintf(entry->text, sizeof entry->text, "%s", s);
+}
+
+void JE_holdDString(SDL_Surface *screen, int x, int y, const char *s, unsigned int font)
+{
+	JE_dString(screen, x, y, s, font);
+
+	HoldTextEntry entry;
+	holdTextInit(&entry, HOLD_DSTRING, x, y, s);
+	entry.font = font;
+	holdTextAdd(&entry);
+}
+
+void JE_holdTextShade(SDL_Surface *screen, int x, int y, const char *s, unsigned int colorbank, int brightness, unsigned int shadetype)
+{
+	JE_textShade(screen, x, y, s, colorbank, brightness, shadetype);
+
+	HoldTextEntry entry;
+	holdTextInit(&entry, HOLD_TEXTSHADE, x, y, s);
+	entry.colorbank = colorbank;
+	entry.brightness = brightness;
+	entry.shadetype = shadetype;
+	holdTextAdd(&entry);
+}
+
 void JE_outTextGlow(SDL_Surface * screen, int x, int y, const char *s)
 {
 	JE_integer z;
 	JE_byte c = 15;
+
+	// In HD mode this animation's presents drain the HD glyph queue, so every
+	// present must re-emit the screen's earlier text. Classic mode never
+	// redraws: the surface pixels persist.
+	const bool holdRedraw = hd_mode && !hd_flight_active;
 
 	if (warningRed)
 	{
@@ -321,6 +421,16 @@ void JE_outTextGlow(SDL_Surface * screen, int x, int y, const char *s)
 		{
 			setFrameCount(frameCountMax);
 
+			if (holdRedraw)
+			{
+				JE_holdTextRedraw(screen);
+
+				JE_outTextAdjust(screen, x - 1, y,     s, 0, -12, textGlowFont, false);
+				JE_outTextAdjust(screen, x,     y - 1, s, 0, -12, textGlowFont, false);
+				JE_outTextAdjust(screen, x + 1, y,     s, 0, -12, textGlowFont, false);
+				JE_outTextAdjust(screen, x,     y + 1, s, 0, -12, textGlowFont, false);
+			}
+
 			JE_outTextAdjust(screen, x, y, s, c, z - 10, textGlowFont, false);
 
 			JE_showVGA();
@@ -334,12 +444,32 @@ void JE_outTextGlow(SDL_Surface * screen, int x, int y, const char *s)
 	{
 		setFrameCount(frameCountMax);
 
+		if (holdRedraw)
+		{
+			JE_holdTextRedraw(screen);
+
+			JE_outTextAdjust(screen, x - 1, y,     s, 0, -12, textGlowFont, false);
+			JE_outTextAdjust(screen, x,     y - 1, s, 0, -12, textGlowFont, false);
+			JE_outTextAdjust(screen, x + 1, y,     s, 0, -12, textGlowFont, false);
+			JE_outTextAdjust(screen, x,     y + 1, s, 0, -12, textGlowFont, false);
+		}
+
 		JE_outTextAdjust(screen, x, y, s, c, z - 10, textGlowFont, false);
 
 		JE_showVGA();
 
 		if (waitUntilGetInputOrElapsed())
 			frameCountMax = 0;
+	}
+
+	// Register the settled line so later glow lines and held presents keep it.
+	{
+		HoldTextEntry entry;
+		holdTextInit(&entry, HOLD_GLOW, x, y, s);
+		entry.font = textGlowFont;
+		entry.colorbank = c;
+		entry.brightness = textGlowBrightness - 10;
+		holdTextAdd(&entry);
 	}
 
 	textGlowBrightness = 6;

@@ -791,7 +791,12 @@ start_level_first:
 
 	JE_drawOptions();
 
+	// The level-start HUD text is drawn once, here, before hd_flight_active
+	// goes true; it must survive every present of the level, so paint
+	// persistent classic pixels rather than queue transient HD glyphs.
+	hd_font_force_classic = true;
 	JE_outText(VGAScreen, 268, twoPlayerMode ? 76 : 118, levelName, 12, 4);
+	hd_font_force_classic = false;
 
 	JE_showVGA();
 	JE_gammaCorrect(&colors, gammaCorrection);
@@ -2733,6 +2738,16 @@ new_game:
 							JE_loadPic(VGAScreen, 1, false); // huh?
 							JE_clr256(VGAScreen);
 
+							// HD: fade in the cleared backdrop first so the text
+							// below is emitted after the fade and survives on the
+							// single present that follows (a fade after the draw
+							// would drain the HD glyph queue). Classic fades below.
+							if (hd_mode)
+							{
+								JE_showVGA();
+								fade_palette(colors, 50, 0, 255);
+							}
+
 							if (superTyrian)
 							{
 								// if completed Zinglon's Revenge, show SuperTyrian and Destruct codes
@@ -2765,7 +2780,8 @@ new_game:
 								JE_dString(VGAScreen, JE_fontCenter(buffer, SMALL_FONT_SHAPES), 160, buffer, SMALL_FONT_SHAPES);
 								JE_showVGA();
 
-								fade_palette(colors, 50, 0, 255);
+								if (!hd_mode)
+									fade_palette(colors, 50, 0, 255);
 
 								if (!constantPlay)
 									waitUntilGetInput();
@@ -3212,9 +3228,18 @@ void networkStartScreen(void)
 {
 	JE_loadPic(VGAScreen, 2, false);
 	memcpy(VGAScreen2->pixels, VGAScreen->pixels, VGAScreen2->pitch * VGAScreen2->h);
+	// HD: fade in the backdrop before the text is emitted; network_connect()
+	// then holds this frame without redrawing, so the text must ride the final
+	// present (a fade after the draw would drain the HD glyph queue).
+	if (hd_mode)
+	{
+		JE_showVGA();
+		fade_palette(colors, 10, 0, 255);
+	}
 	JE_dString(VGAScreen, JE_fontCenter("Waiting for other player.", SMALL_FONT_SHAPES), 140, "Waiting for other player.", SMALL_FONT_SHAPES);
 	JE_showVGA();
-	fade_palette(colors, 10, 0, 255);
+	if (!hd_mode)
+		fade_palette(colors, 10, 0, 255);
 
 	network_connect();
 
@@ -3747,6 +3772,15 @@ bool newSuperArcadeGame(unsigned int i)
 		/* Start special mode! */
 		JE_loadPic(VGAScreen, 1, false);
 		JE_clr256(VGAScreen);
+		// HD: fade in the cleared backdrop before the text is emitted; the
+		// waitUntilGetInput() below holds this frame without redrawing, so the
+		// text rides the final present (a fade after the draw drains the HD
+		// glyph queue). Classic keeps its post-draw fade.
+		if (hd_mode)
+		{
+			JE_showVGA();
+			fade_palette(colors, 50, 0, 255);
+		}
 		JE_dString(VGAScreen, JE_fontCenter(superShips[0], FONT_SHAPES), 30, superShips[0], FONT_SHAPES);
 		JE_dString(VGAScreen, JE_fontCenter(superShips[i + 1], SMALL_FONT_SHAPES), 100, superShips[i + 1], SMALL_FONT_SHAPES);
 		tempW = ships[player[0].items.ship].shipgraphic;
@@ -3754,7 +3788,8 @@ bool newSuperArcadeGame(unsigned int i)
 			blit_sprite2x2(VGAScreen, 148, 70, spriteSheet9, tempW);
 
 		JE_showVGA();
-		fade_palette(colors, 50, 0, 255);
+		if (!hd_mode)
+			fade_palette(colors, 50, 0, 255);
 
 		waitUntilGetInput();
 
@@ -3787,6 +3822,14 @@ void newSuperTyrianGame(void)
 	initialDifficulty = keysactive[SDL_SCANCODE_SCROLLLOCK] ? DIFFICULTY_SUICIDE : DIFFICULTY_ZINGLON;
 
 	JE_clr256(VGAScreen);
+	// HD: fade in the cleared backdrop before the text is emitted; the input
+	// wait below holds this frame without redrawing, so the text rides the
+	// final present (a fade after the draw drains the HD glyph queue).
+	if (hd_mode)
+	{
+		JE_showVGA();
+		fade_palette(colors, 10, 0, 255);
+	}
 	JE_outText(VGAScreen, 10, 10, "Cheat codes have been disabled.", 15, 4);
 	if (initialDifficulty == DIFFICULTY_ZINGLON)
 		JE_outText(VGAScreen, 10, 20, "Difficulty level has been set to Lord of Game.", 15, 4);
@@ -3805,7 +3848,8 @@ void newSuperTyrianGame(void)
 	JE_playSampleNum(V_DANGER);
 
 	JE_showVGA();
-	fade_palette(colors, 10, 0, 255);
+	if (!hd_mode)
+		fade_palette(colors, 10, 0, 255);
 
 	while (true)
 	{

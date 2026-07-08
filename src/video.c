@@ -1537,9 +1537,11 @@ static HDFontQueueEntry hd_font_queue[HD_FONT_QUEUE_COUNT];
 static int hd_font_queue_count = 0;
 static bool hd_font_queue_overflow_warned = false;
 
+bool hd_font_force_classic = false;
+
 bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value)
 {
-	if (!hd_mode)
+	if (!hd_mode || hd_font_force_classic)
 		return false;
 
 	// Only claim glyphs drawn directly to the surface that scale_and_flip presents

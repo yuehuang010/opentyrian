@@ -742,11 +742,20 @@ static void JE_destructMain(void)
 static void JE_introScreen(void)
 {
 	memcpy(VGAScreen2->pixels, VGAScreen->pixels, VGAScreen2->h * VGAScreen2->pitch);
+	// HD: fade in the backdrop before the text is emitted; the wait loop below
+	// holds this frame without redrawing, so the text must ride the final
+	// present (a fade after the draw drains the HD glyph queue).
+	if (hd_mode)
+	{
+		JE_showVGA();
+		fade_palette(colors, 15, 0, 255);
+	}
 	JE_outText(VGAScreen, JE_fontCenter(specialName[7], TINY_FONT), 90, specialName[7], 12, 5);
 	JE_outText(VGAScreen, JE_fontCenter(miscText[64], TINY_FONT), 180, miscText[64], 15, 2);
 	JE_outText(VGAScreen, JE_fontCenter(miscText[65], TINY_FONT), 190, miscText[65], 15, 2);
 	JE_showVGA();
-	fade_palette(colors, 15, 0, 255);
+	if (!hd_mode)
+		fade_palette(colors, 15, 0, 255);
 
 	while (true)
 	{
@@ -1402,6 +1411,15 @@ static void JE_helpScreen(void)
 	memcpy(VGAScreen2->pixels, VGAScreen->pixels, VGAScreen2->h * VGAScreen2->pitch);
 	JE_clr256(VGAScreen);
 
+	// HD: fade in the cleared backdrop before the text is emitted; the wait
+	// loop below holds this frame without redrawing, so the text must ride the
+	// final present (a fade after the draw drains the HD glyph queue).
+	if (hd_mode)
+	{
+		JE_showVGA();
+		fade_palette(colors, 15, 0, 255);
+	}
+
 	for (i = 0; i < 2; i++)
 	{
 		JE_outText(VGAScreen, 100,  5 + i * 90, destructHelp[i * 12 + 0], 2, 4);
@@ -1411,7 +1429,8 @@ static void JE_helpScreen(void)
 	}
 	JE_outText(VGAScreen, 30, 190, destructHelp[24], 3, 4);
 	JE_showVGA();
-	fade_palette(colors, 15, 0, 255);
+	if (!hd_mode)
+		fade_palette(colors, 15, 0, 255);
 
 	while (true)
 	{

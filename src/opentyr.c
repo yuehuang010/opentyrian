@@ -207,6 +207,15 @@ void setupMenu(void)
 				JE_clr256(VGAScreen2);
 
 			fill_rectangle_wh(VGAScreen2, 0, 192, 320, 8, 0);
+
+			// HD: fade in the plain backdrop here, before any text is drawn.
+			// The post-draw fade below (classic-only) would drain the HD glyph
+			// queue and leave the held frame textless.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+			}
 		}
 
 		// Restore background.
@@ -316,7 +325,8 @@ void setupMenu(void)
 		{
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
-			fade_palette(colors, 10, 0, 255);
+			if (!hd_mode)
+				fade_palette(colors, 10, 0, 255);
 
 			restart = false;
 		}

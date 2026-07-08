@@ -1010,7 +1010,16 @@ void JE_itemScreen(void)
 					}
 				}
 
-				if (hasInput(INPUT_NO_MOTION))
+				// The menu header and choices are drawn once per outer iteration,
+				// before this inner loop, which then presents repeatedly while
+				// idle. In classic mode those pixels persist across presents, but
+				// in HD mode the menu text does not survive a re-present (it is
+				// composited, not held in the 8-bit frame), so spinning here leaves
+				// a textless frame. Break after one present so the outer loop
+				// redraws everything each frame -- the same per-frame-redraw
+				// approach the other HD menu screens use. Classic mode is
+				// unaffected: it keeps spinning here exactly as before.
+				if (hd_mode || hasInput(INPUT_NO_MOTION))
 					break;
 			}
 		}

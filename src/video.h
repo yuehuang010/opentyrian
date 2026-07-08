@@ -111,6 +111,12 @@ typedef enum
 
 bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value);
 
+// Set while text must paint persistent classic pixels even though it targets
+// VGAScreenSeg outside the flight loop -- e.g. the level-start HUD text, which is
+// drawn once before hd_flight_active goes true and must survive every present of
+// the level. hd_font_emit() declines while set. Set, draw, restore.
+extern bool hd_font_force_classic;
+
 extern SDL_Surface *VGAScreen, *VGAScreenSeg;
 extern SDL_Surface *game_screen;
 extern SDL_Surface *VGAScreen2;

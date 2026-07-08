@@ -94,7 +94,12 @@ void JE_outCharGlow(JE_word x, JE_word y, const char *s)
 
 	if (frameCountMax == 0)
 	{
+		// Paint persistent classic pixels even in HD mode: later lines of a
+		// skipped text screen present again, which would drain this line's HD
+		// glyphs. The animated path below already paints classic pixels.
+		hd_font_force_classic = true;
 		JE_textShade(VGAScreen, x, y, s, bank, 0, PART_SHADE);
+		hd_font_force_classic = false;
 		JE_showVGA();
 	}
 	else
@@ -218,6 +223,18 @@ void JE_helpSystem(JE_byte startTopic)
 
 			if (hd_mode && hd_set_backdrop(2))
 				JE_clr256(VGAScreen2);
+
+			// In HD mode, fade in before any text draws: the fade's presents
+			// drain the immediate-mode HD glyph queue, so text emitted before
+			// fade_palette would be missing from the held post-fade frame.
+			// Consumes restart so helpSystemPage doesn't fade a second time.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+
+				restart = false;
+			}
 		}
 
 		if (topic > 1)
@@ -493,7 +510,9 @@ static bool helpSystemPage(Uint8 *topic, bool *restart)
 			waitUntilElapsed();
 			waitUntilHasInput(INPUT_ANY);
 
-			if (hasInput(INPUT_NO_MOTION))
+			// In HD mode, re-presenting on mouse motion would drop the page text
+			// (the HD glyph queue drains every present), so redraw the page instead.
+			if (hd_mode || hasInput(INPUT_NO_MOTION))
 				break;
 
 			setFrameCount(1);
@@ -658,6 +677,15 @@ bool JE_loadScreen(void)
 				JE_clr256(VGAScreen2);
 
 			fill_rectangle_wh(VGAScreen2, 0, 192, 320, 8, 0);
+
+			// In HD mode, fade in before the items are drawn: the fade's presents
+			// drain the immediate-mode HD glyph queue, so items emitted before
+			// fade_palette would be missing from the held post-fade frame.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+			}
 		}
 
 		// Restore background.
@@ -722,7 +750,8 @@ bool JE_loadScreen(void)
 		{
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
-			fade_palette(colors, 10, 0, 255);
+			if (!hd_mode)
+				fade_palette(colors, 10, 0, 255);
 
 			restart = false;
 		}
@@ -1009,11 +1038,22 @@ void JE_nextEpisode(void)
 	JE_clr256(VGAScreen);
 	memcpy(colors, palettes[6-1], sizeof(colors));
 
+	// In HD mode, fade in before the text draws: the fade's presents drain the
+	// immediate-mode HD glyph queue, so text emitted before fade_palette would
+	// be missing from the held post-fade frame.
+	if (hd_mode)
+	{
+		JE_showVGA();
+		fade_palette(colors, 15, 0, 255);
+	}
+
 	JE_dString(VGAScreen, JE_fontCenter(episode_name[episodeNum], SMALL_FONT_SHAPES), 130, episode_name[episodeNum], SMALL_FONT_SHAPES);
 	JE_dString(VGAScreen, JE_fontCenter(miscText[5-1], SMALL_FONT_SHAPES), 185, miscText[5-1], SMALL_FONT_SHAPES);
 
 	JE_showVGA();
-	fade_palette(colors, 15, 0, 255);
+
+	if (!hd_mode)
+		fade_palette(colors, 15, 0, 255);
 
 	if (!constantPlay)
 		waitUntilGetInput();
@@ -1116,6 +1156,15 @@ void JE_highScoreScreen(void)
 
 			// Draw header.
 			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, miscText[50], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
+
+			// In HD mode, fade in before the scores are drawn: the fade's presents
+			// drain the immediate-mode HD glyph queue, so text emitted before
+			// fade_palette would be missing from the held post-fade frame.
+			if (hd_mode)
+			{
+				memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+				fade_palette(colors, 10, 0, 255);
+			}
 		}
 
 		// Restore background and header.
@@ -1179,7 +1228,8 @@ void JE_highScoreScreen(void)
 		{
 			mouseCursor = MOUSE_POINTER_NORMAL;
 
-			fade_palette(colors, 10, 0, 255);
+			if (!hd_mode)
+				fade_palette(colors, 10, 0, 255);
 
 			restart = false;
 		}
@@ -1193,7 +1243,9 @@ void JE_highScoreScreen(void)
 			waitUntilElapsed();
 			waitUntilHasInput(INPUT_ANY);
 
-			if (hasInput(INPUT_NO_MOTION))
+			// In HD mode, re-presenting on mouse motion would drop the scores
+			// (the HD glyph queue drains every present), so redraw instead.
+			if (hd_mode || hasInput(INPUT_NO_MOTION))
 				break;
 
 			setFrameCount(1);
@@ -2042,6 +2094,32 @@ void JE_highScoreCheck(void)
 
 						for (int i = 0; i < 14; i++)
 						{
+							// In HD mode, re-emit the screen's text every present: the
+							// HD glyph queue drains each frame, and this loop presents
+							// without redrawing. Classic pixels persist in the surface.
+							if (hd_mode)
+							{
+								JE_dString(VGAScreen, JE_fontCenter(miscText[51], FONT_SHAPES), 3, miscText[51], FONT_SHAPES);
+
+								const char *subheader = miscText[(twoPlayerMode ? 58 + p : 53) - 1];
+								JE_dString(VGAScreen, JE_fontCenter(subheader, SMALL_FONT_SHAPES), 30, subheader, SMALL_FONT_SHAPES);
+
+								if (twoPlayerMode)
+								{
+									sprintf(buffer, "%s %s", miscText[48 + p], miscText[53]);
+									JE_textShade(VGAScreen, 60, 55, buffer, 11, 4, FULL_SHADE);
+								}
+								else
+								{
+									JE_textShade(VGAScreen, 60, 55, miscText[53], 11, 4, FULL_SHADE);
+								}
+
+								sprintf(buffer, "%s %d", miscText[37], temp_score);
+								JE_textShade(VGAScreen, 70, 70, buffer, 11, 4, FULL_SHADE);
+
+								JE_outText(VGAScreen, 65, 89, tempstr, 8, 3);
+							}
+
 							JE_mouseStart();
 							JE_showVGA();
 							if (fadein)
@@ -2131,16 +2209,22 @@ void JE_highScoreCheck(void)
 				if (hd_mode && hd_set_backdrop(2))
 					JE_clr256(VGAScreen);
 
-				JE_dString(VGAScreen, JE_fontCenter(miscText[50], FONT_SHAPES), 10, miscText[50], FONT_SHAPES);
-				JE_dString(VGAScreen, JE_fontCenter(episode_name[episodeNum], SMALL_FONT_SHAPES), 35, episode_name[episodeNum], SMALL_FONT_SHAPES);
+				// The static text registers in the HD held-text registry (via the
+				// JE_hold* wrappers; identical classic pixels) so the glow lines'
+				// presents below re-emit it -- in HD mode the glyph queue drains
+				// every present.
+				JE_holdTextClear();
+
+				JE_holdDString(VGAScreen, JE_fontCenter(miscText[50], FONT_SHAPES), 10, miscText[50], FONT_SHAPES);
+				JE_holdDString(VGAScreen, JE_fontCenter(episode_name[episodeNum], SMALL_FONT_SHAPES), 35, episode_name[episodeNum], SMALL_FONT_SHAPES);
 
 				for (int i = first_slot; i < slot_limit; ++i)
 				{
 					if (i != slot)
 					{
 						sprintf(buffer, "~#%d:~  %d", (i - first_slot + 1), saveFiles[i].highScore1);
-						JE_textShade(VGAScreen,  20, ((i - first_slot + 1) * 12) + 65, buffer, 15, 0, FULL_SHADE);
-						JE_textShade(VGAScreen, 150, ((i - first_slot + 1) * 12) + 65, saveFiles[i].highScoreName, 15, 2, FULL_SHADE);
+						JE_holdTextShade(VGAScreen,  20, ((i - first_slot + 1) * 12) + 65, buffer, 15, 0, FULL_SHADE);
+						JE_holdTextShade(VGAScreen, 150, ((i - first_slot + 1) * 12) + 65, saveFiles[i].highScoreName, 15, 2, FULL_SHADE);
 					}
 				}
 
@@ -2159,6 +2243,9 @@ void JE_highScoreCheck(void)
 				JE_outTextGlow(VGAScreenSeg, 150, (slot - first_slot + 1) * 12 + 65, saveFiles[slot].highScoreName);
 				textGlowBrightness = 10;
 				JE_outTextGlow(VGAScreenSeg, JE_fontCenter(miscText[4], TINY_FONT), 180, miscText[4]);
+
+				if (hd_mode)
+					JE_holdTextRedraw(VGAScreenSeg);
 
 				JE_showVGA();
 
@@ -2666,6 +2753,11 @@ void JE_endLevelAni(void)
 	frameCountMax = 4;
 	textGlowFont = SMALL_FONT_SHAPES;
 
+	// This screen is built line by line with JE_outTextGlow; in HD mode each
+	// completed line registers in the held-text registry so later glow lines
+	// and the cube animation re-emit it on every present.
+	JE_holdTextClear();
+
 	SDL_Color white = { 255, 255, 255 };
 	set_colors(white, 254, 254);
 
@@ -2728,6 +2820,12 @@ void JE_endLevelAni(void)
 				x = 20 + 30 * temp;
 				y = 135;
 				JE_drawCube(VGAScreenSeg, x, y, 9, 0);
+
+				// In HD mode, every present drains the HD glyph queue, so the
+				// glow lines above must be re-emitted for each animation frame.
+				if (hd_mode)
+					JE_holdTextRedraw(VGAScreenSeg);
+
 				JE_showVGA();
 
 				for (i = -15; i <= 10; i++)
@@ -2735,6 +2833,9 @@ void JE_endLevelAni(void)
 					setFrameCount(frameCountMax);
 
 					blit_sprite_hv(VGAScreenSeg, x, y, OPTION_SHAPES, 25, 0x9, i);
+
+					if (hd_mode)
+						JE_holdTextRedraw(VGAScreenSeg);
 
 					JE_showVGA();
 
@@ -2746,6 +2847,9 @@ void JE_endLevelAni(void)
 					setFrameCount(frameCountMax);
 
 					blit_sprite_hv(VGAScreenSeg, x, y, OPTION_SHAPES, 25, 0x9, i);
+
+					if (hd_mode)
+						JE_holdTextRedraw(VGAScreenSeg);
 
 					JE_showVGA();
 
