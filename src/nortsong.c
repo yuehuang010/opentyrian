@@ -31,10 +31,14 @@
 
 #include "SDL.h"
 
+#include <string.h>
+
 JE_word frameCountMax;
 
 Sint16 *soundSamples[SOUND_COUNT] = { NULL }; /* [1..soundnum + 9] */  // FKA digiFx
 size_t soundSampleCount[SOUND_COUNT] = { 0 }; /* [1..soundnum + 9] */  // FKA fxSize
+
+bool hd_sfx = true;
 
 JE_word tyrMusicVolume, fxVolume;
 const JE_word fxPlayVol = 4;
@@ -132,6 +136,210 @@ float getTickInterpAlpha(void)
 		return 0.0f;
 
 	return 1.0f - (float)remaining / (float)period;
+}
+
+// --- HD SFX/voice bank support (Phase S2) ---------------------------------
+//
+// An HD bank ("hdsnd_sfx.dat" / "hdsnd_voices.dat" / "hdsnd_voicesc.dat",
+// baked offline by tools/mkhdsnd.py from tools/hd_upsample_snd.py's "best"
+// method -- see tools/HDSFX_EXPERIMENT.md) holds 16-bit signed mono PCM at a
+// fixed sample rate (44100), packaged with the same count+offset-table shape
+// as the classic .snd files:
+//
+//   u32 magic ("HSND", literal bytes, not byte-swapped)
+//   u16 count
+//   u32 sampleRate
+//   (count+1) x u32 absolute byte offsets (offset[count] == EOF)
+//   ... contiguous Sint16 LE PCM data, one sample after another
+//
+// This is purely additive: loadSndFile() below runs the classic 8-bit/11025Hz
+// path unchanged first, then -- if hd_sfx is enabled -- overlays each index
+// with the HD-converted sample when the bank and that sample both parse
+// cleanly. Any missing file, header/offset corruption, or out-of-range/
+// malformed sample index leaves the classic result already in
+// soundSamples[]/soundSampleCount[] untouched (per-sample fallback).
+
+typedef struct
+{
+	FILE *f;
+	Uint16 count;
+	Uint32 sampleRate;
+	Uint32 *offsets; // count+1 entries, offsets[count] == EOF marker
+} HdSndBank;
+
+// Opens and structurally validates an HD bank. Never dies: on any problem
+// (missing file, bad magic, truncated header/offsets, bad offsets) this
+// returns false and the caller falls back to classic per-sample. The
+// fread_*_die helpers are used for the actual multi-byte reads (per project
+// convention, for correct byte-swapping on big-endian), but only once the
+// file has been confirmed to hold enough bytes for them to succeed -- so the
+// "_die" abort path is never actually reachable here.
+static bool hdSndBankOpen(const char *filename, HdSndBank *bank)
+{
+	memset(bank, 0, sizeof(*bank));
+
+	FILE *f = dir_fopen(data_dir(), filename, "rb");
+	if (f == NULL)
+		return false;
+
+	long fileSize = ftell_eof(f);
+	if (fileSize < (long)(4 + 2 + 4)) // magic + count + sampleRate
+	{
+		fclose(f);
+		return false;
+	}
+
+	Uint8 magic[4];
+	fread_u8_die(magic, 4, f);
+	if (memcmp(magic, "HSND", 4) != 0)
+	{
+		fclose(f);
+		return false;
+	}
+
+	Uint16 count;
+	fread_u16_die(&count, 1, f);
+
+	Uint32 sampleRate;
+	fread_u32_die(&sampleRate, 1, f);
+
+	// Sanity bounds -- SOUND_COUNT is 38; a well-formed bank never needs more
+	// than a couple hundred entries.
+	if (sampleRate == 0 || count == 0 || count > 1000)
+	{
+		fclose(f);
+		return false;
+	}
+
+	long offsetTableEnd = 4 + 2 + 4 + (long)sizeof(Uint32) * (count + 1);
+	if (fileSize < offsetTableEnd)
+	{
+		fclose(f);
+		return false;
+	}
+
+	Uint32 *offsets = malloc(sizeof(Uint32) * (count + 1));
+	if (offsets == NULL)
+	{
+		fclose(f);
+		return false;
+	}
+	fread_u32_die(offsets, count + 1, f);
+
+	bool ok = true;
+	for (Uint32 i = 0; i <= count; ++i)
+	{
+		if (offsets[i] > (Uint32)fileSize)
+		{
+			ok = false;
+			break;
+		}
+		if (i > 0 && offsets[i] < offsets[i - 1])
+		{
+			ok = false;
+			break;
+		}
+	}
+	if (!ok)
+	{
+		free(offsets);
+		fclose(f);
+		return false;
+	}
+
+	bank->f = f;
+	bank->count = count;
+	bank->sampleRate = sampleRate;
+	bank->offsets = offsets;
+	return true;
+}
+
+static void hdSndBankClose(HdSndBank *bank)
+{
+	if (bank->f != NULL)
+		fclose(bank->f);
+	free(bank->offsets);
+	memset(bank, 0, sizeof(*bank));
+}
+
+// Loads sample `index` from an open, validated HD bank as raw Sint16 LE PCM
+// at bank->sampleRate. Returns false (no allocation performed) if the index
+// is out of range or the sample's byte span isn't a whole number of Sint16
+// frames -- the caller then leaves the classic result in place for that slot.
+static bool hdSndBankLoadSample(HdSndBank *bank, Uint16 index, Sint16 **outSamples, size_t *outCount)
+{
+	if (index >= bank->count)
+		return false;
+
+	Uint32 start = bank->offsets[index];
+	Uint32 end = bank->offsets[index + 1];
+	if (end < start)
+		return false;
+
+	Uint32 byteLen = end - start;
+	if (byteLen == 0 || (byteLen % sizeof(Sint16)) != 0)
+		return false;
+
+	size_t frameCount = byteLen / sizeof(Sint16);
+
+	Sint16 *samples = malloc(byteLen);
+	if (samples == NULL)
+		return false;
+
+	fseek(bank->f, (long)start, SEEK_SET);
+	fread_s16_die(samples, frameCount, bank->f);
+
+	*outSamples = samples;
+	*outCount = frameCount;
+	return true;
+}
+
+// Overlays soundSamples[baseIndex .. baseIndex+sampleCount) with HD-converted
+// audio from `bank`, per-sample-falling-back (leaving the classic result already
+// in place) on any load or conversion failure.
+static void hdSndBankApply(HdSndBank *bank, size_t baseIndex, Uint16 sampleCount)
+{
+	SDL_AudioCVT cvt;
+	if (SDL_BuildAudioCVT(&cvt, AUDIO_S16SYS, 1, (int)bank->sampleRate, AUDIO_S16SYS, 1, audioSampleRate) < 0)
+	{
+		fprintf(stderr, "warning: hd_sfx: failed to build HD audio converter: %s\n", SDL_GetError());
+		return;
+	}
+
+	for (Uint16 i = 0; i < sampleCount; ++i)
+	{
+		Sint16 *raw;
+		size_t rawCount;
+		if (!hdSndBankLoadSample(bank, i, &raw, &rawCount))
+			continue; // missing/malformed sample: classic result stands
+
+		size_t rawBytes = rawCount * sizeof(Sint16);
+
+		cvt.buf = malloc(rawBytes * (size_t)cvt.len_mult);
+		if (cvt.buf == NULL)
+		{
+			free(raw);
+			continue;
+		}
+		memcpy(cvt.buf, raw, rawBytes);
+		cvt.len = (int)rawBytes;
+		free(raw);
+
+		if (SDL_ConvertAudio(&cvt) != 0)
+		{
+			fprintf(stderr, "warning: hd_sfx: failed to convert HD sample %zu: %s\n",
+			        baseIndex + i, SDL_GetError());
+			free(cvt.buf);
+			continue;
+		}
+
+		free(soundSamples[baseIndex + i]);
+		soundSamples[baseIndex + i] = malloc(cvt.len_cvt);
+		memcpy(soundSamples[baseIndex + i], cvt.buf, cvt.len_cvt);
+		soundSampleCount[baseIndex + i] = cvt.len_cvt / sizeof(Sint16);
+
+		free(cvt.buf);
+	}
 }
 
 void loadSndFile(bool xmas)
@@ -255,6 +463,25 @@ void loadSndFile(bool xmas)
 	}
 
 	free(cvt.buf);
+
+	// HD overlay (Phase S2): additive, per-sample fallback to the classic
+	// result already populated above. See the HdSndBank helpers for details.
+	if (hd_sfx)
+	{
+		HdSndBank bank;
+
+		if (hdSndBankOpen("hdsnd_sfx.dat", &bank))
+		{
+			hdSndBankApply(&bank, 0, (Uint16)MIN((Uint32)SFX_COUNT, (Uint32)bank.count));
+			hdSndBankClose(&bank);
+		}
+
+		if (hdSndBankOpen(xmas ? "hdsnd_voicesc.dat" : "hdsnd_voices.dat", &bank))
+		{
+			hdSndBankApply(&bank, SFX_COUNT, (Uint16)MIN((Uint32)VOICE_COUNT, (Uint32)bank.count));
+			hdSndBankClose(&bank);
+		}
+	}
 
 	return;
 

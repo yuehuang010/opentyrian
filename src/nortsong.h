@@ -31,6 +31,11 @@ extern JE_word frameCountMax;
 extern Sint16 *soundSamples[SOUND_COUNT];
 extern size_t soundSampleCount[SOUND_COUNT];
 
+// master toggle for the HD (16-bit/44100Hz) SFX/voice bank remaster (Phase S2);
+// default on, falls back per-sample to the classic 8-bit/11025Hz path if the
+// HD bank or a given sample is missing/malformed.
+extern bool hd_sfx;
+
 extern JE_word tyrMusicVolume, fxVolume;
 extern const JE_word fxPlayVol;
 extern JE_word tempVolume;
