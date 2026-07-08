@@ -41,6 +41,9 @@ tyrian.sav
 # Generated HD asset previews (regenerate via tools/hd_extract.py)
 /tools/title_preview.png
 /tools/hdpic_previews/
+/tools/hdcomp_previews/
+/tools/hdcompb_previews/
+/tools/hdfont_previews/
 /doc/remaster_title_verified.png
 
 # macOS
