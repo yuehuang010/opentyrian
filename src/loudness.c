@@ -506,6 +506,42 @@ void play_song(unsigned int song_num)  // FKA NortSong.playSong
 	SDL_UnlockAudioDevice(audioDevice);
 }
 
+// Reloads the currently-playing song so a runtime hd_music change takes effect
+// immediately (switches the live track between the OGG stream and the synth).
+// Restarts the track from the top, preserving play/stop state.
+void refresh_current_song(void)
+{
+	if (audio_disabled)
+		return;
+
+	unsigned int song_num = song_playing;
+	bool wasStopped = music_stopped;
+
+	song_playing = ~0u;  // force play_song to treat this as a new song and reload
+	play_song(song_num);
+
+	if (wasStopped)
+		stop_song();
+}
+
+// Reloads the sound-effect/voice banks so a runtime hd_sfx change takes effect
+// immediately. Held under the audio lock, and any in-flight channels are
+// silenced first, because loadSndFile() frees and reallocates the sample
+// buffers the callback may be reading through channelSamples[].
+void reload_sound_samples(bool xmas)
+{
+	if (audio_disabled)
+	{
+		loadSndFile(xmas);
+		return;
+	}
+
+	SDL_LockAudioDevice(audioDevice);
+	memset(channelSampleCount, 0, sizeof channelSampleCount);
+	loadSndFile(xmas);
+	SDL_UnlockAudioDevice(audioDevice);
+}
+
 void restart_song(void)  // FKA Player.selectSong(1)
 {
 	if (audio_disabled)

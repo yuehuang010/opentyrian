@@ -44,6 +44,10 @@ void restart_song(void);
 void stop_song(void);
 void fade_song(void);
 
+// Apply a runtime hd_music / hd_sfx toggle immediately (see loudness.c).
+void refresh_current_song(void);
+void reload_sound_samples(bool xmas);
+
 void set_volume(Uint8 musicVolume, Uint8 sampleVolume);
 
 void multiSamplePlay(const Sint16 *samples, size_t sampleCount, Uint8 chan, Uint8 vol);

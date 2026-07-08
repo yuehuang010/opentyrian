@@ -97,6 +97,19 @@ static const char *getScalingModePickerItem(size_t i, char *buffer, size_t buffe
 	return scaling_mode_names[i];
 }
 
+// Generic Off/On picker (index 0 = Off, 1 = On) for boolean toggles.
+static size_t getOnOffPickerItemsCount(void)
+{
+	return 2;
+}
+
+static const char *getOnOffPickerItem(size_t i, char *buffer, size_t bufferSize)
+{
+	(void)buffer, (void)bufferSize;
+
+	return i == 0 ? "Off" : "On";
+}
+
 void setupMenu(void)
 {
 	typedef enum
@@ -112,6 +125,8 @@ void setupMenu(void)
 		MENU_ITEM_SCALING_MODE,
 		MENU_ITEM_MUSIC_VOLUME,
 		MENU_ITEM_SOUND_VOLUME,
+		MENU_ITEM_HD_MUSIC,
+		MENU_ITEM_HD_SFX,
 	} MenuItemId;
 
 	typedef enum
@@ -164,6 +179,8 @@ void setupMenu(void)
 			.items = {
 				{ MENU_ITEM_MUSIC_VOLUME, "Music Volume", "Change volume with the left/right arrow keys." },
 				{ MENU_ITEM_SOUND_VOLUME, "Sound Volume", "Change volume with the left/right arrow keys." },
+				{ MENU_ITEM_HD_MUSIC, "HD Music:", "Stream the remastered music (Off = classic OPL synth).", getOnOffPickerItemsCount, getOnOffPickerItem },
+				{ MENU_ITEM_HD_SFX, "HD Sound:", "Use the remastered sound effects (Off = classic).", getOnOffPickerItemsCount, getOnOffPickerItem },
 				{ MENU_ITEM_DONE, "Done", "Return to the previous menu." },
 				{ -1 }
 			},
@@ -284,6 +301,14 @@ void setupMenu(void)
 			case MENU_ITEM_SOUND_VOLUME:
 				JE_barDrawShadow(VGAScreen, xMenuItemValue, y, 1, samples_disabled ? 170 : 174, (fxVolume + 4) / 8, 2, 10);
 				JE_rectangle(VGAScreen, xMenuItemValue - 2, y - 2, xMenuItemValue + 96, y + 11, 242);
+				break;
+
+			case MENU_ITEM_HD_MUSIC:
+				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_music ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				break;
+
+			case MENU_ITEM_HD_SFX:
+				drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_sfx ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			default:
@@ -601,6 +626,22 @@ void setupMenu(void)
 					pickerSelectedIndex = scaling_mode;
 					break;
 				}
+				case MENU_ITEM_HD_MUSIC:
+				{
+					JE_playSampleNum(S_CLICK);
+
+					currentPicker = selectedMenuItemId;
+					pickerSelectedIndex = hd_music ? 1 : 0;
+					break;
+				}
+				case MENU_ITEM_HD_SFX:
+				{
+					JE_playSampleNum(S_CLICK);
+
+					currentPicker = selectedMenuItemId;
+					pickerSelectedIndex = hd_sfx ? 1 : 0;
+					break;
+				}
 				case MENU_ITEM_MUSIC_VOLUME:
 				{
 					JE_playSampleNum(S_CLICK);
@@ -751,6 +792,26 @@ void setupMenu(void)
 				case MENU_ITEM_SCALING_MODE:
 				{
 					scaling_mode = pickerSelectedIndex;
+					break;
+				}
+				case MENU_ITEM_HD_MUSIC:
+				{
+					bool value = pickerSelectedIndex == 1;
+					if (value != hd_music)
+					{
+						hd_music = value;
+						refresh_current_song();  // swap the live track OGG<->synth now
+					}
+					break;
+				}
+				case MENU_ITEM_HD_SFX:
+				{
+					bool value = pickerSelectedIndex == 1;
+					if (value != hd_sfx)
+					{
+						hd_sfx = value;
+						reload_sound_samples(xmas);  // rebuild the sample banks now
+					}
 					break;
 				}
 				default:
