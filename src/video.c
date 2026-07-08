@@ -53,6 +53,7 @@ int hd_backdrop_fade = 0;
 bool crt_mode = false;
 
 bool hd_flight_active = false;
+bool hd_tiles = false;
 
 static SDL_Texture *crt_scanline_tex = NULL;
 static SDL_Texture *crt_vignette_tex = NULL;
@@ -1000,6 +1001,67 @@ SDL_Texture *load_hd_sheet_frame(int sheet_id, int index)
 bool hd_flight_lookup(int sheet_id, int index)
 {
 	return load_hd_sheet_frame(sheet_id, index) != NULL;
+}
+
+// ---- HD level-tileset atlases (Phase S3) ----
+//
+// One HDPX grid atlas per (bank, palette): 20 columns x 30 rows of 96x112 cells
+// (1920x3360), covering the 600 bank-z tile slots. Same "load once, remember
+// failure, never retry" caching as load_hd_sheet_frame so a missing atlas isn't
+// re-opened every frame. 5 banks (shape chars ')','w','x','y','z') x 23 palettes.
+#define HD_TILE_BANKS 5
+#define HD_TILE_ATLAS_COLS 20
+#define HD_TILE_CELL_W 96
+#define HD_TILE_CELL_H 112
+static const char hd_tile_bank_char[HD_TILE_BANKS] = { ')', 'w', 'x', 'y', 'z' };
+static SDL_Texture *hd_tile_atlas_tex[HD_TILE_BANKS][PALETTE_COUNT];
+static bool hd_tile_atlas_load_failed[HD_TILE_BANKS][PALETTE_COUNT];
+
+SDL_Texture *load_hd_tile_atlas(int bank, int palette)
+{
+	if (bank < 0 || bank >= HD_TILE_BANKS || palette < 0 || palette >= PALETTE_COUNT)
+		return NULL;
+
+	if (hd_tile_atlas_tex[bank][palette] != NULL)
+		return hd_tile_atlas_tex[bank][palette];
+
+	if (hd_tile_atlas_load_failed[bank][palette])
+		return NULL;
+
+	char name[32];
+	snprintf(name, sizeof name, "hdtile_%c_p%02d.dat", hd_tile_bank_char[bank], palette);
+
+	SDL_Texture *tex = load_hdpx_texture(name);
+	if (tex == NULL)
+	{
+		hd_tile_atlas_load_failed[bank][palette] = true;
+		return NULL;
+	}
+
+	hd_tile_atlas_tex[bank][palette] = tex;
+	return tex;
+}
+
+void hd_tile_atlas_src(int z, SDL_Rect *src)
+{
+	src->x = (z % HD_TILE_ATLAS_COLS) * HD_TILE_CELL_W;
+	src->y = (z / HD_TILE_ATLAS_COLS) * HD_TILE_CELL_H;
+	src->w = HD_TILE_CELL_W;
+	src->h = HD_TILE_CELL_H;
+}
+
+// Which base palette (0..PALETTE_COUNT-1) is currently live, or -1 if colors[]
+// doesn't exactly match any base palette (a filter tint, an in-progress fade, or
+// a custom/interlude palette) -- in which case HD tiles are skipped for the frame
+// and the classic 8-bit background carries the correct (tinted) look.
+int current_palette_index(void)
+{
+	for (int p = 0; p < PALETTE_COUNT; ++p)
+	{
+		if (memcmp(colors, palettes[p], sizeof(Palette)) == 0)
+			return p;
+	}
+	return -1;
 }
 
 // ---- _filter (hue-band) recoloring parity: on-demand recolored-frame cache ----

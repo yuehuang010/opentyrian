@@ -118,6 +118,31 @@ display + human A/B rather than a headless run.
   upscaling, and the seam strategy (upscale assembled rows, or pad-sample
   neighbours) is the crux to validate visually per level.
 
+**S3 IMPLEMENTED (2026-07-08 — headless-verified, seam A/B pending):**
+- **Tile format verified against the loader** (`tyrian2.c` shape loop): 600 tiles
+  per bank from offset 0; per tile a 1-byte blank flag, else 672 bytes (row-major
+  24×28 indices), index 0 transparent, 520 trailing bytes ignored. Non-blank
+  counts `)`=175 w=255 x=322 y=226 z=361. Palette 6→8 bit `(c<<2)|(c>>4)`,
+  `PALETTE_COUNT`=23 (now in `palette.h`).
+- **Extractor** `tools/hd_extract_tiles.py`: one **HDPX grid atlas per
+  (bank,palette)** — 20 cols × 30 rows of 96×112 cells (1920×3360 RGBA),
+  `hdtile_<char>_p<NN>.dat`. `--method nearest` round-trip-verified pixel-exact
+  (15/15); `lanczos`/AI are the curation swap the user A/Bs. Smoke set (pal 0 +
+  the demo's pal 5) generated; **full (bank,palette) coverage pending** (needs the
+  used-pairs enumeration — see Track 1).
+- **Compositor** (`interp.c` `flight_emit_bg_row` + `video.c` `load_hd_tile_atlas`
+  / `hd_tile_atlas_src` / `current_palette_index`): `interp_flight_emit` grows an
+  `OP_BG_ROW[_BLEND]` branch emitting 24×28 HD quads in display-list order (so the
+  whole playfield is HD, z-order faithful — the old `last_bg` sprite-skip is
+  dropped when `hd_bg` is on). Pointer→z via an open-addressing hash built in
+  `JE_loadMap` (`hd_tile_z_for`). Bank from `char_shapeFile`; palette from
+  `current_palette_index()` (−1 ⇒ classic fallback). Gate `[video] hd_tiles`
+  (default off).
+- **Verified headless** (`OT_DUMP_TILES=1`, attract demo, bank z / palette 5):
+  atlas loads, `hd_bg=1`, **177k tile lookups 0 misses**, no crash over 90 s.
+  Builds clean `make` + `make debug` (`-Werror`). **Seam quality (nearest vs
+  lanczos) is the only remaining gate — needs a display + human A/B.**
+
 Effort: S ≈ days · M ≈ weeks, hobby-pace. S0 and S4 are the same tool at
 two moments; S1–S3 are independent and parallelizable (separate subagents).
 

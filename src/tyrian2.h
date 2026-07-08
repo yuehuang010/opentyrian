@@ -54,6 +54,14 @@ void JE_drawEnemy(int enemyOffset);
 void JE_starShowVGA(void);
 void JE_starCompositeShow(void);
 
+// HD tileset resolution (Phase S3). hd_tile_current_bank() is the bank index
+// (0..4, matching video.c's hd_tile_bank_char) selected by the current level's
+// char_shapeFile, or -1 if none loaded. hd_tile_z_for() maps a raw tile-data
+// pointer (as stored in a background row's map[]) back to its bank-z index
+// (0..599, the HD atlas cell), or -1 if the pointer isn't a known tile.
+int hd_tile_current_bank(void);
+int hd_tile_z_for(const JE_byte *data);
+
 void JE_main(void);
 void JE_loadMap(void);
 #ifdef WITH_NETWORK

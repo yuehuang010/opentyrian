@@ -49,6 +49,7 @@ extern int  hd_backdrop_fade;    // 0..255, drives the HD backdrop fade-in
 extern bool crt_mode;            // optional CRT scanline + vignette post-process
 
 extern bool hd_flight_active;    // set while the in-flight HD sprite compositor should overlay
+extern bool hd_tiles;            // HD level tilesets (Phase S3); overlay upscaled truecolor tiles
 
 bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if its HD asset loads; returns success
 bool hd_set_backdrop_asset(const char *name); // begin HD compositing for a filename-keyed full-screen asset ("hdpcx_<name>.dat"); returns success
@@ -86,6 +87,17 @@ bool hd_flight_lookup(int sheet_id, int index);            // true iff a frame t
 // Returns NULL (never suppressing the 8-bit fallback) if the brightness asset is
 // missing, the cache is full, or synthesis fails for any reason.
 SDL_Texture *load_hd_sheet_frame_filtered(int sheet_id, int index, Uint8 filter);
+// HD level-tileset atlas (Phase S3). Loads (fail-once cached) the HDPX grid atlas
+// "hdtile_<bankchar>_p<NN>.dat" for one (bank 0..4, palette 0..22) pair; returns
+// NULL when the atlas is missing so callers fall back to the classic 8-bit blit.
+// hd_tile_atlas_src fills `src` with the 96x112 cell rect for bank-z index `z`
+// (0..599) in the 20-col grid. current_palette_index memcmp's the live colors[]
+// against palettes[0..22], returning the matching base-palette index or -1 (a
+// faded/filtered/custom palette -> HD tiles off this frame).
+SDL_Texture *load_hd_tile_atlas(int bank, int palette);
+void hd_tile_atlas_src(int z, SDL_Rect *src);
+int  current_palette_index(void);
+
 void hd_flight_begin(void);                                // reset the flight queue (call once per present, before recording)
 void hd_flight_set(SDL_Texture *tex, SDL_Rect src, int lx, int ly, int lw, int lh, SDL_BlendMode blendmode, Uint8 r, Uint8 g, Uint8 b, Uint8 a); // push one entry (bounds-checked)
 void hd_flight_clear(void);                                // reset the flight queue (call after presenting)

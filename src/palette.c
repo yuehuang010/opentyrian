@@ -28,8 +28,6 @@
 
 static Uint32 rgb_to_yuv(int r, int g, int b);
 
-#define PALETTE_COUNT 23
-
 Palette palettes[PALETTE_COUNT];
 int palette_count;
 

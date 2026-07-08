@@ -44,7 +44,11 @@ tyrian.sav
 /tools/hdcomp_previews/
 /tools/hdcompb_previews/
 /tools/hdfont_previews/
+/tools/hdtile_previews/
 /doc/remaster_title_verified.png
+
+# Python venvs for the asset-regen tooling (numpy/scipy/soxr/pillow)
+/tools/.venv*/
 
 # macOS
 .DS_Store

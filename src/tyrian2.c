@@ -2444,6 +2444,63 @@ draw_player_shot_loop_end:
 	goto level_loop;
 }
 
+// ---- HD tileset pointer->z resolution (Phase S3) ----
+//
+// The background compositor (interp.c) sees a raw tile-data pointer per map cell
+// and must recover its bank-z index (the HD atlas cell). Built once per level
+// while the shapes load (each megaData{1,2,3}.shapes[x].sh that becomes a live
+// map tile is registered with its z), then looked up O(1) per composited tile.
+// Open-addressing hash keyed on the pointer value; capacity comfortably exceeds
+// the 3*72 possible live slots per level.
+#define HD_TILE_HASH_SIZE 1024
+static const JE_byte *hd_tile_hash_key[HD_TILE_HASH_SIZE];
+static int hd_tile_hash_z[HD_TILE_HASH_SIZE];
+static int hd_tile_bank_index = -1;
+
+static void hd_tile_reset(int bank)
+{
+	hd_tile_bank_index = bank;
+	memset(hd_tile_hash_key, 0, sizeof hd_tile_hash_key);
+}
+
+static void hd_tile_register(const JE_byte *data, int z)
+{
+	if (data == NULL)
+		return;
+	unsigned int h = ((uintptr_t)data * 2654435761u) & (HD_TILE_HASH_SIZE - 1);
+	for (int guard = 0; guard < HD_TILE_HASH_SIZE; ++guard)
+	{
+		if (hd_tile_hash_key[h] == NULL || hd_tile_hash_key[h] == data)
+		{
+			hd_tile_hash_key[h] = data;
+			hd_tile_hash_z[h] = z;
+			return;
+		}
+		h = (h + 1) & (HD_TILE_HASH_SIZE - 1);
+	}
+}
+
+int hd_tile_current_bank(void)
+{
+	return hd_tile_bank_index;
+}
+
+int hd_tile_z_for(const JE_byte *data)
+{
+	if (data == NULL)
+		return -1;
+	unsigned int h = ((uintptr_t)data * 2654435761u) & (HD_TILE_HASH_SIZE - 1);
+	for (int guard = 0; guard < HD_TILE_HASH_SIZE; ++guard)
+	{
+		if (hd_tile_hash_key[h] == NULL)
+			return -1;
+		if (hd_tile_hash_key[h] == data)
+			return hd_tile_hash_z[h];
+		h = (h + 1) & (HD_TILE_HASH_SIZE - 1);
+	}
+	return -1;
+}
+
 /* --- Load Level/Map Data --- */
 void JE_loadMap(void)
 {
@@ -3107,6 +3164,21 @@ new_game:
 	sprintf(tempStr, "shapes%c.dat", tolower((unsigned char)char_shapeFile));
 	FILE *shpFile = dir_fopen_die(data_dir(), tempStr, "rb");
 
+	// HD tilesets (Phase S3): reset the pointer->z map and select the atlas bank
+	// from this level's shape char (mirrors video.c's hd_tile_bank_char order).
+	{
+		int bank = -1;
+		switch (tolower((unsigned char)char_shapeFile))
+		{
+		case ')': bank = 0; break;
+		case 'w': bank = 1; break;
+		case 'x': bank = 2; break;
+		case 'y': bank = 3; break;
+		case 'z': bank = 4; break;
+		}
+		hd_tile_reset(bank);
+	}
+
 	for (int z = 0; z < 600; z++)
 	{
 		JE_boolean shapeBlank;
@@ -3125,6 +3197,7 @@ new_game:
 				memcpy(megaData1.shapes[x].sh, shape, sizeof(JE_DanCShape));
 
 				ref[0][x] = megaData1.shapes[x].sh;
+				hd_tile_register(megaData1.shapes[x].sh, z);
 			}
 		}
 
@@ -3144,6 +3217,7 @@ new_game:
 
 					megaData2.shapes[x].fill = y;
 					ref[1][x] = megaData2.shapes[x].sh;
+					hd_tile_register(megaData2.shapes[x].sh, z);
 				}
 				else
 				{
@@ -3168,6 +3242,7 @@ new_game:
 
 					megaData3.shapes[x].fill = y;
 					ref[2][x] = megaData3.shapes[x].sh;
+					hd_tile_register(megaData3.shapes[x].sh, z);
 				}
 				else
 				{

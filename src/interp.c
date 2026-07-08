@@ -518,6 +518,42 @@ static void flight_emit_tile_filtered(int sheet, unsigned int index, Uint8 filte
 	hd_flight_set(tex, src, dx - 24, dy, 12, 14, SDL_BLENDMODE_BLEND, 255, 255, 255, 255);
 }
 
+// Emits one background row (12 tiles of 24x28) as HD atlas quads at the given
+// interpolated playfield origin. Each map cell's raw tile pointer is resolved to
+// its bank-z index and drawn from the (bank, palette) atlas cell; a NULL cell,
+// an unresolved pointer, or a missing atlas is a per-tile fallback (the 8-bit
+// blit already drew it). `blend` rows draw at half alpha to approximate the
+// 8-bit low-nibble average against the HD layer already in the queue beneath.
+static void flight_emit_bg_row(const Op *op, int bank, int palette, int dx, int dy, bool blend)
+{
+	SDL_Texture *atlas = load_hd_tile_atlas(bank, palette);
+	if (atlas == NULL)
+		return;
+
+	SDL_BlendMode bm = blend ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE;
+	Uint8 a = blend ? 128 : 255;
+
+	for (int tile = 0; tile < 12; ++tile)
+	{
+		const Uint8 *data = op->map[tile];
+		if (data == NULL)
+			continue;
+
+		int z = hd_tile_z_for(data);
+		if (z < 0 || z >= 600)
+			continue;
+
+		SDL_Rect src;
+		hd_tile_atlas_src(z, &src);
+
+		// Playfield-relative x mirrors flight_emit_tile's dx-24 origin; each tile
+		// steps 24 px across the row. Full 24x28 logical cell (the atlas cell is a
+		// 4x upscale of it). SDL clips partial top/bottom rows against the queue's
+		// playfield clip rect, matching the 8-bit blit's own clipping.
+		hd_flight_set(atlas, src, dx + tile * 24 - 24, dy, 24, 28, bm, 255, 255, 255, a);
+	}
+}
+
 void interp_flight_emit(float alpha)
 {
 	// Rebuild the video flight queue for this presented frame.
@@ -538,21 +574,43 @@ void interp_flight_emit(float alpha)
 
 	const float back = 1.0f - alpha;
 
+	// HD level tilesets (Phase S3): when enabled and this level's bank + live
+	// palette both resolve, the background rows are composited in HD *in display-
+	// list order*, so the whole playfield (backgrounds + sprites) reconstructs at
+	// full res with faithful z-order. A -1 palette (filter tint / fade / custom)
+	// or an unresolved bank leaves backgrounds classic for the frame.
+	int tile_bank = hd_tiles ? hd_tile_current_bank() : -1;
+	int tile_pal = tile_bank >= 0 ? current_palette_index() : -1;
+	bool hd_bg = (tile_bank >= 0 && tile_pal >= 0 && load_hd_tile_atlas(tile_bank, tile_pal) != NULL);
+
 	// Ground structures are drawn before the foreground background layer (e.g. the
 	// clouds of level 1, background2over==1) and are occluded by it in the 8-bit
-	// composite. Backgrounds aren't HD, so re-drawing those sprites in the HD overlay
-	// would float them on top of the clouds. Find the last background-row op; any
-	// sprite op a later background layer paints over stays pure 8-bit (correctly
-	// occluded), and only sprites above the last background layer (player, sky/top
-	// enemies, shots, explosions) get the HD overlay.
+	// composite. When backgrounds stay 8-bit (hd_bg off), re-drawing those sprites
+	// in the HD overlay would float them on top of the clouds, so find the last
+	// background-row op: any sprite a later background layer paints over stays pure
+	// 8-bit (correctly occluded). When hd_bg is on the background layers are
+	// themselves emitted (in order) into the queue, so the queue's own paint order
+	// preserves that occlusion and every sprite can be emitted -- no skip needed.
 	int last_bg = -1;
-	for (int i = 0; i < curr_count; ++i)
-		if (curr_ops[i].type == OP_BG_ROW || curr_ops[i].type == OP_BG_ROW_BLEND)
-			last_bg = i;
+	if (!hd_bg)
+		for (int i = 0; i < curr_count; ++i)
+			if (curr_ops[i].type == OP_BG_ROW || curr_ops[i].type == OP_BG_ROW_BLEND)
+				last_bg = i;
 
 	for (int i = 0; i < curr_count; ++i)
 	{
 		const Op *op = &curr_ops[i];
+
+		if (op->type == OP_BG_ROW || op->type == OP_BG_ROW_BLEND)
+		{
+			if (hd_bg)
+			{
+				int dx, dy;
+				interp_op_pos(op, back, &dx, &dy);
+				flight_emit_bg_row(op, tile_bank, tile_pal, dx, dy, op->type == OP_BG_ROW_BLEND);
+			}
+			continue;
+		}
 
 		if (op->type != OP_SPRITE2)
 			continue;

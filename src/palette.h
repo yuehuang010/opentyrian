@@ -25,6 +25,8 @@
 
 typedef SDL_Color Palette[256];
 
+#define PALETTE_COUNT 23  // number of base palettes in palette.dat
+
 extern Palette palettes[];
 extern int palette_count;
 
