@@ -87,12 +87,36 @@ covers every consumer.
 
 | Phase | Name | Goal | Effort | Risk |
 |------:|------|------|:------:|:----:|
-| **S0** | Bundle VFS | `dir_fopen` falls back to a bundled pak; game boots with no data dir | S | Low | ✅ **done** |
-| **S1** | Music remaster | 41 tracks rendered/remastered to streamed OGG behind a toggle | M | Med |
-| **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low — 🔨 experiment done, method chosen (see §S2) |
-| **S3** | Remaining art | `shapes?.dat` tilesets, `estsc.shp`, `tshp2.pcx`, menu-sprite dormancy | M | Med |
+| **S0** | Bundle VFS | `dir_fopen` falls back to a bundled pak; game boots with no data dir | S | Low | ✅ **done** (hd-remaster eb77195) |
+| **S1** | Music remaster | 41 tracks rendered/remastered to streamed OGG behind a toggle | M | Med | ✅ **done** (standalone-resume 276405c + ed66b18); pending human A/B listen |
+| **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low | ✅ **done** (standalone-resume e1545c7); pending human A/B listen |
+| **S3** | Remaining art | `shapes?.dat` tilesets, `estsc.shp`, `tshp2.pcx`, menu-sprite dormancy | M | Med | ⬜ **not started** — needs a truecolor background compositor + visual A/B |
 | **S4** | Data bundling | All required game-data files packed into the bundle | S | Low | ✅ **satisfied by S0** (bundle already packs the byte-exact set) |
-| **S5** | Packaging & zero-data boot | Compressed asset formats, repo/release hosting, clean-checkout verification | M | Med |
+| **S5** | Packaging & zero-data boot | Compressed asset formats, repo/release hosting, clean-checkout verification | M | Med | ⬜ **not started** — depends on S3 HD assets existing |
+
+**Status (2026-07-08):** S0/S1/S2/S4 complete and headless-verified on branch
+`standalone-resume` (S1/S2) and `hd-remaster` (S0). Each remaining sign-off is a
+*perceptual* pass only (listen / look) — see the per-phase notes. S3 and S5 are
+the remaining build work; S3's core is a new **truecolor HD background layer**
+whose only real risk (tile-edge seams) is a visual judgment, so it wants a
+display + human A/B rather than a headless run.
+
+**S3 implementation notes (from a code sweep for the follow-up):**
+- Tiles are **24×28, 8-bit indexed**, ≤600 per bank; on disk each is a 1-byte
+  blank flag then (if not blank) 672 raw palette-index bytes. Banks present:
+  `shapes).dat`, `shapesw/x/y/z.dat` (5 banks; the level file's `char_shapeFile`
+  byte picks one — see `tyrian2.c:3107`). Colour 0 = transparent.
+- Backgrounds draw in `backgrnd.c` (`blit_background_row[_blend]`, 12 tiles ×
+  24px per row, rows every 28px) and are already captured as `OP_BG_ROW`/
+  `OP_BG_ROW_BLEND` ops in `interp.c` — but replay currently runs the **classic
+  8-bit** blit into `game_screen`. HD tilesets need those ops to instead composite
+  upscaled truecolor tiles into the HD flight layer (mirroring `hd_flight_set`
+  for sprites in `interp.c`), gated by a new `[video] hd_tiles` toggle + per-tile
+  classic fallback.
+- Tiles use the **per-level palette** (`palettes[]` from `palette.dat`, selected
+  per level) — the extractor must colour tiles with the level's palette before
+  upscaling, and the seam strategy (upscale assembled rows, or pad-sample
+  neighbours) is the crux to validate visually per level.
 
 Effort: S ≈ days · M ≈ weeks, hobby-pace. S0 and S4 are the same tool at
 two moments; S1–S3 are independent and parallelizable (separate subagents).
