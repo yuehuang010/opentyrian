@@ -31,6 +31,11 @@ void lds_free(void);
 void lds_rewind(void);
 void lds_fade(Uint8 speed);
 
+// Read-only position accessor (order/position index within the song).  Used
+// offline by tools/render_music.c to locate the sample offset of the
+// sequencer's loop-back target; does not affect playback.
+unsigned int lds_get_position(void);
+
 /*unsigned int getorders() { return numposi; }
 unsigned int getorder() { return posplay; }
 unsigned int getrow() { return pattplay; }

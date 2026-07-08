@@ -155,6 +155,11 @@ $(TARGET) : $(OBJS)
 
 -include $(DEPS)
 
+# Vendored single-file decoder (src/stb_vorbis.c); isolate its one
+# tautological-pointer-comparison warning here instead of disabling it
+# project-wide.
+obj/stb_vorbis.o : CFLAGS += -Wno-tautological-compare
+
 obj/%.o : src/%.c
 	@mkdir -p "$(dir $@)"
 	$(CC) $(ALL_CPPFLAGS) $(ALL_CFLAGS) -c -o $@ $<

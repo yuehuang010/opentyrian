@@ -188,12 +188,17 @@ void lds_free(void)
 {
 	free(soundbank);
 	soundbank = NULL;
-	
+
 	free(positions);
 	positions = NULL;
-	
+
 	free(patterns);
 	patterns = NULL;
+}
+
+unsigned int lds_get_position(void)
+{
+	return posplay;
 }
 
 void lds_rewind(void)
