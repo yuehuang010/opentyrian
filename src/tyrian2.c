@@ -3395,21 +3395,8 @@ bool titleScreen(void)
 					fade_palette(colors, 10, 0, 255 - 16);
 			}
 
-			// Draw menu items.
 			for (size_t i = 0; i < COUNTOF(menuText); ++i)
-			{
-				const char *const text = menuText[i];
-
-				wMenuItem[i] = JE_textWidth(text, FONT_NORMAL);
-				const int x = xCenter - wMenuItem[i] / 2;
-				const int y = yMenuItems + hMenuItem * i;
-
-				drawFontHv(VGAScreen, x - 1, y - 1, menuText[i], FONT_NORMAL, 15, -10);
-				drawFontHv(VGAScreen, x + 1, y + 1, menuText[i], FONT_NORMAL, 15, -10);
-				drawFontHv(VGAScreen, x + 1, y - 1, menuText[i], FONT_NORMAL, 15, -10);
-				drawFontHv(VGAScreen, x - 1, y + 1, menuText[i], FONT_NORMAL, 15, -10);
-				drawFontHv(VGAScreen, x,     y,     menuText[i], FONT_NORMAL, 15, -3);
-			}
+				wMenuItem[i] = JE_textWidth(menuText[i], FONT_NORMAL);
 
 			memcpy(VGAScreen2->pixels, VGAScreen->pixels, VGAScreen2->pitch * VGAScreen2->h);
 
@@ -3425,6 +3412,21 @@ bool titleScreen(void)
 		}
 
 		memcpy(VGAScreen->pixels, VGAScreen2->pixels, VGAScreen->pitch * VGAScreen->h);
+
+		// Draw menu items every redraw, not once into the VGAScreen2 snapshot: in HD
+		// mode the glyphs live in the immediate-mode overlay queue (drained each
+		// present), so snapshotted text would vanish after one frame.
+		for (size_t i = 0; i < COUNTOF(menuText); ++i)
+		{
+			const int x = xCenter - wMenuItem[i] / 2;
+			const int y = yMenuItems + hMenuItem * i;
+
+			drawFontHv(VGAScreen, x - 1, y - 1, menuText[i], FONT_NORMAL, 15, -10);
+			drawFontHv(VGAScreen, x + 1, y + 1, menuText[i], FONT_NORMAL, 15, -10);
+			drawFontHv(VGAScreen, x + 1, y - 1, menuText[i], FONT_NORMAL, 15, -10);
+			drawFontHv(VGAScreen, x - 1, y + 1, menuText[i], FONT_NORMAL, 15, -10);
+			drawFontHv(VGAScreen, x,     y,     menuText[i], FONT_NORMAL, 15, -3);
+		}
 
 		// Highlight selected menu item.
 		drawFontHvAligned(VGAScreen, VGAScreen->w / 2, yMenuItems + hMenuItem * selectedIndex, menuText[selectedIndex], FONT_NORMAL, ALIGN_CENTER, 15, -1);
