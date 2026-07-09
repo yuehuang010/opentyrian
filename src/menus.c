@@ -80,9 +80,6 @@ bool gameplaySelect(void)
 			if (hd_mode && hd_set_backdrop(2))
 				JE_clr256(VGAScreen2);
 
-			// Draw header.
-			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, gameplay_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
-
 			// In HD mode, fade in before the items are drawn: the fade's presents
 			// drain the immediate-mode HD glyph queue, so items emitted before
 			// fade_palette would be missing from the held post-fade frame.
@@ -93,8 +90,12 @@ bool gameplaySelect(void)
 			}
 		}
 
-		// Restore background and header.
+		// Restore background.
 		memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+
+		// Draw header to VGAScreen each frame so it renders through the HD font
+		// path (text baked into VGAScreen2 stays classic; see hd_font_active).
+		drawFontHvShadowAligned(VGAScreen, xCenter, yMenuHeader, gameplay_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
 
 		// Draw menu items.
 		for (size_t i = 0; i < menuItemsCount; ++i)
@@ -279,9 +280,6 @@ bool episodeSelect(void)
 			if (hd_mode && hd_set_backdrop(2))
 				JE_clr256(VGAScreen2);
 
-			// Draw header.
-			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, episode_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
-
 			// See gameplaySelect: in HD mode the fade must precede the item draws.
 			if (hd_mode)
 			{
@@ -290,8 +288,12 @@ bool episodeSelect(void)
 			}
 		}
 
-		// Restore background and header.
+		// Restore background.
 		memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+
+		// Draw header to VGAScreen each frame so it renders through the HD font
+		// path (text baked into VGAScreen2 stays classic; see hd_font_active).
+		drawFontHvShadowAligned(VGAScreen, xCenter, yMenuHeader, episode_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
 
 		// Draw menu items.
 		for (size_t i = 0; i < menuItemsCount; ++i)
@@ -467,9 +469,6 @@ bool difficultySelect(void)
 			if (hd_mode && hd_set_backdrop(2))
 				JE_clr256(VGAScreen2);
 
-			// Draw header.
-			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, difficulty_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
-
 			// See gameplaySelect: in HD mode the fade must precede the item draws.
 			if (hd_mode)
 			{
@@ -478,8 +477,12 @@ bool difficultySelect(void)
 			}
 		}
 
-		// Restore background and header.
+		// Restore background.
 		memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+
+		// Draw header to VGAScreen each frame so it renders through the HD font
+		// path (text baked into VGAScreen2 stays classic; see hd_font_active).
+		drawFontHvShadowAligned(VGAScreen, xCenter, yMenuHeader, difficulty_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
 
 		// Draw menu items.
 		for (size_t i = 0; i < menuItemsVisibleCount; ++i)

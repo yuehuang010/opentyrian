@@ -1188,9 +1188,6 @@ void JE_highScoreScreen(void)
 
 			fill_rectangle_wh(VGAScreen2, 0, 192, 320, 8, 0);
 
-			// Draw header.
-			drawFontHvShadowAligned(VGAScreen2, xCenter, yMenuHeader, miscText[50], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
-
 			// In HD mode, fade in before the scores are drawn: the fade's presents
 			// drain the immediate-mode HD glyph queue, so text emitted before
 			// fade_palette would be missing from the held post-fade frame.
@@ -1201,8 +1198,12 @@ void JE_highScoreScreen(void)
 			}
 		}
 
-		// Restore background and header.
+		// Restore background.
 		memcpy(VGAScreen->pixels, VGAScreen2->pixels, (size_t)VGAScreen->pitch * VGAScreen->h);
+
+		// Draw header to VGAScreen each frame so it renders through the HD font
+		// path (text baked into VGAScreen2 stays classic; see hd_font_active).
+		drawFontHvShadowAligned(VGAScreen, xCenter, yMenuHeader, miscText[50], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
 
 		const bool disabled = !episodeAvail[episodeIndex];
 
