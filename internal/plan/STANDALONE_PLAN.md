@@ -88,18 +88,17 @@ covers every consumer.
 | Phase | Name | Goal | Effort | Risk |
 |------:|------|------|:------:|:----:|
 | **S0** | Bundle VFS | `dir_fopen` falls back to a bundled pak; game boots with no data dir | S | Low | ✅ **done** (hd-remaster eb77195) |
-| **S1** | Music remaster | 41 tracks rendered/remastered to streamed OGG behind a toggle | M | Med | ✅ **done** (standalone-resume 276405c + ed66b18); pending human A/B listen |
-| **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low | ✅ **done** (standalone-resume e1545c7); pending human A/B listen |
-| **S3** | Remaining art | `shapes?.dat` tilesets, `estsc.shp`, `tshp2.pcx`, menu-sprite dormancy | M | Med | ⬜ **not started** — needs a truecolor background compositor + visual A/B |
+| **S1** | Music remaster | 41 tracks rendered/remastered to streamed OGG behind a toggle | M | Med | ✅ **done** — merged to `hd-remaster` (7e4fc28); builds clean, all 41 OGGs loaded/loop-verified; **human A/B sign-off done (2026-07-09)** |
+| **S2** | SFX & voice remaster | HD 16-bit samples for all SFX + voices (incl. Christmas) | S–M | Low | ✅ **done** — merged to `hd-remaster`, builds clean, HD banks confirmed loaded; **human A/B sign-off done (2026-07-09, demo, no distortion/artifacts)** |
+| **S3** | Remaining art | `shapes?.dat` tilesets, `estsc.shp`, `tshp2.pcx`, menu-sprite dormancy | M | Med | ✅ **done (2026-07-09)** — HD tileset compositor + extractor shipped; human seam A/B signed off. `estsc.shp` wired; `tshp2.pcx` deferred (ships classic) |
 | **S4** | Data bundling | All required game-data files packed into the bundle | S | Low | ✅ **satisfied by S0** (bundle already packs the byte-exact set) |
 | **S5** | Packaging & zero-data boot | Compressed asset formats, repo/release hosting, clean-checkout verification | M | Med | ⬜ **not started** — depends on S3 HD assets existing |
 
-**Status (2026-07-08):** S0/S1/S2/S4 complete and headless-verified on branch
-`standalone-resume` (S1/S2) and `hd-remaster` (S0). Each remaining sign-off is a
-*perceptual* pass only (listen / look) — see the per-phase notes. S3 and S5 are
-the remaining build work; S3's core is a new **truecolor HD background layer**
-whose only real risk (tile-edge seams) is a visual judgment, so it wants a
-display + human A/B rather than a headless run.
+**Status (2026-07-09):** S0/S1/S2/S3/S4 complete and merged to `hd-remaster`, with
+the S1, S2 (audio) **and S3 (tile seam) human A/B sign-offs all done**. S3's core
+truecolor HD background layer was validated live (real renderer, `hd_tiles` on) —
+no objectionable tile-edge seams. **S5 (packaging/compression) is the only
+remaining phase**, now unblocked since the S3 HD assets are final.
 
 **S3 implementation notes (from a code sweep for the follow-up):**
 - Tiles are **24×28, 8-bit indexed**, ≤600 per bank; on disk each is a 1-byte
