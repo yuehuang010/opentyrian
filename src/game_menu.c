@@ -16,6 +16,28 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+
+/** @file game_menu.c
+ * Between-level shop/nav menu system: the item shop screen, ship/planet
+ * nav-map drawing, weapon simulation view, ship specs, and the top-level
+ * main-menu dispatcher and quit confirmation.
+ *
+ * Entry points: JE_itemScreen(), JE_menuFunction(), JE_updateNavScreen(),
+ * JE_quitRequest().
+ *
+ * Contents (see the ===== SECTION ===== banners below):
+ *   - Item/cost helpers
+ *   - Item shop screen
+ *   - Ship illustration & cube loading
+ *   - Item drawing helpers
+ *   - Menu choice/nav screen drawing
+ *   - Weapon view & ship specs helpers
+ *   - Main menu help & quit confirmation
+ *   - Item menu generation & score display
+ *   - Main menu dispatch
+ *   - Ship specs drawing & weapon sim
+ */
+
 #include "game_menu.h"
 
 #include "backgrnd.h"
@@ -110,6 +132,8 @@ static const JE_word planetY[21] = {  40,  90,  90,  80, 170,  30,  50, 130, 120
 static const uint cube_line_chars = sizeof(*cube->text) - 1;
 static const uint cube_line_width = 150;
 
+/* ===================== Item/cost helpers ===================== */
+
 /*** Functions ***/
 static Uint8 *playeritem_map(PlayerItems *items, uint i)
 {
@@ -150,6 +174,8 @@ JE_longint JE_cashLeft(void)
 
 	return tempL;
 }
+
+/* ===================== Item shop screen ===================== */
 
 void JE_itemScreen(void)
 {
@@ -1656,6 +1682,8 @@ void JE_itemScreen(void)
 		fade_black(10);
 }
 
+/* ===================== Ship illustration & cube loading ===================== */
+
 void draw_ship_illustration(void)
 {
 	// full of evil hardcoding
@@ -1864,6 +1892,8 @@ bool load_cube(int cube_slot, int cube_index)
 	return true;
 }
 
+/* ===================== Item drawing helpers ===================== */
+
 void JE_drawItem(JE_byte itemType, JE_word itemNum, JE_word x, JE_word y)
 {
 	JE_word tempW = 0;
@@ -1927,6 +1957,8 @@ void JE_drawMenuHeader(void)
 	}
 	JE_dString(VGAScreen, 74 + JE_fontCenter(tempStr, FONT_SHAPES), 10, tempStr, FONT_SHAPES);
 }
+
+/* ===================== Menu choice/nav screen drawing ===================== */
 
 void JE_drawMenuChoices(void)
 {
@@ -2260,6 +2292,8 @@ void JE_scaleBitmap(SDL_Surface *dst_bitmap, SDL_Surface *src_bitmap,  int x1, i
 	}
 }
 
+/* ===================== Weapon view & ship specs helpers ===================== */
+
 void JE_initWeaponView(void)
 {
 	fill_rectangle_xy(VGAScreen, 8, 8, 144, 177, 0);
@@ -2361,6 +2395,8 @@ void JE_doShipSpecs(void)
 
 	waitUntilGetInput();
 }
+
+/* ===================== Main menu help & quit confirmation ===================== */
 
 void JE_drawMainMenuHelpText(void)
 {
@@ -2508,6 +2544,8 @@ JE_boolean JE_quitRequest(void)
 	return quit_selected;
 }
 
+/* ===================== Item menu generation & score display ===================== */
+
 void JE_genItemMenu(JE_byte itemNum)
 {
 	menuChoices[MENU_UPGRADE_SUB] = itemAvailMax[itemAvailMap[itemNum - 2] - 1] + 2;
@@ -2583,6 +2621,8 @@ void JE_drawScore(void)
 		JE_textShade(VGAScreen, 65, 173, cl, 1, 6, DARKEN);
 	}
 }
+
+/* ===================== Main menu dispatch ===================== */
 
 void JE_menuFunction(JE_byte select)
 {
@@ -3031,6 +3071,8 @@ joystick_assign_done:
 
 	old_items[0] = player[0].items;
 }
+
+/* ===================== Ship specs drawing & weapon sim ===================== */
 
 void JE_drawShipSpecs(SDL_Surface * screen, SDL_Surface * temp_screen)
 {

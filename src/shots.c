@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file shots.c
+ * Player shot simulation: spawning, aiming, and per-frame movement/drawing of player weapon fire.
+ *
+ * Entry points: simulate_player_shots(), player_shot_create(), player_shot_move_and_draw(), player_shot_set_direction().
+ */
+
 #include "shots.h"
 
 #include "player.h"

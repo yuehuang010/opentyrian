@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file lds_play.c
+ * LDS music format player: drives the OPL2 FM synth (opl.c) from the
+ * Tyrian .lds instrument/sequence data.
+ *
+ * Entry points: lds_load(), lds_update(), lds_free(), lds_rewind(),
+ * lds_fade(), lds_playsound().
+ */
+
 #include "lds_play.h"
 
 #include "file.h"

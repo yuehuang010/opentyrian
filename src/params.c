@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file params.c
+ * Command-line argument parsing, dispatching flags to the relevant subsystems.
+ *
+ * Entry points: JE_paramCheck().
+ */
+
 #include "params.h"
 
 #include "arg_parse.h"

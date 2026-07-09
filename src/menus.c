@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file menus.c
+ * Pre-flight menu screens: gameplay setup, episode select, and difficulty select.
+ *
+ * Entry points: gameplaySelect(), episodeSelect(), difficultySelect().
+ */
+
 #include "menus.h"
 
 #include "config.h"

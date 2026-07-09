@@ -15,6 +15,7 @@ shared.
 - [use-sonnet-agents-for-implementation.md](use-sonnet-agents-for-implementation.md) — delegate implementation to subagents, tier the model by difficulty
 - [commit-before-spawning-agents.md](commit-before-spawning-agents.md) — commit reviewed work before spawning agents; forbid state-changing git in prompts
 - [plan/NAVIGATION_PLAN.md](plan/NAVIGATION_PLAN.md) — plan to improve code navigation (index tooling, CODEMAP, globals annotation); phased by return-on-effort
+- [CODEMAP.md](CODEMAP.md) — one-page subsystem map: files, entry points, key globals per subsystem; start here to orient in the codebase
 
 ## Issues
 

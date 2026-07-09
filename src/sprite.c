@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file sprite.c
+ * Sprite table loading and blitting: legacy indexed sprite sheets plus the newer Sprite2 (HD-aware)
+ * format, with hue/blend/darken/filter variants.
+ *
+ * Entry points: load_sprites(), blit_sprite(), blit_sprite2(), JE_loadMainShapeTables().
+ */
+
 #include "sprite.h"
 
 #include "file.h"

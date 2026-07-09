@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file bundle.c
+ * Reader for the standalone-bundle .pak asset archive format (HD asset overlay).
+ *
+ * Entry points: bundle_available(), bundle_has(), bundle_fopen().
+ */
+
 #include "bundle.h"
 
 #include "file.h"

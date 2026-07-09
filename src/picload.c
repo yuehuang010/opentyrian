@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file picload.c
+ * Loader for the game's numbered full-screen PCX pictures (title, cutscene, and shop art).
+ *
+ * Entry points: JE_loadPic().
+ */
+
 #include "picload.h"
 
 #include "file.h"

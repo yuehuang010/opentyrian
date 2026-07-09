@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file memreader.c
+ * Endian-safe in-memory buffer reader for little-endian game data.
+ *
+ * Entry points: memReaderSplit(), memReadU8(), memReadU16LE(), memReadU32LE(),
+ * memReadU8Array(), memReadU16LEArray(), memReadU32LEArray().
+ */
+
 #include "memreader.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

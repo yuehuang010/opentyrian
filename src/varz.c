@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file varz.c
+ * Definitions for the large pile of shared game-state globals (declared in varz.h), plus
+ * ship-info/explosion/shield-and-armor-bar helper routines that operate on them.
+ *
+ * Entry points: JE_getShipInfo(), JE_setupExplosion(), JE_playerDamage(), JE_drawShield(), JE_drawArmor().
+ */
+
 #include "varz.h"
 
 #include "config.h"

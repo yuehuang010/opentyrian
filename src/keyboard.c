@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file keyboard.c
+ * SDL2 input event pump: keyboard/mouse state, input queues, and the
+ * wait-for-input helpers used throughout menus and gameplay.
+ *
+ * Entry points: handleSdlEvents(), init_keyboard(), keyboardGetInput(),
+ * mouseGetInput(), waitUntilGetInput(), hasInput().
+ */
+
 #include "keyboard.h"
 
 #include "joystick.h"

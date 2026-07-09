@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file file.c
+ * Central file-IO layer: resolves the data directory and wraps fopen with
+ * dir-relative lookup, warn/die variants, and read/write helpers.
+ *
+ * Entry points: data_dir(), dir_fopen(), dir_fopen_warn(), dir_fopen_die(),
+ * dir_file_exists(), fread_die(), fwrite_die().
+ */
+
 #include "file.h"
 
 #include "bundle.h"

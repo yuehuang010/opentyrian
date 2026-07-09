@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file opentyr.c
+ * Program entry point: subsystem init and the top-level title/game/destruct loop.
+ *
+ * Entry points: main() — the program entry point; setupMenu().
+ */
+
 #include "opentyr.h"
 
 #include "config.h"

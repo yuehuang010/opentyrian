@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file memwriter.c
+ * Endian-safe in-memory buffer writer, the counterpart to memreader.c.
+ *
+ * Entry points: memWriterSplit(), memWriteU8(), memWriteU16LE(), memWriteU32LE(),
+ * memWriteU8Array(), memWriteU16LEArray(), memWriteU32LEArray().
+ */
+
 #include "memwriter.h"
 
 #include <string.h>

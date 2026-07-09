@@ -19,6 +19,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file video_scale.c
+ * Nearest-neighbor, Scale2x, and Scale3x software upscalers that blit the 320x200 surface into
+ * an SDL texture.
+ *
+ * Entry points: set_scaler_by_name(), nn_32(), scale2x_32(), scale3x_32().
+ */
+
 #include "video_scale.h"
 
 #include "palette.h"

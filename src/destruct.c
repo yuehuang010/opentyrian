@@ -17,6 +17,28 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
+/** @file destruct.c
+ * The Destruct minigame: a two-player Scorched-Earth-style artillery duel,
+ * including config/setup, terrain generation, the per-tick simulation
+ * (gravity, shots, explosions, AI), input handling, and drawing.
+ *
+ * Entry points: JE_destructGame().
+ *
+ * Contents (see the ===== SECTION ===== banners below):
+ *   - Config & unit-name lookup
+ *   - Screen flow: intro, mode select, main loop
+ *   - Terrain & world generation
+ *   - Small drawing/utility helpers
+ *   - Help & pause screens
+ *   - Round/state reset helpers
+ *   - Per-tick simulation driver
+ *   - Gravity, animation & explosions
+ *   - AI
+ *   - HUD, input & weapon controls
+ *   - Shot firing, magnet & angle/power adjustment
+ *   - Endgame check & misc tick helpers
+ */
+
 /* File notes:
  * Two players duke it out in a Scorched Earth style game.
  * Most of the variables referring to the players are global as
@@ -524,6 +546,8 @@ static const char *const unit_names[] =
 	"heli",
 };
 
+/* ===================== Config & unit-name lookup ===================== */
+
 static enum de_unit_t get_unit_by_name(const char *unit_name)
 {
 	for (enum de_unit_t unit = UNIT_FIRST; unit < MAX_UNITS; ++unit)
@@ -654,6 +678,8 @@ static void load_destruct_config(Config *config_)
 		}
 	}
 }
+
+/* ===================== Screen flow: intro, mode select, main loop ===================== */
 
 /*** Startup ***/
 
@@ -889,6 +915,8 @@ static enum de_mode_t JE_modeSelect(void)
 	JE_showVGA();
 	return mode;
 }
+
+/* ===================== Terrain & world generation ===================== */
 
 static void JE_generateTerrain(void)
 {
@@ -1157,6 +1185,8 @@ static void DE_generateRings(SDL_Surface * screen, Uint8 pixel)
 	}
 }
 
+/* ===================== Small drawing/utility helpers ===================== */
+
 static unsigned int aliasDirtPixel(const SDL_Surface * screen, unsigned int x, unsigned int y, const Uint8 * s)
 {
 	//A helper function used when aliasing dirt.  That's a messy process;
@@ -1402,6 +1432,8 @@ static void JE_superPixel(unsigned int tempPosX, unsigned int tempPosY)
 	}
 }
 
+/* ===================== Help & pause screens ===================== */
+
 static void JE_helpScreen(void)
 {
 	unsigned int i, j;
@@ -1477,6 +1509,8 @@ static void JE_pauseScreen(void)
 
 	set_volume(tyrMusicVolume, fxVolume);
 }
+
+/* ===================== Round/state reset helpers ===================== */
 
 /* DE_ResetX
  *
@@ -1570,6 +1604,8 @@ static void DE_ResetActions(void)
 		memset(&(destruct_player[i].moves), 0, sizeof(destruct_player[i].moves));
 	}
 }
+
+/* ===================== Per-tick simulation driver ===================== */
 
 /* DE_RunTick
  *
@@ -1694,6 +1730,8 @@ static void DE_RunTickCycleDeadUnits(void)
 		}
 	}
 }
+
+/* ===================== Gravity, animation & explosions ===================== */
 
 static void DE_RunTickGravity(void)
 {
@@ -2116,6 +2154,8 @@ static void DE_DrawTrails(struct destruct_shot_s * shot, unsigned int count, uns
 	}
 }
 
+/* ===================== AI ===================== */
+
 static void DE_RunTickAI(void)
 {
 	unsigned int i, j;
@@ -2307,6 +2347,8 @@ static void DE_RunTickAI(void)
 			ptrPlayer->aiMemory.c_Power = 0;
 	}
 }
+
+/* ===================== HUD, input & weapon controls ===================== */
 
 static void DE_RunTickDrawCrosshairs(void)
 {
@@ -2580,6 +2622,8 @@ static void DE_CycleWeaponDown(struct destruct_unit_s * unit)
 	} while (weaponSystems[unit->unitType][unit->shotType] == 0);
 }
 
+/* ===================== Shot firing, magnet & angle/power adjustment ===================== */
+
 static void DE_MakeShot(enum de_player_t curPlayer, const struct destruct_unit_s * curUnit, int direction)
 {
 	unsigned int i;
@@ -2753,6 +2797,8 @@ static void DE_LowerPower(struct destruct_unit_s * unit)
 	if (unit->power < 1)
 		unit->power = 1;
 }
+
+/* ===================== Endgame check & misc tick helpers ===================== */
 
 /* DE_isValidUnit
  *

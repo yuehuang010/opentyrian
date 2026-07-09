@@ -65,6 +65,11 @@
 //
 // See end of file for full version history.
 
+/** @file stb_vorbis.c
+ * Vendored third-party single-file Ogg Vorbis decoder (public domain, by Sean Barrett).
+ * Not part of the OpenTyrian-authored code; left undocumented here.
+ */
+
 
 //////////////////////////////////////////////////////////////////////////////
 //

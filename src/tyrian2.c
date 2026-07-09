@@ -16,6 +16,28 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+
+/** @file tyrian2.c
+ * The core flight-loop engine: starfield/enemy compositing, the main
+ * per-frame game loop, level/map loading, the title screen and new-game
+ * setup, enemy spawning, the level event-scripting interpreter, and
+ * end-of-level/boss-bar effects.
+ *
+ * Entry points: JE_main(), JE_loadMap(), titleScreen(), newGame(),
+ * JE_eventSystem().
+ *
+ * Contents (see the ===== SECTION ===== banners below):
+ *   - Starfield & enemy sprite drawing
+ *   - Main flight loop
+ *   - HD tile bank helpers
+ *   - Level/map loading
+ *   - Title screen, network start & new-game setup
+ *   - Text sync/display
+ *   - Enemy creation & spawning
+ *   - Event scripting system
+ *   - End-of-level effects & boss health bar
+ */
+
 #include "tyrian2.h"
 
 #include "animlib.h"
@@ -72,6 +94,8 @@ char tempStr[31];
 /* Data used for ItemScreen procedure to indicate items available */
 JE_byte itemAvail[9][10]; /* [1..9, 1..10] */
 JE_byte itemAvailMax[9]; /* [1..9] */
+
+/* ===================== Starfield & enemy sprite drawing ===================== */
 
 // Composites the 264x184 playfield from game_screen into VGAScreenSeg (honoring the
 // mirror and light-effect special codes) and presents it. Does NOT pace the frame
@@ -637,6 +661,8 @@ draw_enemy_end:
 
 	player[0].x += 25;
 }
+
+/* ===================== Main flight loop ===================== */
 
 void JE_main(void)
 {
@@ -2444,6 +2470,8 @@ draw_player_shot_loop_end:
 	goto level_loop;
 }
 
+/* ===================== HD tile bank helpers ===================== */
+
 // ---- HD tileset pointer->z resolution (Phase S3) ----
 //
 // The background compositor (interp.c) sees a raw tile-data pointer per map cell
@@ -2500,6 +2528,8 @@ int hd_tile_z_for(const JE_byte *data)
 	}
 	return -1;
 }
+
+/* ===================== Level/map loading ===================== */
 
 /* --- Load Level/Map Data --- */
 void JE_loadMap(void)
@@ -3298,6 +3328,8 @@ new_game:
 	/* End of find loop for LEVEL??.DAT */
 }
 
+/* ===================== Title screen, network start & new-game setup ===================== */
+
 #ifdef WITH_NETWORK
 void networkStartScreen(void)
 {
@@ -3983,6 +4015,8 @@ void intro_logos(void)
 	fade_black(10);
 }
 
+/* ===================== Text sync/display ===================== */
+
 void JE_readTextSync(void)
 {
 	// this function seems to be unnecessary
@@ -4043,6 +4077,8 @@ void JE_displayText(void)
 
 	levelWarningDisplay = false;
 }
+
+/* ===================== Enemy creation & spawning ===================== */
 
 Sint16 JE_newEnemy(int enemyOffset, Uint16 eDatI, Sint16 uniqueShapeTableI)
 {
@@ -4449,6 +4485,8 @@ bool JE_searchFor/*enemy*/(JE_byte PLType, JE_byte* out_index)
 		return false;
 	}
 }
+
+/* ===================== Event scripting system ===================== */
 
 void JE_eventSystem(void)
 {
@@ -5309,6 +5347,8 @@ void JE_eventSystem(void)
 
 	eventLoc++;
 }
+
+/* ===================== End-of-level effects & boss health bar ===================== */
 
 void JE_whoa(void)
 {

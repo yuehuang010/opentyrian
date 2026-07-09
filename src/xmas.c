@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file xmas.c
+ * Christmas-themed seasonal easter egg: date check and title-screen opt-in prompt.
+ *
+ * Entry points: xmas_time(), xmas_prompt().
+ */
+
 #include "xmas.h"
 
 #include "font.h"

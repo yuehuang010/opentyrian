@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file network.c
+ * SDL2_net UDP multiplayer transport and state synchronization (guarded by
+ * `#ifdef WITH_NETWORK`; excluded entirely from builds with WITH_NETWORK=false).
+ *
+ * Entry points: network_init(), network_connect(), network_check(),
+ * network_send(), network_update(), network_state_update().
+ */
+
 #include "network.h"
 
 #include "episodes.h"

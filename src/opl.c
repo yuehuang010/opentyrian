@@ -23,6 +23,13 @@
  * Copyright (C) 1998-2001 Ken Silverman
  * Ken Silverman's official web site: "http://www.advsys.net/ken"
  */
+/** @file opl.c
+ * DOSBox-derived OPL2/OPL3 FM synthesis emulator, used by lds_play.c to render
+ * the LDS music format.
+ *
+ * Entry points: adlib_init(), adlib_write(), adlib_getsample().
+ */
+
 #include "opl.h"
 
 #include <math.h>

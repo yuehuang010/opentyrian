@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file mouse.c
+ * SDL2-backed mouse input state and cursor movement filtering.
+ *
+ * Entry points: JE_mouseStartFilter().
+ */
+
 #include "mouse.h"
 
 #include "keyboard.h"

@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file palette.c
+ * VGA palette management and fade effects (fade-in/out, step-fade, solid-color fades).
+ *
+ * Entry points: JE_loadPals(), set_palette(), get_live_palette(),
+ * fade_palette(), fade_black(), fade_white().
+ */
+
 #include "palette.h"
 
 #include "file.h"

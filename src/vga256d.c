@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file vga256d.c
+ * Low-level VGA-style primitives (pixels, rectangles, shaded/bright bars, gauges) drawn directly
+ * onto an SDL_Surface.
+ *
+ * Entry points: JE_pix(), JE_rectangle(), JE_barShade(), JE_barBright(), draw_segmented_gauge().
+ */
+
 #include "vga256d.h"
 
 #include "config.h" // For fullscreen stuff

@@ -1,3 +1,7 @@
+/** @file vga_palette.c
+ * Static fallback VGA 256-color palette table, used only by the jukebox.
+ */
+
 #include "vga_palette.h"
 
 // only used for the jukebox

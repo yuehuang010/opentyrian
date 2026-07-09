@@ -19,6 +19,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file video_scale_hqNx.c
+ * hq2x/hq3x/hq4x pixel-art upscalers that blit the 320x200 surface into an SDL texture.
+ *
+ * Entry points: hq2x_32(), hq3x_32(), hq4x_32().
+ */
+
 #include "palette.h"
 #include "video.h"
 

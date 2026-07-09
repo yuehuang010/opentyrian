@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file helptext.c
+ * Encrypted in-game help text: loads help.dat's Pascal-string entries and
+ * renders them in a wrapped, shaded text box.
+ *
+ * Entry points: JE_loadHelpText(), JE_helpBox(), JE_HBox().
+ */
+
 #include "helptext.h"
 
 #include "config.h"

@@ -16,6 +16,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file player.c
+ * Player weapon-power-up and purple-ball collection logic.
+ *
+ * Entry points: calc_purple_balls_needed(), power_up_weapon(), handle_got_purple_ball().
+ */
+
 #include "player.h"
 
 Player player[2];

@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file config.c
+ * Game configuration and save-game persistence: input/gameplay settings and
+ * encrypted save-slot read/write.
+ *
+ * Entry points: loadConfiguration(), saveConfiguration(), JE_loadGame(),
+ * JE_saveGame(), loadSaves(), saveSaves().
+ */
+
 #include "config.h"
 
 #include "episodes.h"

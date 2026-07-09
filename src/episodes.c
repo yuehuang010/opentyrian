@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file episodes.c
+ * Episode/item data loading and episode-file discovery for the campaign.
+ *
+ * Entry points: JE_loadItemDat(), JE_initEpisode(), JE_scanForEpisodes(),
+ * JE_findNextEpisode().
+ */
+
 #include "episodes.h"
 
 #include "config.h"

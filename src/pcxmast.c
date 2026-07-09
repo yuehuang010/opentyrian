@@ -16,6 +16,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file pcxmast.c
+ * Static asset-master tables mapping PCX picture/face indices to their VGA palettes.
+ */
+
 #include "pcxmast.h"
 
 #include "opentyr.h"

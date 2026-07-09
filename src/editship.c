@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file editship.c
+ * Debug ship-editor helpers: decrypts embedded ship data and loads extra
+ * ship/weapon shapes.
+ *
+ * Entry points: JE_decryptShips(), JE_loadExtraShapes().
+ */
+
 #include "editship.h"
 
 #include "config.h"

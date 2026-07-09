@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file joystick.c
+ * SDL2 joystick handling: polling, axis/button assignment, config
+ * (de)serialization, and synthesizing keyboard events from joystick input.
+ *
+ * Entry points: init_joysticks(), poll_joysticks(), load_joystick_assignments(),
+ * save_joystick_assignments(), detect_joystick_assignment().
+ */
+
 #include "joystick.h"
 
 #include "config.h"

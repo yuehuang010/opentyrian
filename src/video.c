@@ -16,6 +16,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file video.c
+ * SDL2 window/renderer setup and the main VGAScreen present path, plus the HD-remaster overlay
+ * layer (backdrops, sprite/flight display list, tile atlases, HD font emission).
+ *
+ * Entry points: init_video(), JE_showVGA(), hd_set_backdrop(), hd_flight_set(), load_hd_sheet_frame().
+ */
+
 #include "video.h"
 
 #include "file.h"

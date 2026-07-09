@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file fonthand.c
+ * Original VGA bitmap-font text drawing/measurement, shading modes, and the
+ * held-text overlay queue used by menus.
+ *
+ * Entry points: JE_dString(), JE_outText(), JE_textShade(), JE_textWidth(),
+ * JE_holdTextRedraw(), JE_updateWarning().
+ */
+
 #include "fonthand.h"
 
 #include "keyboard.h"

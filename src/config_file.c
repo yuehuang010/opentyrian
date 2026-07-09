@@ -18,6 +18,12 @@
  */
 /*!
  * \file config_file.c
+ * INI-style config-file model: sections/options parser, in-memory tree, and
+ * accessors used by config.c and joystick.c for opentyrian.cfg.
+ *
+ * Entry points: config_init(), config_find_section(), config_find_or_add_section(),
+ * config_get_option(), config_set_option_len().
+ *
  * \author Carl Reinke
  * \date 2015
  * \copyright GNU General Public License v2+ or Mozilla Public License 2.0

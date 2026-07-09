@@ -16,6 +16,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file lvlmast.c
+ * Static tables for level/shape file naming (level master data).
+ */
+
 #include "lvlmast.h"
 
 #include "opentyr.h"

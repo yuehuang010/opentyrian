@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file backgrnd.c
+ * Parallax starfield and scrolling background rendering, plus screen filters
+ * (lava/water/ice blur, darken/tint).
+ *
+ * Entry points: draw_background_1(), draw_background_2(), blit_background_row(),
+ * update_and_draw_starfield(), draw_starfield_interp(), lava_filter(), water_filter().
+ */
+
 #include "backgrnd.h"
 
 #include "config.h"

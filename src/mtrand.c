@@ -40,6 +40,12 @@
    Vol. 8, No. 1, January 1998, pp 3--30.
 */
 
+/** @file mtrand.c
+ * Mersenne Twister pseudo-random number generator, used in place of rand().
+ *
+ * Entry points: mt_srand(), mt_rand(), mt_rand_1(), mt_rand_lt1().
+ */
+
 #include "mtrand.h"
 
 /* Period parameters */

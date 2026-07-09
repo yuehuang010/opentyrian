@@ -16,6 +16,15 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file interp.c
+ * Phase-6 fixed-timestep render interpolation: records per-frame draw ops
+ * (sprites, background rows, starfield) and replays them at a blended alpha
+ * position for smooth high-fps rendering between simulation ticks.
+ *
+ * Entry points: interp_record_begin(), interp_tag(), interp_record_sprite2(),
+ * interp_record_bg_row(), flight_interp_capture(), interp_flight_emit().
+ */
+
 #include "interp.h"
 
 #include "backgrnd.h"

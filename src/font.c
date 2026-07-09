@@ -16,6 +16,14 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+/** @file font.c
+ * HD sprite-font text drawing: hue/value-shaded glyph blits with optional
+ * shadow/glow variants and alignment.
+ *
+ * Entry points: drawFontHv(), drawFontHvAligned(), drawFontHvShadow(),
+ * drawFontHvBlend(), drawFontDark().
+ */
+
 #include "font.h"
 
 #include "fonthand.h"

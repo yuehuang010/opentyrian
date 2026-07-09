@@ -16,6 +16,30 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+
+/** @file mainint.c
+ * Main gameplay/interlevel driver: in-game HUD, shop, menus, help, high
+ * scores, credits, demo playback, and the per-frame player input/movement
+ * and collision logic.
+ *
+ * Entry points: JE_mainGamePlayerFunctions(), JE_playerMovement(),
+ * JE_inGameSetup(), JE_operation(), JE_highScoreScreen(), JE_playCredits().
+ *
+ * Contents (see the ===== SECTION ===== banners below):
+ *   - HUD/text drawing helpers
+ *   - In-game help system
+ *   - Shop pricing & shop screen loading
+ *   - Score, inventory value & player/episode init
+ *   - High score table
+ *   - Gamma correction
+ *   - In-game setup, pause menu & help
+ *   - High-score check, difficulty, demo replay & cheat codes
+ *   - Sorting, credits & end-level animation
+ *   - Chat, shop transactions & in-game HUD/input
+ *   - Pause & player movement
+ *   - Main player driver, naming & collision
+ */
+
 #include "mainint.h"
 
 #include "backgrnd.h"
@@ -68,6 +92,8 @@ JE_boolean jumpSection;
 JE_boolean useLastBank; /* See if I want to use the last 16 colors for DisplayText */
 
 bool pause_pressed = false, ingamemenu_pressed = false;
+
+/* ===================== HUD/text drawing helpers ===================== */
 
 /* Draws a message at the bottom text window on the playing screen */
 void JE_drawTextWindow(const char *text)
@@ -189,6 +215,8 @@ void JE_drawPortConfigButtons(void) // rear weapon pattern indicator
 		blit_sprite(VGAScreenSeg, 302, 44, OPTION_SHAPES, 18);  // lit
 	}
 }
+
+/* ===================== In-game help system ===================== */
 
 static bool helpSystemPage(Uint8 *topic, bool *restart);
 
@@ -591,6 +619,8 @@ static bool helpSystemPage(Uint8 *topic, bool *restart)
 	}
 }
 
+/* ===================== Shop pricing & shop screen loading ===================== */
+
 // cost to upgrade a weapon power from power-1 (where power == 0 indicates an unupgraded weapon)
 long weapon_upgrade_cost(long base_cost, unsigned int power)
 {
@@ -939,6 +969,8 @@ bool JE_loadScreen(void)
 	}
 }
 
+/* ===================== Score, inventory value & player/episode init ===================== */
+
 ulong JE_totalScore(const Player *this_player)
 {
 	ulong temp = this_player->cash;
@@ -1109,6 +1141,8 @@ void JE_initPlayerData(void)
 
 	strcpy(lastLevelName, miscText[19]);
 }
+
+/* ===================== High score table ===================== */
 
 void JE_sortHighScores(void)
 {
@@ -1352,6 +1386,8 @@ void JE_highScoreScreen(void)
 	}
 }
 
+/* ===================== Gamma correction ===================== */
+
 void JE_gammaCorrect_func(JE_byte *col, JE_real r)
 {
 	int temp = roundf(*col * r);
@@ -1388,6 +1424,8 @@ JE_boolean JE_gammaCheck(void)
 	}
 	return temp;
 }
+
+/* ===================== In-game setup, pause menu & help ===================== */
 
 void JE_doInGameSetup(void)
 {
@@ -1985,6 +2023,8 @@ void JE_inGameHelp(void)
 	mouseSetRelative(true);
 }
 
+/* ===================== High-score check, difficulty, demo replay & cheat codes ===================== */
+
 void JE_highScoreCheck(void)
 {
 	if (shopSpriteSheet.data == NULL)
@@ -2515,6 +2555,8 @@ void JE_SFCodes(JE_byte playerNum_, JE_integer PX_, JE_integer PY_, JE_integer m
 	}
 }
 
+/* ===================== Sorting, credits & end-level animation ===================== */
+
 void JE_sort(void)
 {
 	JE_byte a, b;
@@ -2920,6 +2962,8 @@ void JE_endLevelAni(void)
 	fade_black(15);
 	JE_clr256(VGAScreen);
 }
+
+/* ===================== Chat, shop transactions & in-game HUD/input ===================== */
 
 void JE_drawCube(SDL_Surface * screen, JE_word x, JE_word y, JE_byte filter, JE_byte brightness)
 {
@@ -3433,6 +3477,8 @@ void JE_mainKeyboardInput(void)
 			play_song(mt_rand() % MUSIC_NUM);
 	}
 }
+
+/* ===================== Pause & player movement ===================== */
 
 void JE_pauseGame(void)
 {
@@ -4705,6 +4751,8 @@ redo:
 		}
 	}
 }
+
+/* ===================== Main player driver, naming & collision ===================== */
 
 void JE_mainGamePlayerFunctions(void)
 {

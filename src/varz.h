@@ -16,6 +16,15 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
+
+/**
+ * @file varz.h
+ * Shared game-state globals: the bulk of the in-flight/gameplay state (enemies,
+ * shots, explosions, level/event playback, HUD/menu scratch state, demo
+ * recording, and misc timers) carried over from the original Pascal source.
+ * Also declares the enemy/event/megamap record types these globals are made of.
+ * Definitions live in varz.c; this header only lists `extern` declarations.
+ */
 #ifndef VARZ_H
 #define VARZ_H
 
@@ -204,121 +213,136 @@ typedef struct {
 	Uint8 color;
 } superpixel_type;
 
-extern JE_integer tempDat, tempDat2, tempDat3;
-extern const JE_byte SANextShip[SA + 2];
-extern const JE_word SASpecialWeapon[SA];
-extern const JE_word SASpecialWeaponB[SA];
-extern const JE_byte SAShip[SA];
-extern const JE_word SAWeapon[SA][5];
-extern const JE_byte specialArcadeWeapon[PORT_NUM];
-extern const JE_byte optionSelect[16][3][2];
-extern const JE_word PGR[21];
-extern const JE_byte PAni[21];
-extern const JE_word linkGunWeapons[38];
-extern const JE_word chargeGunWeapons[38];
-extern const JE_byte randomEnemyLaunchSounds[3];
-extern const JE_byte keyboardCombos[26][8];
-extern const JE_byte shipCombosB[21];
-extern const JE_byte superTyrianSpecials[4];
-extern const JE_byte shipCombos[14][3];
-extern JE_byte SFCurrentCode[2][21];
-extern JE_byte SFExecuted[2];
-extern JE_byte lvlFileNum;
-extern JE_word maxEvent, eventLoc;
-extern JE_word tempBackMove, explodeMove;
-extern JE_byte levelEnd;
-extern JE_word levelEndFxWait;
-extern JE_shortint levelEndWarp;
-extern JE_boolean endLevel, reallyEndLevel, waitToEndLevel, playerEndLevel, normalBonusLevelCurrent, bonusLevelCurrent, smallEnemyAdjust, readyToEndLevel, quitRequested;
-extern JE_byte newPL[10];
-extern JE_word returnLoc;
-extern JE_boolean returnActive;
-extern JE_word galagaShotFreq;
-extern JE_longint galagaLife;
-extern JE_boolean debug;
-extern Uint32 debugTime, lastDebugTime;
-extern Uint32 debugHistCount;
-extern Uint32 debugHist;
-extern JE_word curLoc;
-extern JE_boolean firstGameOver, gameLoaded, enemyStillExploding;
-extern JE_word totalEnemy;
-extern JE_word enemyKilled;
-extern struct JE_MegaDataType1 megaData1;
-extern struct JE_MegaDataType2 megaData2;
-extern struct JE_MegaDataType3 megaData3;
-extern JE_byte flash;
-extern JE_shortint flashChange;
-extern JE_byte displayTime;
+/* ===== Level/event scratch (used while decoding the current event record) ===== */
+extern JE_integer tempDat, tempDat2, tempDat3; // scratch copies of the current eventRec's eventdat fields (new-enemy spawn params)
 
-extern bool play_demo, record_demo, stopped_demo;
-extern Uint8 demo_num;
-extern FILE *demo_file;
+/* ===== SuperArcade / ship & weapon lookup tables (const, data-driven) ===== */
+extern const JE_byte SANextShip[SA + 2];       // SuperArcade mode: next ship id per SA slot
+extern const JE_word SASpecialWeapon[SA];      // SuperArcade mode: special weapon id per SA slot
+extern const JE_word SASpecialWeaponB[SA];     // SuperArcade mode: alternate/second special weapon id per SA slot
+extern const JE_byte SAShip[SA];               // SuperArcade mode: ship id per SA slot
+extern const JE_word SAWeapon[SA][5];          // SuperArcade mode: front weapon ids per SA slot
+extern const JE_byte specialArcadeWeapon[PORT_NUM]; // Arcade-mode special weapon id per weapon port
+extern const JE_byte optionSelect[16][3][2];   // sidekick/option selection table (menu -> option type/index)
+extern const JE_word PGR[21];                  // planet graphic (sprite) ids for the map screen
+extern const JE_byte PAni[21];                 // planet animation frame counts for the map screen
+extern const JE_word linkGunWeapons[38];       // weapon ids eligible for "link gun" combos
+extern const JE_word chargeGunWeapons[38];     // weapon ids eligible for the charge-gun mechanic
+extern const JE_byte randomEnemyLaunchSounds[3]; // sound ids used for random enemy weapon-launch sfx
+extern const JE_byte keyboardCombos[26][8];    // Konami-style secret code entry: valid key combo table
+extern const JE_byte shipCombosB[21];          // secret code entry: alternate ship-unlock combo table
+extern const JE_byte superTyrianSpecials[4];   // Super Tyrian mode: special weapon ids
+extern const JE_byte shipCombos[14][3];        // secret code entry: ship-unlock combo table
 
-extern Uint8 demo_keys;
-extern Uint16 demo_keys_wait;
+/* ===== Secret code entry state ===== */
+extern JE_byte SFCurrentCode[2][21];           // per-player in-progress secret code keystrokes
+extern JE_byte SFExecuted[2];                  // per-player: which secret code (if any) was just executed
 
-extern JE_byte soundQueue[8];
-extern JE_boolean enemyContinualDamage;
-extern JE_boolean enemiesActive;
-extern JE_boolean forceEvents;
-extern JE_boolean stopBackgrounds;
-extern JE_byte stopBackgroundNum;
-extern JE_byte damageRate;
-extern JE_boolean background3x1;
-extern JE_boolean background3x1b;
-extern JE_boolean levelTimer;
-extern JE_word levelTimerCountdown;
-extern JE_word levelTimerJumpTo;
-extern JE_boolean randomExplosions;
-extern JE_boolean editShip1, editShip2;
-extern JE_boolean globalFlags[10];
-extern JE_byte levelSong;
-extern JE_boolean loadDestruct;
-extern JE_word mapOrigin, mapPNum;
-extern JE_byte mapPlanet[5], mapSection[5];
-extern JE_boolean moveTyrianLogoUp;
-extern JE_boolean skipStarShowVGA;
-extern JE_MultiEnemyType enemy;
-extern JE_EnemyAvailType enemyAvail;
-extern JE_word enemyOffset;
-extern JE_word enemyOnScreen;
-extern JE_word superEnemy254Jump;
-extern Explosion explosions[MAX_EXPLOSIONS];
-extern JE_integer explosionFollowAmountX, explosionFollowAmountY;
-extern JE_boolean fireButtonHeld;
-extern JE_boolean enemyShotAvail[ENEMY_SHOT_MAX];
-extern EnemyShotType enemyShot[ENEMY_SHOT_MAX];
-extern JE_byte zinglonDuration;
-extern JE_byte astralDuration;
-extern JE_word flareDuration;
-extern JE_boolean flareStart;
-extern JE_shortint flareColChg;
-extern JE_byte specialWait;
-extern JE_byte nextSpecialWait;
-extern JE_boolean spraySpecial;
-extern JE_byte doIced;
-extern JE_boolean infiniteShot;
-extern JE_boolean allPlayersGone;
-extern const uint shadowYDist;
-extern JE_real optionSatelliteRotate;
-extern JE_integer optionAttachmentMove;
-extern JE_boolean optionAttachmentLinked, optionAttachmentReturn;
-extern JE_byte chargeWait, chargeLevel, chargeMax, chargeGr, chargeGrWait;
-extern JE_word neat;
-extern rep_explosion_type rep_explosions[MAX_REPEATING_EXPLOSIONS];
-extern superpixel_type superpixels[MAX_SUPERPIXELS];
-extern unsigned int last_superpixel;
-extern JE_byte temp, temp2, temp3;
-extern JE_word tempW;
-extern JE_boolean doNotSaveBackup;
-extern JE_word x, y;
-extern JE_integer b;
-extern JE_byte **BKwrap1to, **BKwrap2to, **BKwrap3to, **BKwrap1, **BKwrap2, **BKwrap3;
-extern JE_shortint specialWeaponFilter, specialWeaponFreq;
-extern JE_word specialWeaponWpn;
-extern JE_boolean linkToPlayer;
-extern JE_word shipGr, shipGr2;
-extern Sprite2_array *shipGrPtr, *shipGr2ptr;
+/* ===== Level/event playback state ===== */
+extern JE_byte lvlFileNum;                     // index of the currently loaded levelX.dat file
+extern JE_word maxEvent, eventLoc;             // total event count and current playback index into eventRec
+extern JE_word tempBackMove, explodeMove;      // background scroll speed snapshot; per-frame explosion drift
+extern JE_byte levelEnd;                       // countdown (frames) driving the level-end sequence
+extern JE_word levelEndFxWait;                 // delay timer for level-end visual/sound effects
+extern JE_shortint levelEndWarp;               // vertical warp offset applied to ships during level-end
+extern JE_boolean endLevel, reallyEndLevel, waitToEndLevel, playerEndLevel, normalBonusLevelCurrent, bonusLevelCurrent, smallEnemyAdjust, readyToEndLevel, quitRequested; // level-end/bonus-level/quit flags
+extern JE_byte newPL[10];                      // scratch array for event-driven "set flag" (eventdat3/4) processing
+extern JE_word returnLoc;                      // level index to resume at after a sub-level detour (e.g. Galaga mode)
+extern JE_boolean returnActive;                // true while waiting to jump back to returnLoc
+extern JE_word galagaShotFreq;                 // Galaga bonus mode: enemy shot frequency (ramps up over time)
+extern JE_longint galagaLife;                  // Galaga bonus mode: cash threshold for the next extra life
+
+/* ===== Debug / frame-timing instrumentation ===== */
+extern JE_boolean debug;                       // global debug-mode flag
+extern Uint32 debugTime, lastDebugTime;        // SDL tick snapshots used to measure frame time
+extern Uint32 debugHistCount;                  // number of samples accumulated into debugHist
+extern Uint32 debugHist;                       // accumulated frame-time history (debug overlay)
+
+/* ===== Core flight/level progress state ===== */
+extern JE_word curLoc;                         // current position (time) within the level's event timeline
+extern JE_boolean firstGameOver, gameLoaded, enemyStillExploding; // game-over-once flag; save-loaded flag; enemy death fx still playing
+extern JE_word totalEnemy;                     // total enemies spawned this level (for kill-percentage stat)
+extern JE_word enemyKilled;                    // enemies killed this level
+extern struct JE_MegaDataType1 megaData1;      // loaded tileset/map data, mainmap kind 1 (levels1.dat)
+extern struct JE_MegaDataType2 megaData2;      // loaded tileset/map data, mainmap kind 2 (levels2.dat)
+extern struct JE_MegaDataType3 megaData3;      // loaded tileset/map data, mainmap kind 3 (levels3.dat)
+extern JE_byte flash;                          // current background "flash" color-cycle value
+extern JE_shortint flashChange;                // per-frame delta applied to flash
+extern JE_byte displayTime;                    // countdown for transient on-screen message display
+
+/* ===== Demo recording/playback ===== */
+extern bool play_demo, record_demo, stopped_demo; // demo playback/record mode flags; demo ended early
+extern Uint8 demo_num;                         // index of the attract-mode demo file currently in use
+extern FILE *demo_file;                        // open handle to the demo recording/playback file
+
+extern Uint8 demo_keys;                        // last input-key byte read from/written to the demo stream
+extern Uint16 demo_keys_wait;                  // frames remaining before the next demo_keys sample
+
+/* ===== Flight / in-game state ===== */
+extern JE_byte soundQueue[8];                  // pending sound-effect ids queued for this frame (incl. Destruct)
+extern JE_boolean enemyContinualDamage;        // event flag: enemy deals damage every frame on contact, not just once
+extern JE_boolean enemiesActive;               // master switch for enemy spawning this level
+extern JE_boolean forceEvents;                 // force event timeline to advance even when background is stopped
+extern JE_boolean stopBackgrounds;             // freeze background scrolling
+extern JE_byte stopBackgroundNum;              // which background layer(s) are stopped (bitmask/id)
+extern JE_byte damageRate;                     // collision damage rate divisor/cap for the player ship
+extern JE_boolean background3x1;               // background layer 3 uses the 3x1 (vs normal) tiling mode
+extern JE_boolean background3x1b;              // secondary flag for the background layer-3 3x1 tiling mode
+extern JE_boolean levelTimer;                  // whether the level has an active countdown timer
+extern JE_word levelTimerCountdown;            // frames remaining on the level countdown timer
+extern JE_word levelTimerJumpTo;               // event index to jump to when the level timer expires
+extern JE_boolean randomExplosions;            // event flag: spawn random background explosions
+extern JE_boolean editShip1, editShip2;        // per-player: ship-editor (secret code) unlocked this session
+extern JE_boolean globalFlags[10];             // level-scripting global flags set/read by events (eventdat "set flag")
+extern JE_byte levelSong;                      // music track id for the current level
+extern JE_boolean loadDestruct;                // request to launch the Destruct minigame instead of normal flight
+extern JE_word mapOrigin, mapPNum;             // map screen: origin planet id; number of planets in the current path
+extern JE_byte mapPlanet[5], mapSection[5];    // map screen: planet id and level-section id per map path node
+extern JE_boolean moveTyrianLogoUp;            // title screen: animate the Tyrian logo sliding upward
+extern JE_boolean skipStarShowVGA;             // skip the starfield palette/VGA update for one frame
+extern JE_MultiEnemyType enemy;                // live enemy slot table (position, ai, sprite, hp, ...)
+extern JE_EnemyAvailType enemyAvail;           // per-enemy-slot availability/free-list flags
+extern JE_word enemyOffset;                    // rolling index into `enemy` for the next enemy slot to spawn/scan
+extern JE_word enemyOnScreen;                  // count of enemies currently active on screen
+extern JE_word superEnemy254Jump;              // event index to jump to when the special "PL 254" enemy dies
+extern Explosion explosions[MAX_EXPLOSIONS];   // active explosion sprite/animation slots
+extern JE_integer explosionFollowAmountX, explosionFollowAmountY; // per-frame player-relative offset applied to player-following explosions
+extern JE_boolean fireButtonHeld;              // tracks whether the fire button is being held (charge weapon input)
+extern JE_boolean enemyShotAvail[ENEMY_SHOT_MAX]; // per-slot availability flags for enemyShot
+extern EnemyShotType enemyShot[ENEMY_SHOT_MAX]; // active enemy projectile slots
+extern JE_byte zinglonDuration;                // Zinglon boss-specific effect duration counter
+extern JE_byte astralDuration;                 // Astral special-weapon effect duration counter
+extern JE_word flareDuration;                  // screen-flare effect duration counter
+extern JE_boolean flareStart;                  // trigger to begin a screen-flare effect
+extern JE_shortint flareColChg;                // per-frame palette-flare color delta
+extern JE_byte specialWait;                    // frames until the player's special weapon can fire again
+extern JE_byte nextSpecialWait;                // pending value to assign to specialWait
+extern JE_boolean spraySpecial;                // special-weapon "spray" mode flag
+extern JE_byte doIced;                         // pending "freeze" duration to apply to the next hit enemy
+extern JE_boolean infiniteShot;                // debug/cheat: unlimited special-weapon ammo
+extern JE_boolean allPlayersGone;              // true once every player ship has been destroyed
+extern const uint shadowYDist;                 // vertical offset used when drawing the player ship's ground shadow
+extern JE_real optionSatelliteRotate;          // rotation angle (radians) for satellite-orbit sidekick options
+extern JE_integer optionAttachmentMove;        // vertical animation offset for attachment-style sidekick options
+extern JE_boolean optionAttachmentLinked, optionAttachmentReturn; // attachment sidekick: currently docked; returning-to-dock state
+extern JE_byte chargeWait, chargeLevel, chargeMax, chargeGr, chargeGrWait; // charge-weapon: cooldown, current/max charge level, HUD frame, frame-advance timer
+extern JE_word neat;                           // accumulating "detail" seed passed to JE_darkenBackground's dither
+extern rep_explosion_type rep_explosions[MAX_REPEATING_EXPLOSIONS]; // looping/repeating background explosion slots
+extern superpixel_type superpixels[MAX_SUPERPIXELS]; // "superpixel" particle-effect slots (JE_doSP)
+extern unsigned int last_superpixel;           // index of the most recently spawned superpixel
+
+/* ===== Misc scratch variables (shared temporaries used across gameplay/menu code) ===== */
+extern JE_byte temp, temp2, temp3;             // general-purpose byte scratch variables
+extern JE_word tempW;                          // general-purpose word scratch variable
+extern JE_boolean doNotSaveBackup;             // suppress writing a config/save backup on next save
+extern JE_word x, y;                           // general-purpose coordinate scratch variables
+extern JE_integer b;                           // general-purpose scratch variable (loop index / shot handle)
+extern JE_byte **BKwrap1to, **BKwrap2to, **BKwrap3to, **BKwrap1, **BKwrap2, **BKwrap3; // background map-row wrap pointers/targets for the 3 parallax layers
+extern JE_shortint specialWeaponFilter, specialWeaponFreq; // unused/legacy: no remaining references outside varz.c
+extern JE_word specialWeaponWpn;               // unused/legacy: no remaining references outside varz.c
+extern JE_boolean linkToPlayer;                // unused/legacy: no remaining references outside varz.c
+extern JE_word shipGr, shipGr2;                // current ship sprite graphic index, per player
+extern Sprite2_array *shipGrPtr, *shipGr2ptr;  // sprite sheet backing shipGr/shipGr2
 
 static const int hud_sidekick_y[2][2] =
 {
