@@ -1,0 +1,21 @@
+# clangd configuration for OpenTyrian.
+#
+# Cross-file "go to definition" / "find references" needs a compilation
+# database. Generate one first (it is git-ignored, path-specific):
+#
+#     make compdb        # writes ./compile_commands.json
+#
+# clangd (in your editor's LSP client) then indexes the whole src/ tree and can
+# answer "who reads/writes this global" across the 350+ shared externs.
+# See internal/plan/NAVIGATION_PLAN.md.
+
+CompileFlags:
+  # The tree is C99; keep clangd from assuming C++ or a newer standard.
+  Add: [-std=iso9899:1999, -Wall, -Wextra]
+
+Index:
+  Background: Build
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None

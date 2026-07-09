@@ -16,6 +16,11 @@ tyrian.sav
 /src/*.gch
 /opentyrian
 
+# Code-navigation index (regenerate via `make compdb` / `make tags`);
+# path- and flag-specific, so not committed. See internal/plan/NAVIGATION_PLAN.md.
+/compile_commands.json
+/tags
+
 # Windows build output
 /opentyrian.exe
 /SDL2.dll

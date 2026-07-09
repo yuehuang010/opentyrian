@@ -108,6 +108,28 @@ debug : CFLAGS += -O0
 debug : CFLAGS += -g3
 debug : all
 
+# Code-navigation index targets (no source-behavior impact). See
+# internal/plan/NAVIGATION_PLAN.md.
+#
+# compdb - regenerate compile_commands.json so clangd / any LSP can do
+#          cross-file "go to definition" and "find references". Self-contained
+#          (no bear/compiledb needed): tools/gen_compile_commands.py reads the
+#          fully-resolved flags below from the environment. Rerun after adding
+#          a source file or changing flags.
+.PHONY : compdb
+compdb : export COMPDB_CC   := $(CC)
+compdb : export COMPDB_DIR  := $(CURDIR)
+compdb : export COMPDB_FLAGS := $(ALL_CPPFLAGS) $(ALL_CFLAGS)
+compdb : export COMPDB_SRCS := $(SRCS)
+compdb :
+	python3 tools/gen_compile_commands.py
+
+# tags - ctags symbol index (grep-free jump-to-symbol fallback). File-list
+# form works on both BSD ctags (macOS default, no -R) and Universal ctags.
+.PHONY : tags
+tags :
+	ctags src/*.c src/*.h
+
 .PHONY : installdirs
 installdirs :
 	mkdir -p $(DESTDIR)$(bindir)
@@ -149,6 +171,7 @@ clean :
 	rm -f $(OBJS)
 	rm -f $(DEPS)
 	rm -f $(TARGET)
+	rm -f compile_commands.json tags
 
 $(TARGET) : $(OBJS)
 	$(CC) $(ALL_CFLAGS) $(ALL_LDFLAGS) -o $@ $^ $(ALL_LDLIBS)
