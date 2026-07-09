@@ -14,7 +14,7 @@ shared.
 - [standalone-plan-progress.md](standalone-plan-progress.md) — execution state of S0–S5 (paused 2026-07-08)
 - [use-sonnet-agents-for-implementation.md](use-sonnet-agents-for-implementation.md) — delegate implementation to subagents, tier the model by difficulty
 - [commit-before-spawning-agents.md](commit-before-spawning-agents.md) — commit reviewed work before spawning agents; forbid state-changing git in prompts
-- [plan/NAVIGATION_PLAN.md](plan/NAVIGATION_PLAN.md) — plan to improve code navigation (index tooling, CODEMAP, globals annotation); phased by return-on-effort
+- [plan/NAVIGATION_PLAN.md](plan/NAVIGATION_PLAN.md) — plan to improve code navigation (index tooling, CODEMAP, globals annotation); **all phases done** (`897c287`, `acceabf`)
 - [CODEMAP.md](CODEMAP.md) — one-page subsystem map: files, entry points, key globals per subsystem; start here to orient in the codebase
 
 ## Issues

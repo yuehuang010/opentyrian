@@ -1,5 +1,14 @@
 # Code Navigation Improvement Plan
 
+> **Status: all phases implemented** (Phase 1 in `897c287`, Phases 2+3 in
+> `acceabf`). `make compdb` / `make tags` / a revived Doxygen give machine
+> navigation; [`internal/CODEMAP.md`](../CODEMAP.md) is the human map; every
+> `src/*.c` carries an `@file` banner; `varz.h`'s 112 externs are annotated
+> and grouped; the four monoliths have section banners + a top-of-file TOC.
+> All Phase 2/3 edits were verified comment-only (byte-identical after
+> stripping comments) with `make` + `make debug` clean. The text below is the
+> original plan, kept for rationale.
+
 Plan to make the codebase easier to navigate. Ordered by return-on-effort
 (cheap + high-impact first). Grounded in the current state of the tree.
 
