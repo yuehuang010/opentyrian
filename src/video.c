@@ -60,6 +60,7 @@ int hd_backdrop_fade = 0;
 bool crt_mode = false;
 
 bool hd_flight_active = false;
+bool hd_font_flight_hud = false;
 bool hd_tiles = false;
 
 static SDL_Texture *crt_scanline_tex = NULL;
@@ -1812,14 +1813,23 @@ bool hd_font_active(SDL_Surface *screen)
 	if (!hd_mode || hd_font_force_classic)
 		return false;
 	// Only claim glyphs drawn directly to the surface that scale_and_flip presents
-	// verbatim in full-screen VGA coordinates (VGAScreenSeg), and only outside the
-	// in-flight loop. Text drawn to a background buffer (VGAScreen2) or the playfield
-	// buffer (game_screen) reaches the screen via a memcpy / a shifted+clipped
-	// composite that a full-screen HD quad can't reproduce, and in-flight overlay
-	// text on VGAScreenSeg is persistent (drawn once, not re-emitted per frame) so an
-	// immediate-mode HD queue would drop it after one frame. All those keep the
-	// classic path (correct, and never vanishing).
-	return screen == VGAScreenSeg && !hd_flight_active;
+	// verbatim in full-screen VGA coordinates (VGAScreenSeg). Text drawn to a
+	// background buffer (VGAScreen2) or the playfield buffer (game_screen) reaches
+	// the screen via a memcpy / a shifted+clipped composite that a full-screen HD
+	// quad can't reproduce, so those keep the classic path.
+	if (screen != VGAScreenSeg)
+		return false;
+
+	// In the real-time flight loop the immediate-mode HD queue is rebuilt and
+	// drained every present, so it can only hold text that is re-emitted every
+	// frame. Claim in-flight text ONLY when a caller explicitly marks it as
+	// per-frame HUD (hd_font_flight_hud) -- e.g. JE_inGameDisplays. In-flight text
+	// that is drawn once and held (item-pickup messages, the level-start HUD) or
+	// drawn by a nested pause/menu present loop stays classic so it never vanishes.
+	if (hd_flight_active && !hd_font_flight_hud)
+		return false;
+
+	return true;
 }
 
 // Queues one HD glyph texture (already synthesized). Returns false if the glyph is

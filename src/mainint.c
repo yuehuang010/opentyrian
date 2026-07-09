@@ -3169,6 +3169,11 @@ void JE_inGameDisplays(void)
 	// STATIC so the interpolated frames hold them in place (no smearing).
 	interp_tag(INTERP_TAG(INTERP_TAG_STATIC, 0));
 
+	// This HUD is redrawn every flight frame, so its text can safely take the
+	// immediate-mode HD font path even though hd_flight_active is set. (Sidebar
+	// icons/bars stay classic in the 8-bit base; only the text goes HD.)
+	hd_font_flight_hud = true;
+
 	for (uint i = 0; i < ((twoPlayerMode && !galagaMode) ? 2 : 1); ++i)
 	{
 		snprintf(tempstr, sizeof(tempstr), "%lu", player[i].cash);
@@ -3233,6 +3238,8 @@ void JE_inGameDisplays(void)
 	{
 		JE_outText(VGAScreen, 90, 170, "Cheaters always prosper.", 3, 4);
 	}
+
+	hd_font_flight_hud = false;
 }
 
 void JE_mainKeyboardInput(void)
