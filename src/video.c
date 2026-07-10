@@ -2119,6 +2119,104 @@ static void classic_scale_base(SDL_Surface *src_surface, SDL_Rect *dst_rect)
 	SDL_RenderCopy(main_window_renderer, main_window_texture, NULL, dst_rect);
 }
 
+// Debug-only headless screenshot hook. When OT_SHOTDIR is set, reads the
+// composited backbuffer back (HD font/sprite overlays included) just before each
+// present and saves BMPs. OT_SHOTEVERY=N captures every Nth present (default 60);
+// OT_SHOTQUIT=M exit(0) after present M. No-op unless OT_SHOTDIR is set, so it is
+// inert in normal play.
+static void maybe_dump_frame(void)
+{
+	static bool inited = false;
+	static const char *dir = NULL;
+	static int every = 60, quitat = 0;
+	static long present_no = 0;
+
+	if (!inited)
+	{
+		inited = true;
+		dir = getenv("OT_SHOTDIR");
+		const char *e = getenv("OT_SHOTEVERY");
+		if (e != NULL && atoi(e) > 0)
+			every = atoi(e);
+		const char *q = getenv("OT_SHOTQUIT");
+		if (q != NULL)
+			quitat = atoi(q);
+	}
+
+	// Debug-only scripted input: OT_KEYS="F:name,F:name,..." pushes a keydown+keyup
+	// for `name` at present frame F, to drive menus headlessly (e.g. reach the
+	// save/load screen). Names: up/down/left/right/return/space/escape/y/n.
+	const char *script = getenv("OT_KEYS");
+	if (script != NULL)
+	{
+		const char *p = script;
+		while (*p != '\0')
+		{
+			long f = strtol(p, (char **)&p, 10);
+			if (*p == ':')
+				++p;
+			char name[16];
+			int n = 0;
+			while (*p != '\0' && *p != ',' && n < 15)
+				name[n++] = *p++;
+			name[n] = '\0';
+			if (*p == ',')
+				++p;
+			if (f == present_no + 1)  // fire on the upcoming frame
+			{
+				SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
+				if (!strcmp(name, "up")) sc = SDL_SCANCODE_UP;
+				else if (!strcmp(name, "down")) sc = SDL_SCANCODE_DOWN;
+				else if (!strcmp(name, "left")) sc = SDL_SCANCODE_LEFT;
+				else if (!strcmp(name, "right")) sc = SDL_SCANCODE_RIGHT;
+				else if (!strcmp(name, "return")) sc = SDL_SCANCODE_RETURN;
+				else if (!strcmp(name, "space")) sc = SDL_SCANCODE_SPACE;
+				else if (!strcmp(name, "escape")) sc = SDL_SCANCODE_ESCAPE;
+				else if (!strcmp(name, "y")) sc = SDL_SCANCODE_Y;
+				else if (!strcmp(name, "n")) sc = SDL_SCANCODE_N;
+				if (sc != SDL_SCANCODE_UNKNOWN)
+				{
+					SDL_Event ev;
+					memset(&ev, 0, sizeof ev);
+					ev.type = SDL_KEYDOWN;
+					ev.key.state = SDL_PRESSED;
+					ev.key.keysym.scancode = sc;
+					ev.key.keysym.sym = SDL_GetKeyFromScancode(sc);
+					SDL_PushEvent(&ev);
+					ev.type = SDL_KEYUP;
+					ev.key.state = SDL_RELEASED;
+					SDL_PushEvent(&ev);
+				}
+			}
+		}
+	}
+
+	++present_no;
+	if (dir == NULL)
+		return;
+
+	if (present_no % every == 0)
+	{
+		int w = 0, h = 0;
+		SDL_GetRendererOutputSize(main_window_renderer, &w, &h);
+		SDL_Surface *shot = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+		if (shot != NULL)
+		{
+			if (SDL_RenderReadPixels(main_window_renderer, NULL, SDL_PIXELFORMAT_ARGB8888,
+			        shot->pixels, shot->pitch) == 0)
+			{
+				char path[512];
+				snprintf(path, sizeof path, "%s/frame_%06ld.bmp", dir, present_no);
+				SDL_SaveBMP(shot, path);
+			}
+			SDL_FreeSurface(shot);
+		}
+	}
+
+	if (quitat > 0 && present_no >= quitat)
+		exit(0);
+}
+
 static void scale_and_flip(SDL_Surface *src_surface)
 {
 	assert(src_surface->format->BitsPerPixel == 8);
@@ -2191,6 +2289,7 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		draw_hd_cursor(&dst_rect);
 
 		apply_crt_overlay(&dst_rect);
+		maybe_dump_frame();
 		SDL_RenderPresent(main_window_renderer);
 		hd_flight_clear();
 		last_output_rect = dst_rect;
@@ -2267,6 +2366,7 @@ static void scale_and_flip(SDL_Surface *src_surface)
 
 		apply_crt_overlay(&dst_rect);
 
+		maybe_dump_frame();
 		SDL_RenderPresent(main_window_renderer);
 		last_output_rect = dst_rect;
 		return;
@@ -2287,6 +2387,7 @@ static void scale_and_flip(SDL_Surface *src_surface)
 	draw_hd_font_queue(&dst_rect);
 	draw_hd_cursor(&dst_rect);
 	apply_crt_overlay(&dst_rect);
+	maybe_dump_frame();
 	SDL_RenderPresent(main_window_renderer);
 
 	// Save output rect to be used by mouse functions
