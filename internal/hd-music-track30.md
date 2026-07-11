@@ -138,3 +138,24 @@ Candidate strip on the page (0:30-1:01 in-context clips, only V14 swapped):
 overdriven gt (current) / clean gt / distortion gt / trombone / synth brass 2
 / saw lead. Instrument history: trumpet (velocity-layer distortion), french
 horn (washed), brass section (muffled), piano (no), overdriven gt (muffled).
+
+## V14 resolved: Trumpet, dry, gate=85, echo=75 (2026-07-10, user-approved)
+
+Round-2 findings that generalize beyond V14:
+
+- **fluidsynth renders were never dry**: `-ni` leaves the reverb+chorus units
+  ON (global). CC91/CC93 sends do nothing audible with FluidR3 (preset-level
+  sends dominate) — the working lever is `fluidsynth -R 0 -C 0`. The "echo-y
+  vs original" complaint against Synth Brass 2 / Saw Lead was mostly this.
+- **The LDS data fakes delay-echo by doubling notes**: every V14 note is
+  re-struck with identical pitch/length on a sibling channel exactly +6 ticks
+  (86 ms) later (ch1 lead, ch0 echo; 120 doubles/loop). On OPL that's the
+  classic no-reverb echo trick; with samples it flams ("sawing"). New map
+  option `echo=NN` scales a detected double's velocity (same fingerprint +
+  pitch, still keyed, within 10 ticks). 75% kept the impact w/o the flam.
+- Other new per-voice map options from this round: `gate=NN` (emitted-gate
+  percent — 85% restored OPL-style note separation), `rev=`/`cho=` (CC91/93,
+  kept for CC-honoring fonts, no-op on FluidR3).
+- Winning V14 line: `4b52fb40 56 0 127 0 gate=85 echo=75` — Trumpet at max
+  CC7 (user wanted +10%, ceiling allowed +6%), trumpet history: plain=
+  distorted (velocity layer), horn/brass=washed; dry+short+echo-tamed works.
