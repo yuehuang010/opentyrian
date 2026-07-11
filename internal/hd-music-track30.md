@@ -217,3 +217,40 @@ V6 (4ffe5d4b, Cello): measured +2.1 dB hot vs classic balance per-voice
 (the pads GROUP average hid it); user chose the stronger -4.3 dB cut
 (CC7 78) since it's accompaniment. Full render: `fluidr3v10` (mean -19.6,
 max -2.1 dB) with PERC_MIDI + CHIP_FPS both active.
+
+## Ear-tuning web app (2026-07-10)
+
+`tools/tuner/` — a local, zero-external-dependency web app (Python stdlib
+server + a single-page vanilla-JS/HTML client, no CDNs, no AI in the loop)
+for hand-tuning `lds_gm_map.txt` by ear instead of round-tripping through
+`hd_music_pipeline.sh gm` + a listening artifact for every voice change.
+
+Launch: `python3 tools/tuner/server.py --song 30` (prints
+`http://localhost:8765`; add `--port`/`--data`/`--sf2`/`--map`/`--trim` to
+override). On startup it runs `lds_to_midi` once for `.notes`/`.patches`,
+then background-renders every voice as an isolated mono stem (4-way
+worker pool) plus the classic OPL full-mix reference; the page streams
+stems in as they finish so listening can start immediately.
+
+Per-row controls: GM program, transpose, cents, `gate=`/`echo=` map
+options, and a volume slider (client-side gain only, instant, no
+re-render) with mute/solo. **Apply** re-renders just that voice and
+hot-swaps it into the playing mix without a glitch. The transport bar
+A/B-switches Classic OPL vs the HD mix with a fast crossfade. The two
+special track-30 voices (`c5eedaea` chip layer, `8251725a` percussion
+rewrite — see `hd-music-opl-idioms.md` idioms #1-3) only expose a gain
+slider, since their audio isn't a GM-program render.
+
+Cache dir: `hdmusic_work/tuner/<song>/` (`base/` = the bootstrap
+`.notes`/`.patches`, `stems/<fp>_<hash8>.opus` = per-voice renders keyed by
+fp+gm+transpose+cents+gate+echo+song, `classic/` = the full OPL reference).
+Entirely separate from `hdmusic_work/midi/`/`variants/`/`balance/` — the
+pipeline and the tuner never share render caches.
+
+Save semantics: **Save to map** rewrites `tools/lds_gm_map.txt` losslessly
+— header comment block, line order, and every line's trailing comment are
+preserved byte-for-byte; only the numeric fields/options of fingerprints
+actually changed in the session are rewritten. A one-deep backup is kept at
+`<map>.bak` (overwritten each save). Saving only writes the map; it does
+not re-render the shipped variant (still `hd_music_pipeline.sh gm 30 <sf2>`
+for that).

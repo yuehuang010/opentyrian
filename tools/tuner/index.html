@@ -1,0 +1,794 @@
+<title>OpenTyrian HD Music Tuner</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14161b;
+    --bg-alt: #1b1e25;
+    --panel: #20232c;
+    --border: #2e323d;
+    --text: #e7e9ee;
+    --text-dim: #9aa0ad;
+    --accent: #5cc8ff;
+    --accent-dim: #2d5f75;
+    --green: #4caf6f;
+    --amber: #d9a441;
+    --grey: #565c68;
+    --danger: #e0617a;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --bg-alt: #ffffff;
+    --panel: #ffffff;
+    --border: #dde0e6;
+    --text: #1b1e25;
+    --text-dim: #5b6472;
+    --accent: #0b78ab;
+    --accent-dim: #cdeaf9;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #f4f5f7;
+      --bg-alt: #ffffff;
+      --panel: #ffffff;
+      --border: #dde0e6;
+      --text: #1b1e25;
+      --text-dim: #5b6472;
+      --accent: #0b78ab;
+      --accent-dim: #cdeaf9;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  h1, h2, h3 { font-weight: 600; margin: 0; }
+  button {
+    font: inherit;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06232f; border-color: var(--accent); font-weight: 600; }
+  button.active { background: var(--accent-dim); border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=number], select {
+    background: var(--bg-alt);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 4px;
+    font: inherit;
+  }
+  input[type=range] { accent-color: var(--accent); }
+  .mono { font-family: var(--mono); }
+  .dim { color: var(--text-dim); }
+
+  #transport {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  #transport .grow { flex: 1 1 220px; display: flex; align-items: center; gap: 8px; min-width: 180px; }
+  #seek { width: 100%; }
+  #timeLabel { font-family: var(--mono); white-space: nowrap; font-size: 12px; color: var(--text-dim); }
+  .ab-switch { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .ab-switch button { border: none; border-radius: 0; }
+  .ab-switch button + button { border-left: 1px solid var(--border); }
+  .gain-ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+  .gain-ctl input[type=range] { width: 90px; }
+
+  main { padding: 12px 16px 90px; max-width: 1400px; margin: 0 auto; }
+  #prewarmBar { margin: 8px 0 14px; font-size: 12px; color: var(--text-dim); }
+  #prewarmBar .track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+  #prewarmBar .fill { height: 100%; background: var(--accent); width: 0%; transition: width .3s; }
+
+  table#voices { width: 100%; border-collapse: collapse; }
+  table#voices th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-dim); padding: 6px 8px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 49px; background: var(--bg); z-index: 5;
+  }
+  table#voices td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  table#voices tr:hover td { background: var(--bg-alt); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+  .dot.green { background: var(--green); }
+  .dot.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .dot.grey { background: var(--grey); }
+  .fp { width: 78px; }
+  .vol-cell { display: flex; align-items: center; gap: 6px; min-width: 150px; }
+  .vol-cell input[type=range] { flex: 1; }
+  .vol-db { width: 46px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+  .num-cell input { width: 52px; }
+  .btn-sm { padding: 3px 7px; font-size: 11px; }
+  .mute-solo { display: flex; gap: 4px; }
+  tr.special td.label { font-style: italic; color: var(--accent); }
+  tr.muted { opacity: .45; }
+
+  #saveBar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    background: var(--panel); border-top: 1px solid var(--border);
+    padding: 10px 16px; display: flex; align-items: center; gap: 14px;
+  }
+  #dirtyDot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--grey); }
+  #dirtyDot.dirty { background: var(--danger); }
+  #savePreview {
+    flex: 1; max-height: 90px; overflow: auto; font-family: var(--mono); font-size: 11px;
+    background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+    white-space: pre; color: var(--text-dim);
+  }
+  #saveStatus { font-size: 12px; color: var(--text-dim); min-width: 140px; }
+</style>
+
+<div id="transport">
+  <button id="playBtn" class="primary">Play</button>
+  <label style="display:flex;align-items:center;gap:4px;">
+    <input type="checkbox" id="loopChk" checked> Loop
+  </label>
+  <div class="grow">
+    <input type="range" id="seek" min="0" max="1" step="0.01" value="0">
+    <span id="timeLabel">0:00.0 / 0:00.0</span>
+  </div>
+  <div class="ab-switch">
+    <button id="abClassic" class="active">Classic (OPL)</button>
+    <button id="abHd">HD mix</button>
+  </div>
+  <div class="gain-ctl">
+    HD master
+    <input type="range" id="hdGainSlider" min="-12" max="6" step="0.5" value="0">
+    <span id="hdGainLabel" class="mono">0.0 dB</span>
+  </div>
+  <div class="gain-ctl">
+    Classic gain
+    <input type="range" id="classicGainSlider" min="-12" max="6" step="0.5" value="0">
+    <span id="classicGainLabel" class="mono">0.0 dB</span>
+  </div>
+</div>
+
+<main>
+  <div id="prewarmBar">
+    <span id="prewarmText">prewarming stems...</span>
+    <div class="track"><div class="fill" id="prewarmFill"></div></div>
+  </div>
+
+  <table id="voices">
+    <thead>
+      <tr>
+        <th></th>
+        <th class="fp">FP</th>
+        <th>Label</th>
+        <th>GM program</th>
+        <th>Transpose</th>
+        <th>Cents</th>
+        <th>Gate %</th>
+        <th>Echo %</th>
+        <th>Volume</th>
+        <th></th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="voiceBody"></tbody>
+  </table>
+</main>
+
+<div id="saveBar">
+  <span id="dirtyDot"></span>
+  <button id="saveBtn" class="primary">Save to map</button>
+  <span id="saveStatus"></span>
+  <div id="savePreview">(no pending changes)</div>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------
+// General MIDI Level 1 program names (0-127), embedded so there's no CDN
+// dependency for the instrument dropdown.
+// ---------------------------------------------------------------------
+const GM_PROGRAMS = [
+  "Acoustic Grand Piano","Bright Acoustic Piano","Electric Grand Piano","Honky-tonk Piano",
+  "Electric Piano 1","Electric Piano 2","Harpsichord","Clavinet",
+  "Celesta","Glockenspiel","Music Box","Vibraphone",
+  "Marimba","Xylophone","Tubular Bells","Dulcimer",
+  "Drawbar Organ","Percussive Organ","Rock Organ","Church Organ",
+  "Reed Organ","Accordion","Harmonica","Tango Accordion",
+  "Acoustic Guitar (nylon)","Acoustic Guitar (steel)","Electric Guitar (jazz)","Electric Guitar (clean)",
+  "Electric Guitar (muted)","Overdriven Guitar","Distortion Guitar","Guitar Harmonics",
+  "Acoustic Bass","Electric Bass (finger)","Electric Bass (pick)","Fretless Bass",
+  "Slap Bass 1","Slap Bass 2","Synth Bass 1","Synth Bass 2",
+  "Violin","Viola","Cello","Contrabass",
+  "Tremolo Strings","Pizzicato Strings","Orchestral Harp","Timpani",
+  "String Ensemble 1","String Ensemble 2","Synth Strings 1","Synth Strings 2",
+  "Choir Aahs","Voice Oohs","Synth Voice","Orchestra Hit",
+  "Trumpet","Trombone","Tuba","Muted Trumpet",
+  "French Horn","Brass Section","Synth Brass 1","Synth Brass 2",
+  "Soprano Sax","Alto Sax","Tenor Sax","Baritone Sax",
+  "Oboe","English Horn","Bassoon","Clarinet",
+  "Piccolo","Flute","Recorder","Pan Flute",
+  "Blown Bottle","Shakuhachi","Whistle","Ocarina",
+  "Lead 1 (square)","Lead 2 (sawtooth)","Lead 3 (calliope)","Lead 4 (chiff)",
+  "Lead 5 (charang)","Lead 6 (voice)","Lead 7 (fifths)","Lead 8 (bass + lead)",
+  "Pad 1 (new age)","Pad 2 (warm)","Pad 3 (polysynth)","Pad 4 (choir)",
+  "Pad 5 (bowed)","Pad 6 (metallic)","Pad 7 (halo)","Pad 8 (sweep)",
+  "FX 1 (rain)","FX 2 (soundtrack)","FX 3 (crystal)","FX 4 (atmosphere)",
+  "FX 5 (brightness)","FX 6 (goblins)","FX 7 (echoes)","FX 8 (sci-fi)",
+  "Sitar","Banjo","Shamisen","Koto",
+  "Kalimba","Bag pipe","Fiddle","Shanai",
+  "Tinkle Bell","Agogo","Steel Drums","Woodblock",
+  "Taiko Drum","Melodic Tom","Synth Drum","Reverse Cymbal",
+  "Guitar Fret Noise","Breath Noise","Seashore","Bird Tweet",
+  "Telephone Ring","Helicopter","Applause","Gunshot",
+];
+
+// ---------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------
+let serverState = null;   // last /api/state response
+let baseline = {};        // fp -> {gm,transpose,volume,cents,gate,echo} at last load/save (for dirty-check)
+let rows = {};            // fp -> {settings, mute, solo, statusDot, els:{...}}
+let trimSeconds = 0;
+
+// WebAudio graph
+let ctx = null;
+let hdMasterGain, classicMasterGain, abHdGain, abClassicGain;
+let voiceNodes = {};       // fp -> {source, gain, buffer}
+let classicNode = { source: null, buffer: null };
+let playStartCtxTime = 0;  // ctx.currentTime at which offset 0 of the loop would have started
+let playing = false;
+let abMode = "classic";    // "classic" | "hd"
+
+function dbToGain(db) { return Math.pow(10, db / 20); }
+function cc7ToGain(v) { return Math.pow(v / 100, 2); } // CC7 volume law: dB = 40*log10(cc/127); client gain = (v/100)^2 linear
+
+function fmtTime(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s / 60);
+  const sec = (s - m * 60).toFixed(1);
+  return `${m}:${sec.padStart(4, "0")}`;
+}
+
+// ---------------------------------------------------------------------
+// Audio context setup
+// ---------------------------------------------------------------------
+function initAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  try {
+    ctx = new AC({ sampleRate: 24000 });
+  } catch (e) {
+    ctx = new AC();
+  }
+  hdMasterGain = ctx.createGain();
+  classicMasterGain = ctx.createGain();
+  abHdGain = ctx.createGain();
+  abClassicGain = ctx.createGain();
+
+  abHdGain.gain.value = 0;      // classic is the default A/B side
+  abClassicGain.gain.value = 1;
+
+  abHdGain.connect(hdMasterGain).connect(ctx.destination);
+  abClassicGain.connect(classicMasterGain).connect(ctx.destination);
+
+  ctx.suspend();
+}
+
+function currentPlayhead() {
+  if (!ctx) return 0;
+  const t = ctx.currentTime - playStartCtxTime;
+  if (trimSeconds > 0) return ((t % trimSeconds) + trimSeconds) % trimSeconds;
+  return Math.max(0, t);
+}
+
+async function decodeUrl(url) {
+  const resp = await fetch(url);
+  const buf = await resp.arrayBuffer();
+  return await ctx.decodeAudioData(buf);
+}
+
+function makeSource(buffer, gainNode, offset) {
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = document.getElementById("loopChk").checked && trimSeconds > 0;
+  if (src.loop) {
+    src.loopStart = 0;
+    src.loopEnd = trimSeconds;
+  }
+  src.connect(gainNode);
+  src.start(0, offset % (buffer.duration || 1));
+  return src;
+}
+
+function effectiveVoiceGain(fp) {
+  const r = rows[fp];
+  if (!r) return 0;
+  const anySolo = Object.values(rows).some((x) => x.solo);
+  if (r.mute) return 0;
+  if (anySolo && !r.solo) return 0;
+  if (r.special) return dbToGain(r.settings.gainDb);
+  return cc7ToGain(r.settings.volume);
+}
+
+function refreshVoiceGain(fp) {
+  const n = voiceNodes[fp];
+  if (n && n.gain) n.gain.gain.setTargetAtTime(effectiveVoiceGain(fp), ctx.currentTime, 0.01);
+}
+
+function restartAll(offsetSeconds) {
+  if (!ctx) return;
+  playStartCtxTime = ctx.currentTime - offsetSeconds;
+  for (const fp in voiceNodes) {
+    const n = voiceNodes[fp];
+    if (n.source) { try { n.source.stop(); } catch (e) {} }
+    if (n.buffer) n.source = makeSource(n.buffer, n.gain, offsetSeconds);
+  }
+  if (classicNode.buffer) {
+    if (classicNode.source) { try { classicNode.source.stop(); } catch (e) {} }
+    classicNode.source = makeSource(classicNode.buffer, abClassicGain, offsetSeconds);
+  }
+}
+
+// hot-swap one voice's stem in place, at the current playhead, without
+// touching anything else that's playing
+async function hotSwapVoice(fp, url) {
+  const buffer = await decodeUrl(url);
+  const n = voiceNodes[fp];
+  n.buffer = buffer;
+  rows[fp].loadedUrl = url;
+  refreshVoiceGain(fp);
+  if (playing || ctx.state === "running") {
+    const offset = currentPlayhead();
+    if (n.source) { try { n.source.stop(); } catch (e) {} }
+    n.source = makeSource(buffer, n.gain, offset);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Networking
+// ---------------------------------------------------------------------
+async function fetchState() {
+  const r = await fetch("/api/state");
+  return await r.json();
+}
+
+async function postStem(fp, settings) {
+  const r = await fetch("/api/stem", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fp, ...settings }),
+  });
+  return await r.json();
+}
+
+async function postSave(voices) {
+  const r = await fetch("/api/save", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voices }),
+  });
+  return await r.json();
+}
+
+// ---------------------------------------------------------------------
+// UI construction
+// ---------------------------------------------------------------------
+function gmOptionsHtml(selected) {
+  return GM_PROGRAMS.map((name, i) =>
+    `<option value="${i}"${i === selected ? " selected" : ""}>${i} - ${name}</option>`
+  ).join("");
+}
+
+function buildRow(v) {
+  const isSpecial = v.special !== "none";
+  const tr = document.createElement("tr");
+  tr.dataset.fp = v.fp;
+  if (isSpecial) tr.classList.add("special");
+
+  const dot = document.createElement("span");
+  dot.className = "dot grey";
+
+  const tdDot = document.createElement("td");
+  tdDot.appendChild(dot);
+
+  const tdFp = document.createElement("td");
+  tdFp.className = "mono fp";
+  tdFp.textContent = v.fp;
+
+  const tdLabel = document.createElement("td");
+  tdLabel.className = "label";
+  tdLabel.textContent = isSpecial ? `${v.special_label} — ${v.label}` : v.label;
+
+  const tdGm = document.createElement("td");
+  let gmSelect = null;
+  if (!isSpecial) {
+    gmSelect = document.createElement("select");
+    gmSelect.innerHTML = gmOptionsHtml(v.gm);
+    tdGm.appendChild(gmSelect);
+  } else {
+    tdGm.className = "dim";
+    tdGm.textContent = "(chip / percussion render)";
+  }
+
+  const tdTranspose = document.createElement("td");
+  tdTranspose.className = "num-cell";
+  const transposeInput = document.createElement("input");
+  transposeInput.type = "number"; transposeInput.min = -24; transposeInput.max = 24;
+  transposeInput.value = v.transpose;
+  transposeInput.disabled = isSpecial;
+  tdTranspose.appendChild(transposeInput);
+
+  const tdCents = document.createElement("td");
+  tdCents.className = "num-cell";
+  const centsInput = document.createElement("input");
+  centsInput.type = "number"; centsInput.min = -99; centsInput.max = 99;
+  centsInput.value = v.cents;
+  centsInput.disabled = isSpecial;
+  tdCents.appendChild(centsInput);
+
+  const tdGate = document.createElement("td");
+  tdGate.className = "num-cell";
+  const gateInput = document.createElement("input");
+  gateInput.type = "number"; gateInput.min = 10; gateInput.max = 100;
+  gateInput.placeholder = "off";
+  gateInput.value = v.gate !== 100 ? v.gate : "";
+  gateInput.disabled = isSpecial;
+  tdGate.appendChild(gateInput);
+
+  const tdEcho = document.createElement("td");
+  tdEcho.className = "num-cell";
+  const echoInput = document.createElement("input");
+  echoInput.type = "number"; echoInput.min = 0; echoInput.max = 100;
+  echoInput.placeholder = "off";
+  echoInput.value = v.echo !== 100 ? v.echo : "";
+  echoInput.disabled = isSpecial;
+  tdEcho.appendChild(echoInput);
+
+  const tdVol = document.createElement("td");
+  tdVol.className = "vol-cell";
+  const volSlider = document.createElement("input");
+  volSlider.type = "range";
+  const volDb = document.createElement("span");
+  volDb.className = "vol-db mono";
+  if (isSpecial) {
+    volSlider.min = -12; volSlider.max = 12; volSlider.step = 0.5;
+    volSlider.value = v.default_gain_db;
+    volDb.textContent = `${v.default_gain_db.toFixed(1)}dB`;
+  } else {
+    volSlider.min = 0; volSlider.max = 127; volSlider.step = 1;
+    volSlider.value = v.volume;
+    const db = 40 * Math.log10(Math.max(1, v.volume) / 127);
+    volDb.textContent = `${db.toFixed(1)}dB`;
+  }
+  tdVol.appendChild(volSlider);
+  tdVol.appendChild(volDb);
+
+  const tdMuteSolo = document.createElement("td");
+  tdMuteSolo.className = "mute-solo";
+  const muteBtn = document.createElement("button");
+  muteBtn.className = "btn-sm"; muteBtn.textContent = "M";
+  const soloBtn = document.createElement("button");
+  soloBtn.className = "btn-sm"; soloBtn.textContent = "S";
+  tdMuteSolo.appendChild(muteBtn);
+  tdMuteSolo.appendChild(soloBtn);
+
+  const tdApply = document.createElement("td");
+  const applyBtn = document.createElement("button");
+  applyBtn.className = "btn-sm primary"; applyBtn.textContent = "Apply";
+  applyBtn.disabled = isSpecial;
+  tdApply.appendChild(applyBtn);
+
+  tr.append(tdDot, tdFp, tdLabel, tdGm, tdTranspose, tdCents, tdGate, tdEcho, tdVol, tdMuteSolo, tdApply);
+
+  rows[v.fp] = {
+    special: isSpecial,
+    settings: {
+      gm: v.gm, transpose: v.transpose, volume: v.volume, cents: v.cents,
+      gate: v.gate, echo: v.echo, gainDb: v.default_gain_db,
+    },
+    mute: false, solo: false,
+    els: { dot, gmSelect, transposeInput, centsInput, gateInput, echoInput, volSlider, volDb, muteBtn, soloBtn, applyBtn, tr },
+  };
+
+  voiceNodes[v.fp] = { source: null, buffer: null, gain: ctx.createGain() };
+  voiceNodes[v.fp].gain.connect(abHdGain);
+  voiceNodes[v.fp].gain.gain.value = 0;
+
+  // -- wiring --
+  volSlider.addEventListener("input", () => {
+    const r = rows[v.fp];
+    if (isSpecial) {
+      r.settings.gainDb = parseFloat(volSlider.value);
+      volDb.textContent = `${r.settings.gainDb.toFixed(1)}dB`;
+    } else {
+      r.settings.volume = parseInt(volSlider.value, 10);
+      const db = 40 * Math.log10(Math.max(1, r.settings.volume) / 127);
+      volDb.textContent = `${db.toFixed(1)}dB`;
+    }
+    refreshVoiceGain(v.fp);
+    updateDirty();
+  });
+
+  muteBtn.addEventListener("click", () => {
+    const r = rows[v.fp];
+    r.mute = !r.mute;
+    muteBtn.classList.toggle("active", r.mute);
+    tr.classList.toggle("muted", r.mute);
+    Object.keys(rows).forEach(refreshVoiceGain);
+  });
+  soloBtn.addEventListener("click", () => {
+    const r = rows[v.fp];
+    r.solo = !r.solo;
+    soloBtn.classList.toggle("active", r.solo);
+    Object.keys(rows).forEach(refreshVoiceGain);
+  });
+
+  if (!isSpecial) {
+    [gmSelect, transposeInput, centsInput, gateInput, echoInput].forEach((el) => {
+      el.addEventListener("change", () => { syncRowSettings(v.fp); updateDirty(); });
+    });
+    applyBtn.addEventListener("click", async () => {
+      const r = rows[v.fp];
+      syncRowSettings(v.fp);
+      setDot(v.fp, "amber");
+      applyBtn.disabled = true;
+      try {
+        const resp = await postStem(v.fp, {
+          gm: r.settings.gm, transpose: r.settings.transpose, cents: r.settings.cents,
+          gate: r.settings.gate, echo: r.settings.echo,
+        });
+        if (resp.error) throw new Error(resp.error);
+        await hotSwapVoice(v.fp, resp.url);
+        setDot(v.fp, "green");
+      } catch (e) {
+        console.error(e);
+        setDot(v.fp, "grey");
+        alert(`render failed for ${v.fp}: ${e.message}`);
+      } finally {
+        applyBtn.disabled = false;
+        updateDirty();
+      }
+    });
+  }
+
+  return tr;
+}
+
+function setDot(fp, color) {
+  const r = rows[fp];
+  if (r) r.els.dot.className = `dot ${color}`;
+}
+
+// pull the current input values into rows[fp].settings so the dirty-check
+// and Save see edits even before Apply re-renders the stem
+function syncRowSettings(fp) {
+  const r = rows[fp];
+  if (!r || r.special) return;
+  const e = r.els;
+  r.settings.gm = parseInt(e.gmSelect.value, 10);
+  r.settings.transpose = parseInt(e.transposeInput.value || "0", 10);
+  r.settings.cents = parseInt(e.centsInput.value || "0", 10);
+  r.settings.gate = e.gateInput.value === "" ? 100 : parseInt(e.gateInput.value, 10);
+  r.settings.echo = e.echoInput.value === "" ? 100 : parseInt(e.echoInput.value, 10);
+}
+
+// ---------------------------------------------------------------------
+// Dirty-check + save preview
+// ---------------------------------------------------------------------
+function updateDirty() {
+  const changes = [];
+  for (const fp in rows) {
+    const r = rows[fp];
+    if (r.special) continue;
+    const b = baseline[fp];
+    const s = r.settings;
+    const diffFields = [];
+    if (s.gm !== b.gm) diffFields.push(`gm ${b.gm}->${s.gm}`);
+    if (s.transpose !== b.transpose) diffFields.push(`transpose ${b.transpose}->${s.transpose}`);
+    if (s.volume !== b.volume) diffFields.push(`volume ${b.volume}->${s.volume}`);
+    if (s.cents !== b.cents) diffFields.push(`cents ${b.cents}->${s.cents}`);
+    if (s.gate !== b.gate) diffFields.push(`gate ${b.gate}->${s.gate}`);
+    if (s.echo !== b.echo) diffFields.push(`echo ${b.echo}->${s.echo}`);
+    if (diffFields.length) changes.push(`${fp}  ${diffFields.join(", ")}`);
+  }
+  const dirty = changes.length > 0;
+  document.getElementById("dirtyDot").classList.toggle("dirty", dirty);
+  document.getElementById("savePreview").textContent =
+    dirty ? changes.join("\n") : "(no pending changes)";
+  return changes.length > 0;
+}
+
+async function doSave() {
+  const payload = Object.keys(rows)
+    .filter((fp) => !rows[fp].special)
+    .map((fp) => ({ fp, ...rows[fp].settings }));
+  document.getElementById("saveStatus").textContent = "saving...";
+  try {
+    const resp = await postSave(payload);
+    if (!resp.ok) throw new Error(resp.error || "save failed");
+    for (const fp in rows) {
+      if (rows[fp].special) continue;
+      baseline[fp] = { ...rows[fp].settings };
+    }
+    updateDirty();
+    document.getElementById("saveStatus").textContent =
+      resp.changed.length ? `saved (${resp.changed.length} line(s) changed)` : "saved (no changes)";
+  } catch (e) {
+    document.getElementById("saveStatus").textContent = `error: ${e.message}`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Prewarm polling: load whichever stems are ready, keep polling until done
+// ---------------------------------------------------------------------
+async function loadReadyStems(state) {
+  const jobs = [];
+  if (state.classic_url && !classicNode.buffer) {
+    jobs.push(decodeUrl(state.classic_url).then((buf) => { classicNode.buffer = buf; }));
+  }
+  for (const v of state.voices) {
+    if (v.stem_url && (!voiceNodes[v.fp] || !voiceNodes[v.fp].buffer || rows[v.fp].loadedUrl !== v.stem_url)) {
+      jobs.push(
+        decodeUrl(v.stem_url).then((buf) => {
+          const n = voiceNodes[v.fp];
+          n.buffer = buf;
+          rows[v.fp].loadedUrl = v.stem_url;
+          refreshVoiceGain(v.fp); // gain nodes start at 0; set the real level now
+          if (playing) {
+            // stem arrived mid-playback: join the mix at the current playhead
+            if (n.source) { try { n.source.stop(); } catch (e) {} }
+            n.source = makeSource(buf, n.gain, currentPlayhead());
+          }
+          setDot(v.fp, "green");
+        })
+      );
+    } else if (!v.stem_url) {
+      setDot(v.fp, "grey");
+    }
+  }
+  await Promise.all(jobs);
+}
+
+function updatePrewarmUi(state) {
+  const { done, total } = state.prewarm;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 100;
+  document.getElementById("prewarmFill").style.width = `${pct}%`;
+  const text = document.getElementById("prewarmText");
+  const bar = document.getElementById("prewarmBar");
+  if (done >= total) {
+    text.textContent = "all stems rendered";
+    bar.style.display = "none";
+  } else {
+    text.textContent = `prewarming stems... ${done}/${total}`;
+    bar.style.display = "block";
+  }
+}
+
+async function pollLoop() {
+  const state = await fetchState();
+  await loadReadyStems(state);
+  updatePrewarmUi(state);
+  if (state.prewarm.done < state.prewarm.total) {
+    setTimeout(pollLoop, 2000);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Transport wiring
+// ---------------------------------------------------------------------
+function wireTransport() {
+  const playBtn = document.getElementById("playBtn");
+  const loopChk = document.getElementById("loopChk");
+  const seek = document.getElementById("seek");
+  const timeLabel = document.getElementById("timeLabel");
+  const abClassicBtn = document.getElementById("abClassic");
+  const abHdBtn = document.getElementById("abHd");
+  const hdGainSlider = document.getElementById("hdGainSlider");
+  const hdGainLabel = document.getElementById("hdGainLabel");
+  const classicGainSlider = document.getElementById("classicGainSlider");
+  const classicGainLabel = document.getElementById("classicGainLabel");
+
+  seek.max = trimSeconds || 1;
+
+  playBtn.addEventListener("click", async () => {
+    if (!playing) {
+      if (ctx.state === "suspended") {
+        // first play (or resume after pause): (re)start all sources at the
+        // seek bar's current position so pause/resume don't jump.
+        restartAll(parseFloat(seek.value) || 0);
+        await ctx.resume();
+      }
+      playing = true;
+      playBtn.textContent = "Pause";
+    } else {
+      await ctx.suspend();
+      playing = false;
+      playBtn.textContent = "Play";
+    }
+  });
+
+  loopChk.addEventListener("change", () => {
+    for (const fp in voiceNodes) {
+      if (voiceNodes[fp].source) voiceNodes[fp].source.loop = loopChk.checked && trimSeconds > 0;
+    }
+    if (classicNode.source) classicNode.source.loop = loopChk.checked && trimSeconds > 0;
+  });
+
+  seek.addEventListener("input", () => {
+    timeLabel.textContent = `${fmtTime(parseFloat(seek.value))} / ${fmtTime(trimSeconds)}`;
+  });
+  seek.addEventListener("change", () => {
+    restartAll(parseFloat(seek.value));
+  });
+
+  function setAb(mode) {
+    abMode = mode;
+    abClassicBtn.classList.toggle("active", mode === "classic");
+    abHdBtn.classList.toggle("active", mode === "hd");
+    const now = ctx.currentTime;
+    const RAMP = 0.04; // <=50ms crossfade
+    abClassicGain.gain.setTargetAtTime(mode === "classic" ? 1 : 0, now, RAMP / 3);
+    abHdGain.gain.setTargetAtTime(mode === "hd" ? 1 : 0, now, RAMP / 3);
+  }
+  abClassicBtn.addEventListener("click", () => setAb("classic"));
+  abHdBtn.addEventListener("click", () => setAb("hd"));
+
+  hdGainSlider.addEventListener("input", () => {
+    const db = parseFloat(hdGainSlider.value);
+    hdGainLabel.textContent = `${db.toFixed(1)} dB`;
+    hdMasterGain.gain.setTargetAtTime(dbToGain(db), ctx.currentTime, 0.01);
+  });
+  classicGainSlider.addEventListener("input", () => {
+    const db = parseFloat(classicGainSlider.value);
+    classicGainLabel.textContent = `${db.toFixed(1)} dB`;
+    classicMasterGain.gain.setTargetAtTime(dbToGain(db), ctx.currentTime, 0.01);
+  });
+
+  // playhead animation
+  function tick() {
+    if (playing) {
+      seek.value = currentPlayhead();
+      timeLabel.textContent = `${fmtTime(currentPlayhead())} / ${fmtTime(trimSeconds)}`;
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------
+async function boot() {
+  initAudio();
+  const state = await fetchState();
+  serverState = state;
+  trimSeconds = state.trim || 0;
+
+  const tbody = document.getElementById("voiceBody");
+  for (const v of state.voices) {
+    tbody.appendChild(buildRow(v));
+    baseline[v.fp] = {
+      gm: v.gm, transpose: v.transpose, volume: v.volume, cents: v.cents, gate: v.gate, echo: v.echo,
+    };
+  }
+
+  wireTransport();
+  document.getElementById("saveBtn").addEventListener("click", doSave);
+  updateDirty();
+
+  await loadReadyStems(state);
+  updatePrewarmUi(state);
+  if (state.prewarm.done < state.prewarm.total) setTimeout(pollLoop, 2000);
+}
+
+window.addEventListener("DOMContentLoaded", boot);
+</script>
