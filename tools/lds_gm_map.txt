@@ -16,7 +16,7 @@
 # fingerprints you care about into this file with your chosen GM program.
 #
 # Format (whitespace separated, '#' comments allowed):
-#   <8-hex-fingerprint>  <gm_program 0-127>  [semitone_transpose]  [volume 0-127]
+#   <8-hex-fingerprint>  <gm_program 0-127>  [semitone_transpose]  [volume 0-127]  [cents -99..99]
 #
 # volume is a per-instrument mix level (MIDI CC7, default 100) emitted when
 # the fingerprint takes over a channel; use it to push leads forward and
@@ -31,9 +31,16 @@
 # OPL voice's synthesized octave doesn't match its GM counterpart's natural
 # register).
 #
+# cents is optional and defaults to 0; it's a per-instrument fine-tuning
+# offset (MIDI RPN 1, channel fine tuning, +-100 cent range) emitted when
+# the fingerprint takes over a channel, on top of the semitone transpose.
+# Use it to correct a soundfont preset's own tuning error against the OPL
+# original's actual chip frequency (see tools/validate_pitch.py TEST B,
+# and internal/hd-music-pitch-report.md), not to change which note plays.
+#
 # Example (not applied until you uncomment/edit with real fingerprints from
 # a .patches report):
-# 1a2b3c4d  81  0
+# 1a2b3c4d  81  0  100  0
 
 # ----------------------------------------------------------------------
 # Track 30 (title theme) - third pass: the first-draft assignments won the
@@ -45,17 +52,17 @@
 #     counterpart in the OPL original.
 # gate is in sequencer ticks, 1 tick ~ 14.4 ms.
 # ----------------------------------------------------------------------
-c5eedaea  48   # ch2,4  4 long low notes (26..38, ~11s)  -> String Ensemble pad
+c5eedaea  48  0  100  -87  # ch2,4  4 long low notes (26..38, ~11s)  -> String Ensemble pad; TEST B n/a on all fonts, borrowed String Ensemble 1 tuning from 00d2b08d (+0.77 st mean) -> -87c
 f467d225  61   # ch0,1  mid riff (57..70, ~140ms)        -> Brass Section
 1cd3af4f  61   # ch0,1,4 very short (23ms) stabs (V3)    -> Brass Section (these are melody ornaments on the melody's own channels; pizzicato made them sound like a stray instrument)
 74a8c820  61   # ch0,1  main melody voice (43..81)       -> Brass Section
 4a4a0c2e  46   # ch3,4  busiest arp/accomp (1254 notes)  -> Orchestral Harp
-4ffe5d4b  42   # ch2..6 mid-low sustained (38..58)       -> Cello
+4ffe5d4b  42  0  100  27  # ch2..6 mid-low sustained (38..58)       -> Cello; Cello preset ~-0.37 st flat across fonts -> +27c OPL-referenced correction
 e181198e  52   # ch4,5  long soaring lead (48..93, ~1s)  -> Choir Aahs
-13fecaf5  38   # ch2    driving mid-low rhythm line      -> Synth Bass 1
-bf6c72e9  38   # ch5,6  bass line (26..53)               -> Synth Bass 1
+13fecaf5  38  0  100  33  # ch2    driving mid-low rhythm line      -> Synth Bass 1; Synth Bass 1 preset ~-0.42 st flat across fonts -> +33c OPL-referenced correction
+bf6c72e9  38  0  100  34  # ch5,6  bass line (26..53)               -> Synth Bass 1; TEST B unreliable (high MAD), borrowed Synth Bass 1 tuning from 13fecaf5/0d5f4d92 -> +34c
 efa39919  47  0  0  # ch6,7  fixed note 36 hits (V10)    -> REMOVED (vol 0; was Timpani)
-e647c759  43   # ch1    4 very long low notes (37)       -> Contrabass
+e647c759  43  0  100  -69  # ch1    4 very long low notes (37)       -> Contrabass; Contrabass preset ~+0.86 st sharp across fonts -> -69c OPL-referenced correction
 690de1b2  115  # ch8    fixed note 85 ticking            -> Woodblock
 8251725a  12  0  0  # ch7  4751-note 37ms arpeggio (V13)  -> REMOVED (vol 0; no instrument sat right for this texture)
 4b52fb40  29   # ch0,1  second melody (45..81) (V14)     -> Overdriven Guitar (per ear test; trumpet distorted, horn washed, brass muffled, synth brass meh)
@@ -63,9 +70,9 @@ e647c759  43   # ch1    4 very long low notes (37)       -> Contrabass
 7d7e14af  46   # ch4,5  fast high runs/fills             -> Orchestral Harp
 6e979d58  46   # ch4    fast high runs/fills             -> Orchestral Harp
 3bdee0e9  46   # ch4    fast high runs/fills             -> Orchestral Harp
-7fda9b3c  42   # ch3    mid-low rhythm (38..57)          -> Cello
+7fda9b3c  42  0  100  50  # ch3    mid-low rhythm (38..57)          -> Cello; OPL data plays this voice ~+0.40 st sharp of the grid (Test A) while the preset is near-grid -> +50c OPL-referenced correction
 ff66498c  12  0  85  # ch6  fast repeated mid notes (V19) -> Marimba (pizzicato mushed the 37ms same-note repeats; mallets keep them distinct)
-0d5f4d92  38   # ch2    bass (26..45)                    -> Synth Bass 1
+0d5f4d92  38  0  100  34  # ch2    bass (26..45)                    -> Synth Bass 1; Synth Bass 1 preset ~-0.44 st flat across fonts -> +34c OPL-referenced correction
 b7d5240c  89   # ch8    very long high drone (84)        -> Pad 2 (warm)
 6e6c1c52  46   # ch0,4  short fills                      -> Orchestral Harp
 6898f39b  46   # ch0,1,4 short fills                     -> Orchestral Harp
@@ -73,6 +80,6 @@ b7d5240c  89   # ch8    very long high drone (84)        -> Pad 2 (warm)
 7efe0866  46   # ch0,4  short fills                      -> Orchestral Harp
 d2f0af9d  46   # ch0,4  short fills                      -> Orchestral Harp
 f033864b  46   # ch4,5  short fills                      -> Orchestral Harp
-00d2b08d  48   # ch5,6  mid sustained (45..61)           -> String Ensemble
+00d2b08d  48  0  100  -74  # ch5,6  mid sustained (45..61)           -> String Ensemble; String Ensemble 1 preset ~+0.77 st sharp across fonts -> -74c OPL-referenced correction
 15a839b2  112 0 0  # ch8  fixed note 84 ticking          -> silenced (bell with no OPL-audible counterpart)
-d877be97  43   # ch5,6  low sustained (25..37)           -> Contrabass
+d877be97  43  0  100  -48  # ch5,6  low sustained (25..37)           -> Contrabass; Contrabass preset ~+0.93 st sharp across fonts -> -48c OPL-referenced correction

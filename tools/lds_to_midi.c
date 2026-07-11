@@ -48,12 +48,18 @@
  * Instrument mapping file: tools/lds_gm_map.txt (optional; read relative to
  * the current working directory AND next to this executable's invocation --
  * see find_gm_map_path()).  Lines:
- *   <8-hex-fingerprint> <gm_program 0-127> [semitone_transpose] [volume 0-127]
+ *   <8-hex-fingerprint> <gm_program 0-127> [semitone_transpose] [volume 0-127] [cents -99..99]
  * '#' starts a comment.  Unmapped fingerprints default to GM program 0
- * (Acoustic Grand Piano) with no transpose at volume 100.  volume is a
- * per-instrument mix level emitted as CC7 whenever the fingerprint takes
- * over a MIDI channel (it scales the decoded velocities/CC11 expression,
- * which are left untouched).
+ * (Acoustic Grand Piano) with no transpose at volume 100 and no fine-tune.
+ * volume is a per-instrument mix level emitted as CC7 whenever the
+ * fingerprint takes over a MIDI channel (it scales the decoded
+ * velocities/CC11 expression, which are left untouched).  cents is an
+ * optional per-instrument fine-tuning offset (RPN 1, channel fine tuning),
+ * emitted whenever the fingerprint takes over a MIDI channel and its cents
+ * value differs from what that channel last had; use it to correct a GM
+ * soundfont preset's tuning to match the OPL original's actual frequency
+ * (see tools/validate_pitch.py TEST B), independent of the semitone
+ * transpose column.
  *
  * Looping: when the sequencer's songlooped flag fires (same detection as
  * render_music.c: record each tick's sequencer position, and match the
@@ -197,6 +203,7 @@ typedef struct
 	int program;
 	int transpose;
 	int volume; // CC7 mix level, 0-127
+	int cents;  // channel fine tuning (RPN 1), -99..99, 0 = none
 } GmMapEntry;
 
 static GmMapEntry *gmMap = NULL;
@@ -218,24 +225,27 @@ static void load_gm_map(const char *path)
 			continue;
 
 		unsigned fp;
-		int prog, transpose = 0, volume = 100;
-		int n = sscanf(h, "%x %d %d %d", &fp, &prog, &transpose, &volume);
+		int prog, transpose = 0, volume = 100, cents = 0;
+		int n = sscanf(h, "%x %d %d %d %d", &fp, &prog, &transpose, &volume, &cents);
 		if (n >= 2)
 		{
 			if (volume < 0) volume = 0;
 			if (volume > 127) volume = 127;
+			if (cents < -99) cents = -99;
+			if (cents > 99) cents = 99;
 			gmMap = realloc(gmMap, (gmMapCount + 1) * sizeof(GmMapEntry));
 			gmMap[gmMapCount].fingerprint = (uint32_t)fp;
 			gmMap[gmMapCount].program = prog;
 			gmMap[gmMapCount].transpose = transpose;
 			gmMap[gmMapCount].volume = volume;
+			gmMap[gmMapCount].cents = cents;
 			gmMapCount++;
 		}
 	}
 	fclose(f);
 }
 
-static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume)
+static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *outCents)
 {
 	for (int i = 0; i < gmMapCount; ++i)
 	{
@@ -243,11 +253,13 @@ static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume)
 		{
 			*outTranspose = gmMap[i].transpose;
 			*outVolume = gmMap[i].volume;
+			*outCents = gmMap[i].cents;
 			return gmMap[i].program;
 		}
 	}
 	*outTranspose = 0;
 	*outVolume = 100;
+	*outCents = 0;
 	return -1; // unmapped
 }
 
@@ -352,10 +364,15 @@ typedef struct
 	int transpose;
 	int program;      // last emitted GM program, -1 = none yet
 	int volume;       // last emitted CC7 value, -1 = none yet (synth default 100)
+	int cents;        // last emitted RPN1 fine-tune value, CENTS_NONE = none yet
 	bool used;        // has this MIDI channel had any event at all
 } ChanState;
 
 static ChanState chans[9];
+
+// Sentinel for ChanState.cents meaning "no RPN1 fine-tune emitted yet" --
+// outside the valid -99..99 clamp range so it never collides with a real value.
+#define CENTS_NONE (-1000)
 
 // rhythm mode state (MIDI channel 9)
 typedef struct
@@ -436,8 +453,8 @@ static void emit_program_change_if_needed(int ch, int tick)
 
 	chans[ch].fingerprint = fp;
 
-	int transpose = 0, volume = 100;
-	int prog = lookup_gm_map(fp, &transpose, &volume);
+	int transpose = 0, volume = 100, cents = 0;
+	int prog = lookup_gm_map(fp, &transpose, &volume, &cents);
 	chans[ch].transpose = transpose;
 
 	PatchRecord *p = find_or_add_patch(fp, tick);
@@ -454,6 +471,23 @@ static void emit_program_change_if_needed(int ch, int tick)
 	{
 		push_event(tick, 0xB0 | ch, 7, (unsigned char)volume, 2);
 		chans[ch].volume = volume;
+	}
+	if (cents != chans[ch].cents)
+	{
+		// RPN 1 (channel fine tuning): 14-bit value, 8192 = center (0 cents),
+		// full range is +-100 cents -> value = 8192 + round(cents*8192/100).
+		int value = 8192 + (int)lround(cents * 8192.0 / 100.0);
+		if (value < 0) value = 0;
+		if (value > 16383) value = 16383;
+		unsigned char msb = (unsigned char)((value >> 7) & 0x7f);
+		unsigned char lsb = (unsigned char)(value & 0x7f);
+		push_event(tick, 0xB0 | ch, 101, 0, 2);   // RPN MSB = 0
+		push_event(tick, 0xB0 | ch, 100, 1, 2);   // RPN LSB = 1 (fine tuning)
+		push_event(tick, 0xB0 | ch, 6, msb, 2);   // Data Entry MSB
+		push_event(tick, 0xB0 | ch, 38, lsb, 2);  // Data Entry LSB
+		push_event(tick, 0xB0 | ch, 101, 127, 2); // RPN null (deselect)
+		push_event(tick, 0xB0 | ch, 100, 127, 2);
+		chans[ch].cents = cents;
 	}
 }
 
@@ -815,6 +849,7 @@ static void reset_decode_state(void)
 		chans[i].expression = -1;
 		chans[i].program = -1;
 		chans[i].volume = -1;
+		chans[i].cents = CENTS_NONE;
 		chans[i].fingerprint = 0;
 	}
 	memset(rhythmVoices, 0, sizeof rhythmVoices);

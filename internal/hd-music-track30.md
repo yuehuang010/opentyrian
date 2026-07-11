@@ -79,6 +79,32 @@ All three are on the artifact page alongside classic and the FluidR3-v6 stems:
   (melody ×0.6, 2nd melody ×0.5, choir ×0.45; ffmpeg amix, durations align
   because both derive from the same tick clock) →
   `variants/hdmusic_30.hybrid.ogg` (mean −20.5 dB, matches classic's −20.8).
+## Pitch correction fix (2026-07-10, "right instrument, wrong keys")
+
+The automated validator (see `internal/hd-music-pitch-report.md`) proved the
+MIDI itself is pitch-exact and found the real cause: GM preset tuning in the
+bass register — Contrabass ~+0.9 st sharp and String Ensemble ~+0.77 sharp in
+ALL three fonts, Synth Bass ~−0.4..−0.5 flat → layered bass lines disagreed by
+>1.2 st. Also: the LDS data intentionally detunes some voices off the grid
+(d877be97 +0.45 st, 7fda9b3c +0.40), so fidelity target = OPL frequencies,
+not equal temperament.
+
+Fix: `lds_gm_map.txt` gained a 5th column `cents` (−99..99) emitted as MIDI
+RPN 1 channel fine-tuning when a fingerprint takes a channel (fluidsynth
+honors it — verified empirically: a d877be97 solo note went from +0.48 st to
++0.00 vs the chip frequency). Correction rule per voice:
+`cents = 100 × (TestA_median_bias − TestB_median_offset)`. Applied:
+d877be97 −48, e647c759 −69, 00d2b08d −74, c5eedaea −87 (borrowed from
+00d2b08d), 13fecaf5 +33, bf6c72e9 +34 (borrowed), 0d5f4d92 +34,
+4ffe5d4b +27, 7fda9b3c +50. Synthfam map: +33/34 on its Synth Bass voices.
+sc55/synthfam/fusion variants and bass/pads stems re-rendered.
+
+TODO: `tools/validate_pitch.py` is very slow (pure-python FFT/YIN, no numpy);
+plan is to port the f0-analysis core to C (`tools/pitch_analyze.c`), keeping
+the report/driver identical — golden-reference it against the python output.
+Its TEST B expected-frequency also needs to read the cents column / OPL hz
+(partially done — verify before trusting a re-run).
+
 - **Fusion (`fusion`)** — user idea: sum paths 2+3+4 into one wide modern mix.
   Hybrid stays center bed; SC-55 `extrastereo=m=2.0` ×0.5 and all-synth
   `extrastereo=m=2.6` ×0.45 fill the sides; ×0.7 trim + limiter →

@@ -70,37 +70,37 @@ instrument, wrong keys" - none is present.)
 
 Each pitched voice is rendered SOLO (only that fingerprint audible) through each soundfont; the sounding f0 is measured on clean solo
 windows (>= 8 ticks, non-overlapping, 24-tick release guard, middle 60%, YIN pitch detection)
-and compared to the MIDI note's expected frequency. Offset = `12*log2(measured / expected)` semitones. **Flag (⚠) = |median| >= 0.5 st**
+and compared to the note's OPL-referenced expected frequency (the exact OPL2 chip frequency at note-on, shifted by the map's transpose and cents columns) rather than the equal-tempered MIDI grid -- perfect fidelity to the original reads as 0.00 st here. Offset = `12*log2(measured / expected)` semitones. **Flag (⚠) = |median| >= 0.5 st**
 on a reliable measurement (MAD <= 0.35 st, >= 2 windows); `?` marks a
 low-confidence cell where the texture defeated the detector (not counted as a verdict). Percussion voices are excluded, marked n/a.
 
 | voice | GM program | FluidR3_GM | GeneralUser-GS | SC-55 |
 |---|---|---|---|---|
-| `00d2b08d` | 48 String Ensemble 1 | +0.80±0.08 ⚠ | +0.77±0.19 ⚠ | +0.74±0.09 ⚠ |
-| `0d5f4d92` | 38 Synth Bass 1 | -0.40±0.02 | -0.41±0.01 | -0.50±0.00 |
-| `13fecaf5` | 38 Synth Bass 1 | -0.36±0.00 | -0.41±0.00 | -0.50±0.00 ⚠ |
+| `00d2b08d` | 48 String Ensemble 1 | +0.77±0.12 ⚠ | +0.74±0.23 ⚠ | +0.71±0.08 ⚠ |
+| `0d5f4d92` | 38 Synth Bass 1 | -0.31±0.01 | -0.32±0.01 | -0.41±0.00 |
+| `13fecaf5` | 38 Synth Bass 1 | -0.25±0.00 | -0.31±0.00 | -0.40±0.00 |
 | `1cd3af4f` | 61 Brass Section | n/a | n/a | n/a |
 | `38d2a11c` | 46 Orchestral Harp | n/a | n/a | n/a |
 | `3bdee0e9` | 46 Orchestral Harp | n/a | n/a | n/a |
-| `4a4a0c2e` | 46 Orchestral Harp | +11.96±0.10 ⚠ | -0.02±0.05 | -0.08±0.03 |
-| `4b52fb40` | 29 Overdriven Guitar | -0.05±0.05 | -0.03±0.05 | -0.07±0.02 |
-| `4ffe5d4b` | 42 Cello | -0.37±0.02 | -0.43±0.05 | -0.32±0.01 |
+| `4a4a0c2e` | 46 Orchestral Harp | +12.06±0.10 ⚠ | +0.07±0.05 | +0.01±0.03 |
+| `4b52fb40` | 29 Overdriven Guitar | +0.05±0.05 | +0.07±0.04 | +0.04±0.02 |
+| `4ffe5d4b` | 42 Cello | -0.28±0.03 | -0.34±0.06 | -0.25±0.04 |
 | `6898f39b` | 46 Orchestral Harp | n/a | n/a | n/a |
-| `690de1b2` (perc) | 115 Woodblock | -2.48±0.05 (n/a) | -1.34±0.06 (n/a) | -1.61±0.02 (n/a) |
+| `690de1b2` (perc) | 115 Woodblock | -2.37±0.05 (n/a) | -1.22±0.06 (n/a) | -1.49±0.02 (n/a) |
 | `6e6c1c52` | 46 Orchestral Harp | n/a | n/a | n/a |
 | `6e979d58` | 46 Orchestral Harp | n/a | n/a | n/a |
-| `74a8c820` | 61 Brass Section | -0.11±0.01 | -0.30±0.00 | -0.42±0.00 |
+| `74a8c820` | 61 Brass Section | -0.02±0.01 | -0.20±0.01 | -0.33±0.00 |
 | `7d7e14af` | 46 Orchestral Harp | n/a | n/a | n/a |
 | `7efe0866` | 46 Orchestral Harp | n/a | n/a | n/a |
-| `7fda9b3c` | 42 Cello | -0.10±0.20 | -0.18±0.10 | -0.02±0.02 |
-| `9e5b1e21` | 45 Pizzicato Strings | +0.11±0.02 | -0.06±0.03 | -0.07±0.02 |
-| `b7d5240c` | 89 Pad 2 (warm) | +0.02±0.00 | +0.12±0.00 | -0.01±0.00 |
-| `bf6c72e9` | 38 Synth Bass 1 | +0.41±0.47 ? | +0.39±0.47 ? | +0.31±0.48 ? |
+| `7fda9b3c` | 42 Cello | -0.50±0.20 ⚠ | -0.60±0.10 ⚠ | -0.42±0.03 |
+| `9e5b1e21` | 45 Pizzicato Strings | +0.21±0.03 | +0.03±0.04 | +0.03±0.02 |
+| `b7d5240c` | 89 Pad 2 (warm) | -0.09±0.00 | +0.01±0.00 | -0.12±0.00 |
+| `bf6c72e9` | 38 Synth Bass 1 | +0.47±0.46 ? | +0.48±0.47 ? | +0.40±0.48 ? |
 | `c5eedaea` | 48 String Ensemble 1 | n/a | n/a | n/a |
 | `d2f0af9d` | 46 Orchestral Harp | n/a | n/a | n/a |
-| `d877be97` | 43 Contrabass | +0.98±0.01 ⚠ | +0.96±0.02 ⚠ | +0.86±0.00 ⚠ |
-| `e181198e` | 52 Choir Aahs | -0.20±0.60 ? | -0.07±0.10 | +0.06±0.10 |
-| `e647c759` | 43 Contrabass | +0.89±0.00 ⚠ | +0.89±0.00 ⚠ | +0.79±0.00 ⚠ |
+| `d877be97` | 43 Contrabass | +0.53±0.00 ⚠ | +0.50±0.02 | +0.41±0.00 |
+| `e181198e` | 52 Choir Aahs | -0.11±0.60 ? | +0.03±0.11 | +0.16±0.10 |
+| `e647c759` | 43 Contrabass | +0.72±0.00 ⚠ | +0.72±0.00 ⚠ | +0.62±0.00 ⚠ |
 | `f033864b` | 46 Orchestral Harp | n/a | n/a | n/a |
 | `f467d225` | 61 Brass Section | n/a | n/a | n/a |
 | `ff66498c` | 12 Marimba | n/a | n/a | n/a |
@@ -114,19 +114,18 @@ windows.
   soundfont preset, not the MIDI.
 - **TEST B mistuned (voice, font) pairs:**
   - `4a4a0c2e` (46 Orchestral Harp) - 1/3 fonts - font-specific, verify by ear (octave outlier on one font is often a bright-timbre detector artifact, not audible wrong-key):
-    - **FluidR3_GM**: +11.96 st sharp (~1 octave up)
-  - `13fecaf5` (38 Synth Bass 1) - 1/3 fonts - font-specific, verify by ear:
-    - **SC-55**: -0.50 st flat
+    - **FluidR3_GM**: +12.06 st sharp (~1 octave up)
   - `e647c759` (43 Contrabass) - ALL fonts - real preset tuning:
-    - **FluidR3_GM**: +0.89 st sharp
-    - **GeneralUser-GS**: +0.89 st sharp
-    - **SC-55**: +0.79 st sharp
+    - **FluidR3_GM**: +0.72 st sharp
+    - **GeneralUser-GS**: +0.72 st sharp
+    - **SC-55**: +0.62 st sharp
+  - `7fda9b3c` (42 Cello) - 2/3 fonts - font-specific, verify by ear:
+    - **FluidR3_GM**: -0.50 st flat
+    - **GeneralUser-GS**: -0.60 st flat
   - `00d2b08d` (48 String Ensemble 1) - ALL fonts - real preset tuning:
-    - **FluidR3_GM**: +0.80 st sharp
-    - **GeneralUser-GS**: +0.77 st sharp
-    - **SC-55**: +0.74 st sharp
-  - `d877be97` (43 Contrabass) - ALL fonts - real preset tuning:
-    - **FluidR3_GM**: +0.98 st sharp
-    - **GeneralUser-GS**: +0.96 st sharp
-    - **SC-55**: +0.86 st sharp
+    - **FluidR3_GM**: +0.77 st sharp
+    - **GeneralUser-GS**: +0.74 st sharp
+    - **SC-55**: +0.71 st sharp
+  - `d877be97` (43 Contrabass) - 1/3 fonts - font-specific, verify by ear:
+    - **FluidR3_GM**: +0.53 st sharp
 
