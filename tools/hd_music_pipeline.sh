@@ -213,7 +213,9 @@ cmd_gm() {
 	local out="$VARIANTDIR/hdmusic_${nn2}.${variant}.ogg"
 
 	echo "rendering with fluidsynth ($sf2, gain ${FLUID_GAIN:-0.6})..."
-	fluidsynth -ni -g "${FLUID_GAIN:-0.6}" -r 44100 -F "$rawwav" "$sf2" "$mid"
+	# FLUID_EXTRA: extra fluidsynth flags, e.g. "-R 0 -C 0" for a dry render
+	# shellcheck disable=SC2086
+	fluidsynth -ni ${FLUID_EXTRA:-} -g "${FLUID_GAIN:-0.6}" -r 44100 -F "$rawwav" "$sf2" "$mid"
 
 	local meta_args=()
 	if [ -f "$loopinfo" ]; then
