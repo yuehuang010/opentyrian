@@ -66,10 +66,10 @@ f467d225  61   # ch0,1  mid riff (57..70, ~140ms)        -> Brass Section
 e181198e  52   # ch4,5  long soaring lead (48..93, ~1s)  -> Choir Aahs
 13fecaf5  38  0  100  33  # ch2    driving mid-low rhythm line      -> Synth Bass 1; Synth Bass 1 preset ~-0.42 st flat across fonts -> +33c OPL-referenced correction
 bf6c72e9  38  0  100  34  # ch5,6  bass line (26..53)               -> Synth Bass 1; TEST B unreliable (high MAD), borrowed Synth Bass 1 tuning from 13fecaf5/0d5f4d92 -> +34c
-efa39919  47  0  0  # ch6,7  fixed note 36 hits (V10)    -> REMOVED (vol 0; was Timpani)
+efa39919  47  0  80  # ch6,7  fixed note 36 hits (V10)    -> Timpani (restored 2026-07-10 at user request, vol 80)
 e647c759  43  0  100  -69  # ch1    4 very long low notes (37)       -> Contrabass; Contrabass preset ~+0.86 st sharp across fonts -> -69c OPL-referenced correction
 690de1b2  115  # ch8    fixed note 85 ticking            -> Woodblock
-8251725a  12  0  0  # ch7  4751-note 37ms arpeggio (V13)  -> REMOVED (vol 0; no instrument sat right for this texture)
+8251725a  12  0  60  # ch7  4751-note 37ms arpeggio (V13)  -> Marimba, quiet (restored 2026-07-10 at user request; only mallets articulate the 37ms repeats)
 4b52fb40  56  0  127  0  gate=85 echo=75  # ch0,1  second melody (45..81) (V14)  -> Trumpet, dry render, notes trimmed to 85%, +86ms delay-echo doubles at 75% velocity (see internal/hd-music-track30.md)
 9e5b1e21  45   # ch5,6  high ostinato (69..77)           -> Pizzicato Strings
 7d7e14af  46   # ch4,5  fast high runs/fills             -> Orchestral Harp

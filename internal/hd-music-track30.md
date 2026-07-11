@@ -159,3 +159,12 @@ Round-2 findings that generalize beyond V14:
 - Winning V14 line: `4b52fb40 56 0 127 0 gate=85 echo=75` — Trumpet at max
   CC7 (user wanted +10%, ceiling allowed +6%), trumpet history: plain=
   distorted (velocity layer), horn/brass=washed; dry+short+echo-tamed works.
+
+## V10 + V13 restored (2026-07-10, user request)
+
+After hearing the full dry v8 context, the user asked for the two removed
+rhythm voices back: efa39919 (V10, fixed-note pulse) -> Timpani vol 80, and
+8251725a (V13, 4751-note 37 ms arpeggio) -> Marimba vol 60 (quiet; mallets
+are the only acoustic voice that articulates 37 ms repeats — same lesson as
+V19). Full variant re-rendered as `fluidr3v8` (mean -18.4 dB, max -1.9 dB,
+no clipping) plus stems 6/7; page stamp "FluidR3 v8".
