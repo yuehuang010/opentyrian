@@ -97,8 +97,13 @@ cmd_build() {
 	mkdir -p "$BINDIR"
 
 	echo "building render_music..."
+	# lds_play.c is compiled with its OPL writes renamed to render_music's
+	# solo_adlib_write shim (the LDS_SOLO_FPS voice-solo filter); the shim
+	# forwards to the real adlib_write in opl.c.
+	cc -O2 -std=iso9899:1999 $(pkg-config --cflags sdl2) -Dadlib_write=solo_adlib_write \
+		-c "$REPO_ROOT/src/lds_play.c" -o "$BINDIR/lds_play_solo.o"
 	cc -O2 -std=iso9899:1999 $(pkg-config --cflags sdl2) \
-		"$REPO_ROOT/tools/render_music.c" "$REPO_ROOT/src/lds_play.c" "$REPO_ROOT/src/opl.c" "$REPO_ROOT/src/musmast.c" \
+		"$REPO_ROOT/tools/render_music.c" "$BINDIR/lds_play_solo.o" "$REPO_ROOT/src/opl.c" "$REPO_ROOT/src/musmast.c" \
 		$(pkg-config --libs sdl2) -lm -o "$RENDER_MUSIC"
 
 	echo "building lds_to_midi..."

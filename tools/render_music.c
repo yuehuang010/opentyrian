@@ -63,6 +63,123 @@ long ftell_eof(FILE *f)
 	return size;
 }
 
+// ---------------------------------------------------------------------
+// Optional voice-solo filter (env LDS_SOLO_FPS)
+//
+// LDS_SOLO_FPS is a comma/space-separated list of 8-hex voice fingerprints
+// (same FNV-1a hash over an OPL channel's timbre registers that
+// tools/lds_to_midi.c computes and reports in the .patches file).  When
+// set, only key-ons whose channel currently carries one of the listed
+// fingerprints are allowed through to the synth -- every other voice's
+// key-on bit is masked off, producing an authentic classic OPL render of
+// just the listed voices.  When unset, writes pass through untouched.
+//
+// The hook: the pipeline compiles src/lds_play.c with
+// -Dadlib_write=solo_adlib_write for THIS tool only, so the sequencer's
+// register writes land here and are forwarded to the real synth.
+// ---------------------------------------------------------------------
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#undef adlib_write // in case this TU inherited the rename; we call the real one
+void adlib_write(Bitu idx, Bit8u val);
+
+static Bit8u soloRegs[256];
+static uint32_t soloFps[64];
+static int soloFpCount = 0;
+static bool soloActive = false;
+static bool soloSuppressed[9];
+static bool soloPrevKey[9];
+
+static const unsigned char solo_op_table[9] = {0x00, 0x01, 0x02, 0x08, 0x09, 0x0a, 0x10, 0x11, 0x12};
+
+// Identical to tools/lds_to_midi.c's fingerprint_voice(): FNV-1a over the
+// voice's timbre-defining registers, carrier total-level bits excluded.
+static uint32_t solo_fingerprint(int ch)
+{
+	unsigned mod = solo_op_table[ch];
+	unsigned car = solo_op_table[ch] + 3;
+	unsigned char bytes[11];
+	unsigned char offs[5] = {0x20, 0x40, 0x60, 0x80, 0xe0};
+	int i = 0;
+	for (int k = 0; k < 5; ++k)
+		bytes[i++] = soloRegs[offs[k] + mod];
+	for (int k = 0; k < 5; ++k)
+	{
+		unsigned char v = soloRegs[offs[k] + car];
+		if (offs[k] == 0x40)
+			v &= 0xc0;
+		bytes[i++] = v;
+	}
+	bytes[i++] = soloRegs[0xc0 + ch];
+
+	uint32_t hash = 2166136261u;
+	for (int k = 0; k < 11; ++k)
+	{
+		hash ^= bytes[k];
+		hash *= 16777619u;
+	}
+	return hash;
+}
+
+void solo_adlib_write(Bitu idx, Bit8u val);
+
+void solo_adlib_write(Bitu idx, Bit8u val)
+{
+	unsigned reg = (unsigned)idx & 0xff;
+	soloRegs[reg] = val;
+
+	if (soloActive && reg >= 0xb0 && reg <= 0xb8)
+	{
+		int ch = reg - 0xb0;
+		bool key = (val & 0x20) != 0;
+		if (key && !soloPrevKey[ch])
+		{
+			uint32_t fp = solo_fingerprint(ch);
+			bool found = false;
+			for (int i = 0; i < soloFpCount; ++i)
+				if (soloFps[i] == fp) { found = true; break; }
+			soloSuppressed[ch] = !found;
+		}
+		soloPrevKey[ch] = key;
+		if (!key)
+			soloSuppressed[ch] = false;
+		if (soloSuppressed[ch])
+			val &= (Bit8u)~0x20;
+	}
+
+	adlib_write(idx, val);
+}
+
+static void solo_init_from_env(void)
+{
+	const char *env = getenv("LDS_SOLO_FPS");
+	if (env == NULL || *env == '\0')
+		return;
+
+	const char *p = env;
+	while (*p != '\0' && soloFpCount < (int)(sizeof soloFps / sizeof soloFps[0]))
+	{
+		while (*p == ',' || *p == ' ' || *p == '\t')
+			++p;
+		if (*p == '\0')
+			break;
+		char *end = NULL;
+		unsigned long fp = strtoul(p, &end, 16);
+		if (end == p)
+		{
+			fprintf(stderr, "error: LDS_SOLO_FPS: bad token at '%s'\n", p);
+			exit(1);
+		}
+		soloFps[soloFpCount++] = (uint32_t)fp;
+		p = end;
+	}
+	soloActive = soloFpCount > 0;
+	if (soloActive)
+		fprintf(stderr, "solo filter: %d voice fingerprint(s) pass, all others muted\n", soloFpCount);
+}
+
 // Same cadence math as loudness.c's audioCallback (OUTPUT_QUALITY=4 -> 44100 Hz).
 static const int ldsUpdate2Rate = 139; // 69.5 * 2
 static int samplesPerLdsUpdate;
@@ -133,6 +250,10 @@ static void write_wav_stereo(const char *path, const Sint16 *mono, long long fra
 static Sint16 *render_track(FILE *musicFile, unsigned int songOffset, unsigned int songSize,
                              long long *outFrameCount, long long *outLoopStart, long long *outLoopLength)
 {
+	memset(soloRegs, 0, sizeof soloRegs);
+	memset(soloSuppressed, 0, sizeof soloSuppressed);
+	memset(soloPrevKey, 0, sizeof soloPrevKey);
+
 	if (!lds_load(musicFile, songOffset, songSize))
 	{
 		fprintf(stderr, "error: lds_load failed\n");
@@ -237,6 +358,8 @@ int main(int argc, char **argv)
 	const char *dataDir = (argc > 1) ? argv[1] : "tyrian21";
 	const char *outDir = (argc > 2) ? argv[2] : ".";
 	int onlySong = (argc > 3) ? atoi(argv[3]) : -1; // 1-based
+
+	solo_init_from_env();
 
 	samplesPerLdsUpdate = 2 * (SAMPLE_RATE / ldsUpdate2Rate);
 	samplesPerLdsUpdateFrac = 2 * (SAMPLE_RATE % ldsUpdate2Rate);
