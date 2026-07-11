@@ -1,0 +1,10 @@
+# Track 30 voice groups (same grouping as the listening page's 8 stems).
+# Format: <group_name>: <fingerprint> [<fingerprint> ...]
+melody:      74a8c820 1cd3af4f
+melody2:     4b52fb40
+choir:       e181198e
+brassriff:   f467d225
+bass:        13fecaf5 bf6c72e9 0d5f4d92 e647c759 d877be97
+pads:        c5eedaea 4ffe5d4b 00d2b08d b7d5240c 7fda9b3c
+figuration:  4a4a0c2e 8251725a 9e5b1e21 ff66498c 7d7e14af 6e979d58 3bdee0e9 6e6c1c52 6898f39b 38d2a11c 7efe0866 d2f0af9d f033864b
+ticks:       efa39919 690de1b2 15a839b2
