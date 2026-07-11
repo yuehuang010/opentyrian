@@ -226,6 +226,9 @@ typedef struct
 	int transpose;
 	int volume; // CC7 mix level, 0-127
 	int cents;  // channel fine tuning (RPN 1), -99..99, 0 = none
+	int reverb; // CC91 reverb send, 0-127; -1 = leave synth default (GM: 40)
+	int chorus; // CC93 chorus send, 0-127; -1 = leave synth default
+	int gatePct; // emitted gate as percent of the OPL gate, 10-100 (100 = as played)
 } GmMapEntry;
 
 static GmMapEntry *gmMap = NULL;
@@ -248,26 +251,60 @@ static void load_gm_map(const char *path)
 
 		unsigned fp;
 		int prog, transpose = 0, volume = 100, cents = 0;
-		int n = sscanf(h, "%x %d %d %d %d", &fp, &prog, &transpose, &volume, &cents);
+		int consumed = 0;
+		int n = sscanf(h, "%x %d %d %d %d%n", &fp, &prog, &transpose, &volume, &cents, &consumed);
 		if (n >= 2)
 		{
 			if (volume < 0) volume = 0;
 			if (volume > 127) volume = 127;
 			if (cents < -99) cents = -99;
 			if (cents > 99) cents = 99;
+
+			// Optional trailing key=value options after the positional
+			// columns: rev=0..127 (CC91), cho=0..127 (CC93), gate=10..100
+			// (emitted gate percent). Anything after '#' is a comment.
+			int reverb = -1, chorus = -1, gatePct = 100;
+			if (n == 5 && consumed > 0)
+			{
+				char *t = h + consumed;
+				while (*t != '\0' && *t != '#' && *t != '\n')
+				{
+					while (*t == ' ' || *t == '\t')
+						t++;
+					char key[16];
+					int val, used = 0;
+					if (sscanf(t, "%15[a-z]=%d%n", key, &val, &used) == 2)
+					{
+						if (strcmp(key, "rev") == 0 && val >= 0 && val <= 127)
+							reverb = val;
+						else if (strcmp(key, "cho") == 0 && val >= 0 && val <= 127)
+							chorus = val;
+						else if (strcmp(key, "gate") == 0 && val >= 10 && val <= 100)
+							gatePct = val;
+						t += used;
+					}
+					else
+						break;
+				}
+			}
+
 			gmMap = realloc(gmMap, (gmMapCount + 1) * sizeof(GmMapEntry));
 			gmMap[gmMapCount].fingerprint = (uint32_t)fp;
 			gmMap[gmMapCount].program = prog;
 			gmMap[gmMapCount].transpose = transpose;
 			gmMap[gmMapCount].volume = volume;
 			gmMap[gmMapCount].cents = cents;
+			gmMap[gmMapCount].reverb = reverb;
+			gmMap[gmMapCount].chorus = chorus;
+			gmMap[gmMapCount].gatePct = gatePct;
 			gmMapCount++;
 		}
 	}
 	fclose(f);
 }
 
-static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *outCents)
+static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *outCents,
+                         int *outReverb, int *outChorus, int *outGatePct)
 {
 	for (int i = 0; i < gmMapCount; ++i)
 	{
@@ -276,12 +313,18 @@ static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *ou
 			*outTranspose = gmMap[i].transpose;
 			*outVolume = gmMap[i].volume;
 			*outCents = gmMap[i].cents;
+			*outReverb = gmMap[i].reverb;
+			*outChorus = gmMap[i].chorus;
+			*outGatePct = gmMap[i].gatePct;
 			return gmMap[i].program;
 		}
 	}
 	*outTranspose = 0;
 	*outVolume = 100;
 	*outCents = 0;
+	*outReverb = -1;
+	*outChorus = -1;
+	*outGatePct = 100;
 	return -1; // unmapped
 }
 
@@ -387,6 +430,9 @@ typedef struct
 	int program;      // last emitted GM program, -1 = none yet
 	int volume;       // last emitted CC7 value, -1 = none yet (synth default 100)
 	int cents;        // last emitted RPN1 fine-tune value, CENTS_NONE = none yet
+	int reverb;       // last emitted CC91 value, -1 = none yet (synth default)
+	int chorus;       // last emitted CC93 value, -1 = none yet (synth default)
+	int gatePct;      // current voice's emitted-gate percent (map gate=), 100 = as played
 	bool used;        // has this MIDI channel had any event at all
 
 	// LDS_MIN_GATE_MS bookkeeping: index (into events[]) of the most recent
@@ -485,8 +531,10 @@ static void emit_program_change_if_needed(int ch, int tick)
 	chans[ch].fingerprint = fp;
 
 	int transpose = 0, volume = 100, cents = 0;
-	int prog = lookup_gm_map(fp, &transpose, &volume, &cents);
+	int reverb = -1, chorus = -1, gatePct = 100;
+	int prog = lookup_gm_map(fp, &transpose, &volume, &cents, &reverb, &chorus, &gatePct);
 	chans[ch].transpose = transpose;
+	chans[ch].gatePct = gatePct;
 
 	PatchRecord *p = find_or_add_patch(fp, tick);
 	patch_note_channel(p, ch);
@@ -502,6 +550,16 @@ static void emit_program_change_if_needed(int ch, int tick)
 	{
 		push_event(tick, 0xB0 | ch, 7, (unsigned char)volume, 2);
 		chans[ch].volume = volume;
+	}
+	if (reverb >= 0 && reverb != chans[ch].reverb)
+	{
+		push_event(tick, 0xB0 | ch, 91, (unsigned char)reverb, 2);
+		chans[ch].reverb = reverb;
+	}
+	if (chorus >= 0 && chorus != chans[ch].chorus)
+	{
+		push_event(tick, 0xB0 | ch, 93, (unsigned char)chorus, 2);
+		chans[ch].chorus = chorus;
 	}
 	if (cents != chans[ch].cents)
 	{
@@ -529,13 +587,22 @@ static void note_off(int ch, int tick)
 		int noteOnTick = chans[ch].noteOnTick;
 		int emitTick = tick;
 
+		// Per-voice gate shortening (map gate=NN percent), applied first.
+		if (chans[ch].gatePct < 100)
+		{
+			int gate = (tick - noteOnTick) * chans[ch].gatePct / 100;
+			if (gate < 1)
+				gate = 1;
+			emitTick = noteOnTick + gate;
+		}
+
 		int floorTicks = min_gate_ticks();
-		if (floorTicks > 0 && tick - noteOnTick < floorTicks)
+		if (floorTicks > 0 && emitTick - noteOnTick < floorTicks)
 			emitTick = noteOnTick + floorTicks;
 
 		push_event(emitTick, 0x80 | ch, (unsigned char)chans[ch].note, 64, 2);
 
-		if (emitTick != tick)
+		if (emitTick > tick)
 		{
 			// Stretched past the natural gate: remember it so a same-pitch
 			// retrigger on this channel can pull it back in note_on().
@@ -921,6 +988,9 @@ static void reset_decode_state(void)
 		chans[i].program = -1;
 		chans[i].volume = -1;
 		chans[i].cents = CENTS_NONE;
+		chans[i].reverb = -1;
+		chans[i].chorus = -1;
+		chans[i].gatePct = 100;
 		chans[i].fingerprint = 0;
 		chans[i].pendingOffEventIndex = -1;
 	}
