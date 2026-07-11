@@ -343,6 +343,8 @@ typedef struct
 	bool keyOn;
 	int note;         // currently sounding MIDI note, -1 if none
 	double freqHz;    // last computed exact frequency while key held
+	double onHz;      // exact OPL2 frequency captured at NoteOn (pre-slide)
+	unsigned onFnum, onBlock; // fnum/block captured at NoteOn (pre-slide)
 	int bendValue;    // last emitted 14-bit bend value (8192 = center), -1 = none yet
 	int expression;   // last emitted CC11 value, -1 = none yet
 	uint32_t fingerprint; // current voice fingerprint, 0 = none yet
@@ -370,18 +372,27 @@ typedef struct
 {
 	int on, off, note, ch;
 	uint32_t fp;
+	// TEST A (OPL->MIDI pitch verification): the *initial* note-on OPL2
+	// frequency, captured before any vibrato/glide/arpeggio slide mutates
+	// the fnum/block registers. onHz is the exact chip frequency computed
+	// from (onFnum, onBlock) via the OPL2 formula; transpose is the
+	// semitone offset applied to the emitted MIDI note (from lds_gm_map).
+	double onHz;
+	unsigned onFnum, onBlock;
+	int transpose;
 } NoteLog;
 static NoteLog *noteLog = NULL;
 static int noteLogCount = 0, noteLogCap = 0;
 
-static void log_note(int on, int off, int note, int ch, uint32_t fp)
+static void log_note(int on, int off, int note, int ch, uint32_t fp,
+                     double onHz, unsigned onFnum, unsigned onBlock, int transpose)
 {
 	if (noteLogCount == noteLogCap)
 	{
 		noteLogCap = noteLogCap ? noteLogCap * 2 : 4096;
 		noteLog = realloc(noteLog, noteLogCap * sizeof(NoteLog));
 	}
-	noteLog[noteLogCount++] = (NoteLog){on, off, note, ch, fp};
+	noteLog[noteLogCount++] = (NoteLog){on, off, note, ch, fp, onHz, onFnum, onBlock, transpose};
 }
 
 static int hz_to_midi_note(double hz)
@@ -456,7 +467,8 @@ static void note_off(int ch, int tick)
 			PatchRecord *p = find_or_add_patch(chans[ch].fingerprint, tick);
 			p->totalGateTicks += tick - chans[ch].noteOnTick;
 		}
-		log_note(chans[ch].noteOnTick, tick, chans[ch].note, ch, chans[ch].fingerprint);
+		log_note(chans[ch].noteOnTick, tick, chans[ch].note, ch, chans[ch].fingerprint,
+		         chans[ch].onHz, chans[ch].onFnum, chans[ch].onBlock, chans[ch].transpose);
 		chans[ch].note = -1;
 	}
 	chans[ch].keyOn = false;
@@ -485,6 +497,9 @@ static void note_on(int ch, int tick)
 	chans[ch].keyOn = true;
 	chans[ch].note = note;
 	chans[ch].freqHz = hz;
+	chans[ch].onHz = hz;       // TEST A: exact note-on frequency, pre-slide
+	chans[ch].onFnum = fnum;
+	chans[ch].onBlock = block;
 	chans[ch].bendValue = 8192; // center, implicit
 	chans[ch].used = true;
 
@@ -984,9 +999,18 @@ static void write_notes_dump(const char *path)
 	if (f == NULL)
 		return;
 
-	fprintf(f, "# on_tick off_tick midi_note opl_channel fingerprint  (1 tick ~ 14.4 ms)\n");
+	// Columns 1-5 are the original piano-roll format (unchanged, so any
+	// existing consumer keeps working). Columns 6-9 are the TEST A pitch-
+	// verification data: opl_hz is the exact OPL2 chip frequency at the
+	// initial note-on (freq = fnum * 49716 / 2^(20-block)); fnum/block are
+	// the raw registers; transpose is the semitone offset lds_gm_map added
+	// to the emitted midi_note. A faithful converter has
+	// |12*log2(opl_hz / (440*2^((midi_note-transpose-69)/12)))| <= 0.5.
+	fprintf(f, "# on_tick off_tick midi_note opl_channel fingerprint opl_hz fnum block transpose  (1 tick ~ 14.4 ms)\n");
 	for (int i = 0; i < noteLogCount; ++i)
-		fprintf(f, "%d %d %d %d %08x\n", noteLog[i].on, noteLog[i].off, noteLog[i].note, noteLog[i].ch, noteLog[i].fp);
+		fprintf(f, "%d %d %d %d %08x %.4f %u %u %d\n",
+		        noteLog[i].on, noteLog[i].off, noteLog[i].note, noteLog[i].ch, noteLog[i].fp,
+		        noteLog[i].onHz, noteLog[i].onFnum, noteLog[i].onBlock, noteLog[i].transpose);
 	fclose(f);
 }
 
