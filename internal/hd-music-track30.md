@@ -119,3 +119,22 @@ solo windows, n/a).
   `extrastereo=m=2.6` ×0.45 fill the sides; ×0.7 trim + limiter →
   `variants/hdmusic_30.fusion.ogg` (mean −19.3 dB). Layering works because
   every render plays the identical performance off the same tick clock.
+
+## Direction locked: FluidR3 (2026-07-10, user)
+
+User verdict after the pitch fix: FluidR3 is fine for 0-30s (the gate-floor
+prototype turned out unnecessary for the stabs — the earlier "wrong keys"
+impression came from hybrid/fusion layering, now retired along with SC-55 and
+all-synth). **FluidR3 per-voice mapping is the chosen path.** Page is down to
+Classic + FluidR3 v6 stems. Current focus: V14 (4b52fb40, 2nd melody).
+
+V14 profile (from .notes, per loop): 304 notes, monophonic, on the melody's
+channels 0/1, range 45..81, gates 86 ms..7.1 s (median 230 ms), enters 31.4 s,
+spans 31-46 / 57-61 / 64-66 / 83-101 s; 136/304 notes overlap the main brass
+melody (it's a duet counter-melody, not a hand-off). Needs: indefinite
+sustain for the 7 s holds, fast articulation for the 86 ms runs, and timbral
+contrast against Brass Section without leaving the ensemble's world.
+Candidate strip on the page (0:30-1:01 in-context clips, only V14 swapped):
+overdriven gt (current) / clean gt / distortion gt / trombone / synth brass 2
+/ saw lead. Instrument history: trumpet (velocity-layer distortion), french
+horn (washed), brass section (muffled), piano (no), overdriven gt (muffled).
