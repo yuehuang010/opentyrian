@@ -13,3 +13,13 @@ For any non-trivial implementation work (not just the HD remaster), the user wan
 **How to apply:** Start one tier down and escalate on evidence (default Sonnet). Keep orchestration/decisions/integration on my side; hand off tightly-scoped jobs with the design decided up front. The reviewer should out-rank the implementer — review Sonnet's correctness-sensitive diffs from Opus. See [remaster-plan-doc.md](remaster-plan-doc.md) and [remaster-asset-tracker.md](remaster-asset-tracker.md) for remaster scoping.
 
 Note: for precision-critical work the user has accepted direct implementation over delegation (e.g. the HD text-vanish audit) — use judgement.
+
+## Gotcha: agents stalling on "waiting for notifications" (2026-07-10)
+
+Two subagents in a row ended their run with "I'll wait for the background
+task / monitor notification" — subagents receive no such notifications, so
+they just stop with the work half-done. Prompt subagents to run long
+commands as plain FOREGROUND Bash calls with a large explicit timeout
+(600000 ms), and say explicitly: "do not background anything; do not wait
+for notifications". If an agent still stops early, resume it (SendMessage)
+with that instruction rather than respawning.

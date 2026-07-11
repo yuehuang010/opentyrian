@@ -7,7 +7,7 @@
 # installing one into the live data dir as hdmusic_NN.ogg.
 #
 # Workdir: ./hdmusic_work (created on demand, repo-root-relative; gitignored)
-#   hdmusic_work/bin/            built tools (render_music, lds_to_midi)
+#   hdmusic_work/bin/            built tools (render_music, lds_to_midi, pitch_analyze)
 #   hdmusic_work/classic/        render_music output (wav/.loop) per song
 #   hdmusic_work/midi/           lds_to_midi output (.mid/.loopinfo/.patches)
 #   hdmusic_work/variants/       encoded candidate OGGs, hdmusic_NN.<name>.ogg
@@ -16,8 +16,8 @@
 #
 # Commands:
 #   pipeline.sh build
-#       Compile tools/render_music.c and tools/lds_to_midi.c into
-#       hdmusic_work/bin/.
+#       Compile tools/render_music.c, tools/lds_to_midi.c and
+#       tools/pitch_analyze.c into hdmusic_work/bin/.
 #
 #   pipeline.sh classic <NN>
 #       Render song NN (1-based) with the classic OPL synth via render_music,
@@ -70,6 +70,7 @@ DATA_DIR="${DATA_DIR:-/Users/felixhuang/source/opentyrian/tyrian21}"
 
 RENDER_MUSIC="$BINDIR/render_music"
 LDS_TO_MIDI="$BINDIR/lds_to_midi"
+PITCH_ANALYZE="$BINDIR/pitch_analyze"
 
 usage() {
 	sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^#//; s/^ //'
@@ -105,11 +106,15 @@ cmd_build() {
 		"$REPO_ROOT/tools/lds_to_midi.c" "$REPO_ROOT/src/lds_play.c" "$REPO_ROOT/src/musmast.c" \
 		$(pkg-config --libs sdl2) -lm -o "$LDS_TO_MIDI"
 
-	echo "build ok: $RENDER_MUSIC, $LDS_TO_MIDI"
+	echo "building pitch_analyze..."
+	cc -O2 -std=iso9899:1999 \
+		"$REPO_ROOT/tools/pitch_analyze.c" -lm -o "$PITCH_ANALYZE"
+
+	echo "build ok: $RENDER_MUSIC, $LDS_TO_MIDI, $PITCH_ANALYZE"
 }
 
 require_built() {
-	if [ ! -x "$RENDER_MUSIC" ] || [ ! -x "$LDS_TO_MIDI" ]; then
+	if [ ! -x "$RENDER_MUSIC" ] || [ ! -x "$LDS_TO_MIDI" ] || [ ! -x "$PITCH_ANALYZE" ]; then
 		echo "tools not built yet; running 'build'..." >&2
 		cmd_build
 	fi

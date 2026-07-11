@@ -21,10 +21,19 @@
 #       windows. It compares the measured pitch to the pitch the MIDI asked for
 #       and flags presets that play the right instrument at the WRONG octave/key.
 #
+# The f0-estimation hot path (FFT-based YIN) is a C port,
+# tools/pitch_analyze.c (built by tools/hd_music_pipeline.sh build into
+# hdmusic_work/bin/pitch_analyze). validate_pitch.py stays the driver: it
+# renders the solo WAVs, selects analysis windows, and does the RMS-relative
+# gating / offset math; only the FFT/YIN inner loop moved to C. Pass
+# --pure-python to use the original all-python DSP path instead (kept for
+# cross-checking; much slower).
+#
 # Output: internal/hd-music-pitch-report.md  (TEST A results, TEST B table,
 # and a plain-language verdict naming the offending voice/font pairs).
 #
-# ---- RE-RUN (single command, from repo root; takes a few minutes) ----
+# ---- RE-RUN (single command, from repo root; takes well under a minute of
+#      analysis time - fluidsynth render time dominates) ----
 #
 #     python3 tools/validate_pitch.py
 #
@@ -34,9 +43,15 @@
 #     FLUID_GAIN fluidsynth -g gain for solo renders (default 1.0)
 #     MAX_NOTES  max analysis windows per voice (default 40)
 #
+# Optional flag:
+#     --pure-python   use the original pure-python FFT/YIN path instead of
+#                      the hdmusic_work/bin/pitch_analyze C binary (slow;
+#                      for cross-checking the C port).
+#
 # Dependencies: python3 stdlib only (wave, math, cmath, struct). No numpy /
-# scipy / pip installs required. fluidsynth + the built lds_to_midi are needed
-# for TEST B; if either is missing, TEST A still runs and TEST B is skipped
+# scipy / pip installs required. fluidsynth + the built lds_to_midi/
+# pitch_analyze are needed for TEST B; if any is missing (and --pure-python
+# isn't given for pitch_analyze), TEST A still runs and TEST B is skipped
 # with a note in the report.
 # -----------------------------------------------------------------------------
 
@@ -52,11 +67,14 @@ import shutil
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKDIR = os.path.join(REPO_ROOT, "hdmusic_work")
 BIN_LDS = os.path.join(WORKDIR, "bin", "lds_to_midi")
+BIN_PITCH = os.path.join(WORKDIR, "bin", "pitch_analyze")
 MIDIDIR = os.path.join(WORKDIR, "midi")
 SFDIR = os.path.join(WORKDIR, "sf")
 PITCHDIR = os.path.join(WORKDIR, "pitchcheck")
 GM_MAP = os.path.join(REPO_ROOT, "tools", "lds_gm_map.txt")
 REPORT = os.path.join(REPO_ROOT, "internal", "hd-music-pitch-report.md")
+
+PURE_PYTHON = "--pure-python" in sys.argv[1:]
 
 DATA_DIR = os.environ.get("DATA_DIR", "/Users/felixhuang/source/opentyrian/tyrian21")
 SONG = int(os.environ.get("SONG", "30"))
@@ -437,13 +455,17 @@ def select_windows(notes, fp, max_notes):
     return [cand[int(k * step)] for k in range(max_notes)]
 
 
-def analyze_voice(mono, sr, windows, transpose=0):
-    """Return list of offset-in-semitones for each usable window.
+def build_window_specs(windows, sr, total_samples, transpose=0):
+    """Convert (on_tick, off_tick, note, opl_hz) windows into sample-domain
+    analysis specs: (start_sample, num_samples, expected_hz), taking the
+    middle 60% of each note's sounding interval and dropping windows too
+    short to analyze. Shared by both the pure-python and C f0 paths so the
+    exact same segments get measured either way.
 
-    `expected` is the OPL-referenced target frequency: the note's actual
+    `expected_hz` is the OPL-referenced target frequency: the note's actual
     OPL2 chip frequency (opl_hz), shifted by the map's semitone transpose
     (a deliberate register shift, exact, not rounded to the MIDI grid).
-    The map's cents column is deliberately NOT folded into `expected`: its
+    The map's cents column is deliberately NOT folded into `expected_hz`: its
     whole purpose is to steer the rendered pitch toward opl_hz, so the
     render must be judged against pure opl_hz for the correction's effect
     to show up (folding cents into both sides would cancel it out).
@@ -451,12 +473,7 @@ def analyze_voice(mono, sr, windows, transpose=0):
     as 0.00 st here, regardless of where that pitch falls relative to the
     nearest tempered MIDI note (see TEST A for that separate grid-quantization
     bias)."""
-    offsets = []
-    if not windows:
-        return offsets
-    # RMS gate: relative to the loudest window's RMS (skip decayed/silent tails)
-    rmss = []
-    prepared = []
+    specs = []
     shift = 2.0 ** (transpose / 12.0)
     for (on, off, note, opl_hz) in windows:
         s0 = int(on * SECONDS_PER_TICK * sr)
@@ -467,25 +484,87 @@ def analyze_voice(mono, sr, windows, transpose=0):
         # middle 60%
         a = s0 + int(0.20 * length)
         b = s0 + int(0.80 * length)
-        if b > len(mono):
-            b = len(mono)
+        if b > total_samples:
+            b = total_samples
         if a >= b - 64:
             continue
-        seg = mono[a:b]
         expected = (opl_hz * shift) if opl_hz > 0 else midi_to_hz(note)
-        f0, rms = estimate_f0(seg, sr, expected)
-        rmss.append(rms)
-        prepared.append((f0, rms, expected))
-    if not prepared:
-        return offsets
-    peak_rms = max(r for _, r, _ in prepared) or 1.0
+        specs.append((a, b - a, expected))
+    return specs
+
+
+def gate_and_offset(specs, f0rms):
+    """RMS-relative gate + semitone-offset math, shared by both f0 paths.
+
+    `f0rms` is a list of (f0_hz, rms) aligned 1:1 with `specs`. Gate: relative
+    to the loudest window's RMS (skip decayed/silent tails)."""
+    if not f0rms:
+        return []
+    peak_rms = max(r for _, r in f0rms) or 1.0
     gate = 0.08 * peak_rms
-    for (f0, rms, expected) in prepared:
+    offsets = []
+    for (_, length, expected), (f0, rms) in zip(specs, f0rms):
+        del length
         if rms < gate or f0 <= 0:
             continue
-        off_st = 12.0 * math.log2(f0 / expected)
-        offsets.append(off_st)
+        offsets.append(12.0 * math.log2(f0 / expected))
     return offsets
+
+
+def analyze_voice_pure(mono, sr, windows, transpose=0):
+    """Pure-python f0 path (--pure-python): same specs/gating as the C path,
+    but calls the in-process YIN estimator instead of hdmusic_work/bin/pitch_analyze."""
+    specs = build_window_specs(windows, sr, len(mono), transpose=transpose)
+    f0rms = [estimate_f0(mono[a:a + length], sr, expected) for (a, length, expected) in specs]
+    return gate_and_offset(specs, f0rms)
+
+
+def wav_header(path):
+    """Cheap (nchannels, framerate, nframes) peek - does not read sample data."""
+    with wave.open(path, "rb") as w:
+        return w.getnchannels(), w.getframerate(), w.getnframes()
+
+
+def run_pitch_analyze_batch(wav_path, specs):
+    """Invoke hdmusic_work/bin/pitch_analyze ONCE for every spec belonging to
+    a single solo render, matching validate_pitch.py's estimate_f0() exactly
+    (same YIN algorithm/thresholds/search range - see tools/pitch_analyze.c)
+    but in compiled C, which is what makes a full validator run take well
+    under a minute instead of tens of minutes."""
+    if not specs:
+        return []
+    stdin_text = "".join("%d %d %.9f\n" % (a, length, expected) for (a, length, expected) in specs)
+    proc = subprocess.run([BIN_PITCH, wav_path], input=stdin_text,
+                           capture_output=True, text=True, check=True)
+    out = []
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        out.append((float(parts[0]), float(parts[1])))
+    if len(out) != len(specs):
+        raise RuntimeError("pitch_analyze returned %d results for %d windows (%s)" %
+                            (len(out), len(specs), wav_path))
+    return out
+
+
+def analyze_voice_c(wav_path, windows, transpose=0):
+    """C f0 path (default): peeks the WAV header (no sample-data read - the C
+    binary reads the audio itself), builds the same window specs the pure
+    python path would, and gets f0/rms back from ONE pitch_analyze process
+    for the whole render."""
+    _, sr, n_frames = wav_header(wav_path)
+    specs = build_window_specs(windows, sr, n_frames, transpose=transpose)
+    f0rms = run_pitch_analyze_batch(wav_path, specs)
+    return gate_and_offset(specs, f0rms)
+
+
+def analyze_voice(wav_path, windows, transpose=0):
+    """Dispatch to the C or pure-python f0 path depending on --pure-python."""
+    if PURE_PYTHON:
+        mono, sr = read_wav_mono(wav_path)
+        return analyze_voice_pure(mono, sr, windows, transpose=transpose)
+    return analyze_voice_c(wav_path, windows, transpose=transpose)
 
 
 def write_solo_map(all_fps, gm_map, target_fp, path):
@@ -506,6 +585,9 @@ def run_test_b(notes, gm_map):
         return None, "lds_to_midi binary not found at %s (run './tools/hd_music_pipeline.sh build')" % BIN_LDS
     if not shutil.which("fluidsynth"):
         return None, "fluidsynth not on PATH; TEST B skipped"
+    if not PURE_PYTHON and not os.path.isfile(BIN_PITCH):
+        return None, ("pitch_analyze binary not found at %s (run './tools/hd_music_pipeline.sh "
+                       "build', or pass --pure-python)" % BIN_PITCH)
 
     all_fps = sorted(set(nt.fp for nt in notes))
     sf_present = [sf for sf in SF_FILES if os.path.isfile(os.path.join(SFDIR, sf))]
@@ -551,11 +633,10 @@ def run_test_b(notes, gm_map):
                  "-F", wav, sf_path, solo_mid],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
-                mono, sr = read_wav_mono(wav)
+                offs = analyze_voice(wav, windows, transpose=gm_map.get(fp, {}).get("transpose", 0))
             except Exception as e:
                 row["fonts"][sf] = {"error": str(e)}
                 continue
-            offs = analyze_voice(mono, sr, windows, transpose=gm_map.get(fp, {}).get("transpose", 0))
             if offs:
                 med = median(offs)
                 mad = median([abs(o - med) for o in offs])
@@ -610,7 +691,13 @@ def write_report(a_result, b_result, b_error, gm_map, notes):
     L.append("Two automated tests check that the layered soundfont renders play the")
     L.append("correct pitches: **TEST A** verifies the OPL->MIDI note conversion is")
     L.append("arithmetically faithful; **TEST B** measures whether each soundfont preset")
-    L.append("actually sounds at the MIDI pitch it was handed.")
+    L.append("actually sounds at the MIDI pitch it was handed. TEST B's f0 estimation")
+    L.append("(FFT-based YIN) runs through the C port `tools/pitch_analyze.c` "
+             "(built by `./tools/hd_music_pipeline.sh build` into "
+             "`hdmusic_work/bin/pitch_analyze`) %s; pass `--pure-python` to "
+             "cross-check against the original all-python DSP path." %
+             ("(used for this run)" if not PURE_PYTHON else "(NOT used for this run - "
+              "`--pure-python` was passed, so the slow in-process path ran instead)"))
     L.append("")
 
     # ---- TEST A ----

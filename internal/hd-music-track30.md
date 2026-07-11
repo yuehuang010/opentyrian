@@ -99,11 +99,20 @@ d877be97 −48, e647c759 −69, 00d2b08d −74, c5eedaea −87 (borrowed from
 4ffe5d4b +27, 7fda9b3c +50. Synthfam map: +33/34 on its Synth Bass voices.
 sc55/synthfam/fusion variants and bass/pads stems re-rendered.
 
-TODO: `tools/validate_pitch.py` is very slow (pure-python FFT/YIN, no numpy);
-plan is to port the f0-analysis core to C (`tools/pitch_analyze.c`), keeping
-the report/driver identical — golden-reference it against the python output.
-Its TEST B expected-frequency also needs to read the cents column / OPL hz
-(partially done — verify before trusting a re-run).
+DONE (2026-07-10): the f0-analysis core is ported to C
+(`tools/pitch_analyze.c`, built by `hd_music_pipeline.sh build` into
+`hdmusic_work/bin/pitch_analyze`); `validate_pitch.py` stays the driver and
+batches all windows of a render into one process call (analysis ~97× faster
+per render; a full run is now fluidsynth-render-bound, ~8 min total).
+Golden-referenced against the pure-python path (kept behind `--pure-python`):
+3 diverse voices × 80 windows, identical f0/gating to <0.02 st. TEST B's
+expected frequency was verified correct as-is: `opl_hz × 2^(transpose/12)`,
+deliberately EXCLUDING the cents column (cents steers the render toward
+opl_hz; folding it into the reference too would cancel the correction out of
+the measurement). First full post-cents-correction run confirms the fix: all
+corrected voices now read |median| ≤ 0.08 st vs OPL truth on all 3 fonts
+(bf6c72e9 remains detector-unreliable `?`, MAD 0.46; c5eedaea has no usable
+solo windows, n/a).
 
 - **Fusion (`fusion`)** — user idea: sum paths 2+3+4 into one wide modern mix.
   Hybrid stays center bed; SC-55 `extrastereo=m=2.0` ×0.5 and all-synth
