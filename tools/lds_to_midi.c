@@ -229,6 +229,8 @@ typedef struct
 	int reverb; // CC91 reverb send, 0-127; -1 = leave synth default (GM: 40)
 	int chorus; // CC93 chorus send, 0-127; -1 = leave synth default
 	int gatePct; // emitted gate as percent of the OPL gate, 10-100 (100 = as played)
+	int echoPct; // velocity percent for delay-echo doubles (same fp+pitch re-struck
+	             // on a sibling channel within ~10 ticks), 0-100, 100 = untouched
 } GmMapEntry;
 
 static GmMapEntry *gmMap = NULL;
@@ -263,7 +265,7 @@ static void load_gm_map(const char *path)
 			// Optional trailing key=value options after the positional
 			// columns: rev=0..127 (CC91), cho=0..127 (CC93), gate=10..100
 			// (emitted gate percent). Anything after '#' is a comment.
-			int reverb = -1, chorus = -1, gatePct = 100;
+			int reverb = -1, chorus = -1, gatePct = 100, echoPct = 100;
 			if (n == 5 && consumed > 0)
 			{
 				char *t = h + consumed;
@@ -281,6 +283,8 @@ static void load_gm_map(const char *path)
 							chorus = val;
 						else if (strcmp(key, "gate") == 0 && val >= 10 && val <= 100)
 							gatePct = val;
+						else if (strcmp(key, "echo") == 0 && val >= 0 && val <= 100)
+							echoPct = val;
 						t += used;
 					}
 					else
@@ -297,6 +301,7 @@ static void load_gm_map(const char *path)
 			gmMap[gmMapCount].reverb = reverb;
 			gmMap[gmMapCount].chorus = chorus;
 			gmMap[gmMapCount].gatePct = gatePct;
+			gmMap[gmMapCount].echoPct = echoPct;
 			gmMapCount++;
 		}
 	}
@@ -304,7 +309,7 @@ static void load_gm_map(const char *path)
 }
 
 static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *outCents,
-                         int *outReverb, int *outChorus, int *outGatePct)
+                         int *outReverb, int *outChorus, int *outGatePct, int *outEchoPct)
 {
 	for (int i = 0; i < gmMapCount; ++i)
 	{
@@ -316,6 +321,7 @@ static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *ou
 			*outReverb = gmMap[i].reverb;
 			*outChorus = gmMap[i].chorus;
 			*outGatePct = gmMap[i].gatePct;
+			*outEchoPct = gmMap[i].echoPct;
 			return gmMap[i].program;
 		}
 	}
@@ -325,6 +331,7 @@ static int lookup_gm_map(uint32_t fp, int *outTranspose, int *outVolume, int *ou
 	*outReverb = -1;
 	*outChorus = -1;
 	*outGatePct = 100;
+	*outEchoPct = 100;
 	return -1; // unmapped
 }
 
@@ -433,6 +440,7 @@ typedef struct
 	int reverb;       // last emitted CC91 value, -1 = none yet (synth default)
 	int chorus;       // last emitted CC93 value, -1 = none yet (synth default)
 	int gatePct;      // current voice's emitted-gate percent (map gate=), 100 = as played
+	int echoPct;      // current voice's echo-double velocity percent (map echo=)
 	bool used;        // has this MIDI channel had any event at all
 
 	// LDS_MIN_GATE_MS bookkeeping: index (into events[]) of the most recent
@@ -531,10 +539,11 @@ static void emit_program_change_if_needed(int ch, int tick)
 	chans[ch].fingerprint = fp;
 
 	int transpose = 0, volume = 100, cents = 0;
-	int reverb = -1, chorus = -1, gatePct = 100;
-	int prog = lookup_gm_map(fp, &transpose, &volume, &cents, &reverb, &chorus, &gatePct);
+	int reverb = -1, chorus = -1, gatePct = 100, echoPct = 100;
+	int prog = lookup_gm_map(fp, &transpose, &volume, &cents, &reverb, &chorus, &gatePct, &echoPct);
 	chans[ch].transpose = transpose;
 	chans[ch].gatePct = gatePct;
+	chans[ch].echoPct = echoPct;
 
 	PatchRecord *p = find_or_add_patch(fp, tick);
 	patch_note_channel(p, ch);
@@ -663,6 +672,29 @@ static void note_on(int ch, int tick)
 	int vel = 127 - tl * 2;
 	if (vel < 1) vel = 1;
 	if (vel > 127) vel = 127;
+
+	// Delay-echo taming (map echo=NN): the LDS data fakes an echo by
+	// re-striking the same pitch on a sibling channel a few ticks later
+	// (e.g. the 2nd melody repeats every note +6 ticks on ch0 behind ch1).
+	// Identical sampled attacks 86 ms apart read as a flam, so scale the
+	// repeat's velocity down to sit behind the lead like a real echo.
+	if (chans[ch].echoPct < 100)
+	{
+		for (int j = 0; j < 9; ++j)
+		{
+			if (j == ch || !chans[j].keyOn || chans[j].note != note)
+				continue;
+			if (chans[j].fingerprint != chans[ch].fingerprint)
+				continue;
+			int dt = tick - chans[j].noteOnTick;
+			if (dt > 0 && dt <= 10)
+			{
+				vel = vel * chans[ch].echoPct / 100;
+				if (vel < 1) vel = 1;
+				break;
+			}
+		}
+	}
 
 	push_event(tick, 0x90 | ch, (unsigned char)note, (unsigned char)vel, 2);
 
@@ -991,6 +1023,7 @@ static void reset_decode_state(void)
 		chans[i].reverb = -1;
 		chans[i].chorus = -1;
 		chans[i].gatePct = 100;
+		chans[i].echoPct = 100;
 		chans[i].fingerprint = 0;
 		chans[i].pendingOffEventIndex = -1;
 	}
