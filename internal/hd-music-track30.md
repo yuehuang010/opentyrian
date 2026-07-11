@@ -198,3 +198,22 @@ group solo through both chains and compares group-relative loudness. First
 −2.3, choir +1.7 hot, figuration +1.6 hot, bass ~neutral except 13fecaf5
 ~+1 dB hot broadband. Suggested CC7 set is in the session log; user has not
 yet picked which moves to apply.
+
+## V1 intro drone -> real OPL chip; V6 cello -4.3 dB (2026-07-10, user)
+
+The intro drone (c5eedaea) is an octave-doubled pair (38+26, i.e. 73+36.5
+Hz) with independent ~5 Hz +-40c software vibrato per layer. The vibrato IS
+captured (pitch bends) and rendered, but 36.5 Hz on any sampled preset is
+inaudible rumble, so the beating double-layer collapses to one voice.
+Brighter presets and a fold-up-to-unison prototype were rejected by ear:
+"I don't think a string instrument can replicate it." Resolution: the voice
+is vol 0 in the map and rendered by the REAL OPL chip via the pipeline's new
+`CHIP_FPS`/`CHIP_GAIN` hook (render_music LDS_SOLO_FPS solo, amixed at
++2.6 dB = measured GM-minus-classic full-mix gap). This is the second
+"chip idiom" resolution after V13 (rewrite) — chip-layer is the fallback
+when rewriting isn't faithful either.
+
+V6 (4ffe5d4b, Cello): measured +2.1 dB hot vs classic balance per-voice
+(the pads GROUP average hid it); user chose the stronger -4.3 dB cut
+(CC7 78) since it's accompaniment. Full render: `fluidr3v10` (mean -19.6,
+max -2.1 dB) with PERC_MIDI + CHIP_FPS both active.

@@ -238,6 +238,25 @@ cmd_gm() {
 		rm -f "$percwav"
 	fi
 
+	# CHIP_FPS: optional comma list of voice fingerprints rendered through the
+	# REAL OPL chip (render_music LDS_SOLO_FPS) and amixed in at CHIP_GAIN dB
+	# (default 2.6 = the measured full-mix loudness gap, GM minus classic, so
+	# a chip stem keeps its classic in-mix balance). For voices whose OPL
+	# idiom no sample can replicate (see internal/hd-music-opl-idioms.md);
+	# set the voice's map volume to 0 so the GM render doesn't double it.
+	if [ -n "${CHIP_FPS:-}" ]; then
+		local chipdir="$VARIANTDIR/.tmp_chip_${nn2}_${variant}"
+		local chipmix="$VARIANTDIR/.tmp_hdmusic_${nn2}_${variant}_chipmix.wav"
+		mkdir -p "$chipdir"
+		echo "rendering OPL chip stem ($CHIP_FPS, ${CHIP_GAIN:-2.6} dB)..."
+		LDS_SOLO_FPS="$CHIP_FPS" "$RENDER_MUSIC" "$DATA_DIR" "$chipdir" "$nn"
+		ffmpeg -y -loglevel error -i "$rawwav" -i "$chipdir/hdmusic_${nn2}.wav" \
+			-filter_complex "[1:a]volume=${CHIP_GAIN:-2.6}dB[c];[0:a][c]amix=inputs=2:duration=first:normalize=0[m]" \
+			-map "[m]" "$chipmix"
+		mv "$chipmix" "$rawwav"
+		rm -rf "$chipdir"
+	fi
+
 	local meta_args=()
 	if [ -f "$loopinfo" ]; then
 		local totalsamples loopstart looplength

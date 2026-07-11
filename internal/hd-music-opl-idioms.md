@@ -29,11 +29,18 @@ than searching for a magic preset.
    silence), mixed in sample-aligned via the pipeline `PERC_MIDI`/`PERC_GAIN`
    hook. Gotcha inside the gotcha: emit per LOW NOTE, not per
    silence-delimited burst — one continuous 91 s stretch holds 42 drum hits.
-3. **Sub-grid detuning as color**: some voices are intentionally played
+3. **Octave-doubled sub-bass layers** (track 30 V1 intro drone): two
+   channels an octave apart (73 + 36.5 Hz), each with its own vibrato, fused
+   into one beating voice. Samples can't play the 36.5 Hz layer audibly, and
+   folding it up to unison didn't convince the ear. Fix: render the voice on
+   the REAL chip — pipeline `CHIP_FPS`/`CHIP_GAIN` hook amixes a
+   render_music LDS_SOLO_FPS stem at the measured GM-vs-classic loudness gap
+   (+2.6 dB). Chip-layering is the fallback when a rewrite isn't faithful.
+4. **Sub-grid detuning as color**: some voices are intentionally played
    ~+0.4 st off the equal-tempered grid. Fidelity target is the OPL chip
    frequency (`opl_hz` in .notes), not the nominal note — `cents` map column
    (MIDI RPN 1).
-4. **37 ms same-note repeats** (V19): only mallet presets articulate them;
+5. **37 ms same-note repeats** (V19): only mallet presets articulate them;
    everything else mushes. (Marimba worked for V19's repeats; it did NOT
    work for V13's bursts — repeats and bursts are different idioms.)
 

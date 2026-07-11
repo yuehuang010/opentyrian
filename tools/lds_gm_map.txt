@@ -57,7 +57,7 @@
 #     counterpart in the OPL original.
 # gate is in sequencer ticks, 1 tick ~ 14.4 ms.
 # ----------------------------------------------------------------------
-c5eedaea  48  0  100  -87  # ch2,4  4 long low notes (26..38, ~11s)  -> String Ensemble pad; TEST B n/a on all fonts, borrowed String Ensemble 1 tuning from 00d2b08d (+0.77 st mean) -> -87c
+c5eedaea  48  0  0  -87  # ch2,4  4 long low notes (26..38, ~11s)  -> vol 0 here: rendered by the REAL OPL chip via the pipeline's CHIP_FPS hook -- the voice is an octave-doubled pair (38+73 Hz) with independent vibrato; the 36.5 Hz layer is inaudible rumble on any sampled preset, so the beating double-layer can't be replicated (fold-up prototypes rejected by ear)
 f467d225  61   # ch0,1  mid riff (57..70, ~140ms)        -> Brass Section
 1cd3af4f  61   # ch0,1,4 very short (23ms) stabs (V3)    -> Brass Section (these are melody ornaments on the melody's own channels; pizzicato made them sound like a stray instrument)
 74a8c820  61   # ch0,1  main melody voice (43..81)       -> Brass Section
