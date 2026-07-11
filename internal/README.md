@@ -17,6 +17,7 @@ shared.
 - [plan/NAVIGATION_PLAN.md](plan/NAVIGATION_PLAN.md) — plan to improve code navigation (index tooling, CODEMAP, globals annotation); **all phases done** (`897c287`, `acceabf`)
 - [CODEMAP.md](CODEMAP.md) — one-page subsystem map: files, entry points, key globals per subsystem; start here to orient in the codebase
 - [hd-music-track30.md](hd-music-track30.md) — HD music remaster of the title theme: pipeline, FluidR3 per-voice verdict (failed at ensemble level), four paths forward + experiment log
+- [hd-music-opl-idioms.md](hd-music-opl-idioms.md) — **read before tuning any other LDS track**: OPL composition idioms that break under sample playback (delay-echo doubles, burst fusion, sub-grid detune, 37 ms repeats), the rewrite-don't-transcode principle, and the isolate/measure diagnosis workflow (`LDS_SOLO_FPS`, `compare_mix_balance.py`)
 - [hd-music-pitch-report.md](hd-music-pitch-report.md) — automated pitch validation for track 30 (regenerate with `python3 tools/validate_pitch.py`): TEST A proves the OPL→MIDI converter is pitch-exact; TEST B measures per-soundfont preset tuning (solo renders + YIN f0). `tools/lds_to_midi.c` now dumps per-note `opl_hz/fnum/block/transpose` columns in the `.notes` file for TEST A
 
 ## Issues
