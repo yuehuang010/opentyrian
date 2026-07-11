@@ -67,3 +67,6 @@ tyrian.hd
 
 # Python venv for HD font tooling (tools/hd_vectorize_font.py)
 .venv-fonts/
+
+# HD music remaster pipeline working directory (tools/hd_music_pipeline.sh)
+/hdmusic_work/

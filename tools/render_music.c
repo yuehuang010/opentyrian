@@ -19,9 +19,11 @@
  * LDS data) get no sidecar loop points.
  *
  * Usage:
- *   render_music [data_dir] [out_dir]
+ *   render_music [data_dir] [out_dir] [song_1based]
  *
  * data_dir defaults to "tyrian21", out_dir defaults to "." .
+ * With the optional 3rd arg, only that (1-based) song is rendered;
+ * otherwise all MUSIC_NUM tracks are (unchanged default behavior).
  * Reads data_dir/music.mus directly (plain fopen -- offline tool, not the
  * engine's dir_fopen/bundle chain).
  */
@@ -234,6 +236,7 @@ int main(int argc, char **argv)
 {
 	const char *dataDir = (argc > 1) ? argv[1] : "tyrian21";
 	const char *outDir = (argc > 2) ? argv[2] : ".";
+	int onlySong = (argc > 3) ? atoi(argv[3]) : -1; // 1-based
 
 	samplesPerLdsUpdate = 2 * (SAMPLE_RATE / ldsUpdate2Rate);
 	samplesPerLdsUpdateFrac = 2 * (SAMPLE_RATE % ldsUpdate2Rate);
@@ -260,6 +263,9 @@ int main(int argc, char **argv)
 
 	for (unsigned int n = 0; n < songCount; ++n)
 	{
+		if (onlySong >= 0 && (int)(n + 1) != onlySong)
+			continue;
+
 		unsigned int size = songOffset[n + 1] - songOffset[n];
 
 		long long frameCount, loopStart, loopLength;

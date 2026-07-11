@@ -16,6 +16,7 @@ shared.
 - [commit-before-spawning-agents.md](commit-before-spawning-agents.md) — commit reviewed work before spawning agents; forbid state-changing git in prompts
 - [plan/NAVIGATION_PLAN.md](plan/NAVIGATION_PLAN.md) — plan to improve code navigation (index tooling, CODEMAP, globals annotation); **all phases done** (`897c287`, `acceabf`)
 - [CODEMAP.md](CODEMAP.md) — one-page subsystem map: files, entry points, key globals per subsystem; start here to orient in the codebase
+- [hd-music-track30.md](hd-music-track30.md) — HD music remaster of the title theme: pipeline, FluidR3 per-voice verdict (failed at ensemble level), four paths forward + experiment log
 
 ## Issues
 
