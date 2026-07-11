@@ -118,6 +118,28 @@ static int samplesPerLdsUpdateFrac;
 #define SAMPLE_RATE 44100
 #define MAX_TICKS 800000
 
+// 1 LDS sequencer tick == 1 MIDI tick (see write_midi_file()'s tempo meta
+// event) == 113.669048/7900 s ~= 14.388 ms.
+#define LDS_TICK_MS (113.669048 * 1000.0 / 7900.0)
+
+// LDS_MIN_GATE_MS (env, float ms, default 0 = off): floor on emitted MIDI
+// note gate length. Some OPL voices (e.g. fast chord stabs) fire note-offs
+// as little as 20-30ms after note-on -- shorter than a sampled GM
+// instrument's attack ramp, so they render as pitchless blips under
+// fluidsynth. When set, note_off() delays the emitted note-off (not the
+// .notes dump, which stays ground truth) so the *emitted* gate is at least
+// this long. See note_on()'s pending-off clamp for how a same-pitch
+// retrigger on the same channel is kept from being killed by a
+// still-pending stretched note-off.
+static double gMinGateMs = 0.0;
+
+static int min_gate_ticks(void)
+{
+	if (gMinGateMs <= 0.0)
+		return 0;
+	return (int)ceil(gMinGateMs / LDS_TICK_MS);
+}
+
 // ---------------------------------------------------------------------
 // OPL2 register tap: adlib_* implementation (no synthesis, just capture)
 // ---------------------------------------------------------------------
@@ -366,6 +388,15 @@ typedef struct
 	int volume;       // last emitted CC7 value, -1 = none yet (synth default 100)
 	int cents;        // last emitted RPN1 fine-tune value, CENTS_NONE = none yet
 	bool used;        // has this MIDI channel had any event at all
+
+	// LDS_MIN_GATE_MS bookkeeping: index (into events[]) of the most recent
+	// note-off on this channel that was stretched past its natural tick,
+	// -1 if none is outstanding. Used by note_on() to clamp a same-pitch
+	// retrigger's pending stretched off so it can't land at/after the new
+	// note-on and kill it.
+	int pendingOffEventIndex;
+	int pendingOffNote;      // note number of that pending off
+	int pendingOffOnsetTick; // the note-on tick the pending off belongs to (clamp floor)
 } ChanState;
 
 static ChanState chans[9];
@@ -495,12 +526,36 @@ static void note_off(int ch, int tick)
 {
 	if (chans[ch].note >= 0)
 	{
-		push_event(tick, 0x80 | ch, (unsigned char)chans[ch].note, 64, 2);
+		int noteOnTick = chans[ch].noteOnTick;
+		int emitTick = tick;
+
+		int floorTicks = min_gate_ticks();
+		if (floorTicks > 0 && tick - noteOnTick < floorTicks)
+			emitTick = noteOnTick + floorTicks;
+
+		push_event(emitTick, 0x80 | ch, (unsigned char)chans[ch].note, 64, 2);
+
+		if (emitTick != tick)
+		{
+			// Stretched past the natural gate: remember it so a same-pitch
+			// retrigger on this channel can pull it back in note_on().
+			chans[ch].pendingOffEventIndex = (int)(eventCount - 1);
+			chans[ch].pendingOffNote = chans[ch].note;
+			chans[ch].pendingOffOnsetTick = noteOnTick;
+		}
+		else
+		{
+			chans[ch].pendingOffEventIndex = -1;
+		}
+
 		if (chans[ch].fingerprint != 0)
 		{
 			PatchRecord *p = find_or_add_patch(chans[ch].fingerprint, tick);
 			p->totalGateTicks += tick - chans[ch].noteOnTick;
 		}
+		// .notes dump keeps reporting the ORIGINAL (unstretched) gate --
+		// it's ground truth for analysis/validation, independent of
+		// LDS_MIN_GATE_MS; only the emitted MIDI event above stretches.
 		log_note(chans[ch].noteOnTick, tick, chans[ch].note, ch, chans[ch].fingerprint,
 		         chans[ch].onHz, chans[ch].onFnum, chans[ch].onBlock, chans[ch].transpose);
 		chans[ch].note = -1;
@@ -520,6 +575,22 @@ static void note_on(int ch, int tick)
 	int note = hz_to_midi_note(hz) + chans[ch].transpose;
 	if (note < 0) note = 0;
 	if (note > 127) note = 127;
+
+	// A gate-floor-stretched note-off from this channel's previous note may
+	// still be pending (scheduled for a future tick). If this retrigger is
+	// the SAME pitch, letting that stretched off fire at/after this note-on
+	// would immediately kill the new note; clamp it to just before this
+	// note-on instead. Different pitches overlapping on the same channel are
+	// ordinary legato/polyphony and are left alone.
+	if (chans[ch].pendingOffEventIndex >= 0 && chans[ch].pendingOffNote == note
+	    && events[chans[ch].pendingOffEventIndex].tick >= tick)
+	{
+		int clamped = tick - 1;
+		if (clamped < chans[ch].pendingOffOnsetTick)
+			clamped = chans[ch].pendingOffOnsetTick;
+		events[chans[ch].pendingOffEventIndex].tick = clamped;
+		chans[ch].pendingOffEventIndex = -1;
+	}
 
 	int tl = get_carrier_tl(ch);
 	int vel = 127 - tl * 2;
@@ -851,6 +922,7 @@ static void reset_decode_state(void)
 		chans[i].volume = -1;
 		chans[i].cents = CENTS_NONE;
 		chans[i].fingerprint = 0;
+		chans[i].pendingOffEventIndex = -1;
 	}
 	memset(rhythmVoices, 0, sizeof rhythmVoices);
 	rhythmUsed = false;
@@ -1063,6 +1135,14 @@ int main(int argc, char **argv)
 
 	samplesPerLdsUpdate = 2 * (SAMPLE_RATE / ldsUpdate2Rate);
 	samplesPerLdsUpdateFrac = 2 * (SAMPLE_RATE % ldsUpdate2Rate);
+
+	const char *minGateEnv = getenv("LDS_MIN_GATE_MS");
+	if (minGateEnv != NULL)
+	{
+		double v = atof(minGateEnv);
+		if (v > 0.0)
+			gMinGateMs = v;
+	}
 
 	// LDS_GM_MAP env overrides the mapping file entirely (used for stem
 	// renders); otherwise try a couple of reasonable locations.

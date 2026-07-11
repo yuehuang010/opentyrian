@@ -18,6 +18,11 @@
 # Format (whitespace separated, '#' comments allowed):
 #   <8-hex-fingerprint>  <gm_program 0-127>  [semitone_transpose]  [volume 0-127]  [cents -99..99]
 #
+# LDS_MIN_GATE_MS (env, float ms, default 0/off): stretches emitted MIDI note
+# gates shorter than this floor (e.g. fast chord-stab voices) so sampled GM
+# instruments have time to speak instead of rendering as pitchless blips.
+# Only affects the emitted .mid; the .notes dump still reports true gates.
+#
 # volume is a per-instrument mix level (MIDI CC7, default 100) emitted when
 # the fingerprint takes over a channel; use it to push leads forward and
 # tuck accompaniment back without touching the decoded dynamics.
