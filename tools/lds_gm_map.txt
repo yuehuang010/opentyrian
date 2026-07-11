@@ -62,7 +62,7 @@ f467d225  61   # ch0,1  mid riff (57..70, ~140ms)        -> Brass Section
 1cd3af4f  61   # ch0,1,4 very short (23ms) stabs (V3)    -> Brass Section (these are melody ornaments on the melody's own channels; pizzicato made them sound like a stray instrument)
 74a8c820  61   # ch0,1  main melody voice (43..81)       -> Brass Section
 4a4a0c2e  46   # ch3,4  busiest arp/accomp (1254 notes)  -> Orchestral Harp
-4ffe5d4b  42  0  100  27  # ch2..6 mid-low sustained (38..58)       -> Cello; Cello preset ~-0.37 st flat across fonts -> +27c OPL-referenced correction
+4ffe5d4b  42  0  78  27  # ch2..6 mid-low sustained (38..58)       -> Cello; +27c OPL-referenced correction; CC7 78: measured +2.1 dB hot vs classic balance, user chose the stronger -4.3 dB cut (accompaniment, not melody)
 e181198e  52   # ch4,5  long soaring lead (48..93, ~1s)  -> Choir Aahs
 13fecaf5  38  0  100  33  # ch2    driving mid-low rhythm line      -> Synth Bass 1; Synth Bass 1 preset ~-0.42 st flat across fonts -> +33c OPL-referenced correction
 bf6c72e9  38  0  100  34  # ch5,6  bass line (26..53)               -> Synth Bass 1; TEST B unreliable (high MAD), borrowed Synth Bass 1 tuning from 13fecaf5/0d5f4d92 -> +34c
