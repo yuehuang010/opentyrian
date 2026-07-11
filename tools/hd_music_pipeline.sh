@@ -222,6 +222,22 @@ cmd_gm() {
 	# shellcheck disable=SC2086
 	fluidsynth -ni ${FLUID_EXTRA:-} -g "${FLUID_GAIN:-0.6}" -r 44100 -F "$rawwav" "$sf2" "$mid"
 
+	# PERC_MIDI: optional extra MIDI (e.g. tools/v13_percussion.py output)
+	# rendered with the same settings and amixed in at PERC_GAIN dB (default
+	# 0). Both derive from the same tick clock, so they're sample-aligned.
+	if [ -n "${PERC_MIDI:-}" ]; then
+		local percwav="$VARIANTDIR/.tmp_hdmusic_${nn2}_${variant}_perc.wav"
+		local mixwav="$VARIANTDIR/.tmp_hdmusic_${nn2}_${variant}_mix.wav"
+		echo "rendering percussion stem ($PERC_MIDI, ${PERC_GAIN:-0} dB)..."
+		# shellcheck disable=SC2086
+		fluidsynth -ni ${FLUID_EXTRA:-} -g "${FLUID_GAIN:-0.6}" -r 44100 -F "$percwav" "$sf2" "$PERC_MIDI"
+		ffmpeg -y -loglevel error -i "$rawwav" -i "$percwav" \
+			-filter_complex "[1:a]volume=${PERC_GAIN:-0}dB[p];[0:a][p]amix=inputs=2:duration=first:normalize=0[m]" \
+			-map "[m]" "$mixwav"
+		mv "$mixwav" "$rawwav"
+		rm -f "$percwav"
+	fi
+
 	local meta_args=()
 	if [ -f "$loopinfo" ]; then
 		local totalsamples loopstart looplength

@@ -168,3 +168,33 @@ rhythm voices back: efa39919 (V10, fixed-note pulse) -> Timpani vol 80, and
 are the only acoustic voice that articulates 37 ms repeats — same lesson as
 V19). Full variant re-rendered as `fluidr3v8` (mean -18.4 dB, max -1.9 dB,
 no clipping) plus stems 6/7; page stamp "FluidR3 v8".
+
+## V13 resolved: rewritten as drum-kit percussion (2026-07-10, user-approved)
+
+Isolating V13 (8251725a) against the classic chip (new `LDS_SOLO_FPS` env in
+render_music — masks key-ons of unlisted voice fingerprints, unfiltered
+output byte-identical) showed the "4751-note 37 ms arpeggio" is really
+bursts: a low note (<55) + a 13-note high cascade, which the OPL fuses into
+one composite hit ("small drum with a small brass hat", per the user). No GM
+program articulates that — six percussion candidates all failed ("I hear one
+drum hit"), and mallets machine-gun the cascade.
+
+Fix: **rewrite the part, don't transcode it.** `tools/v13_percussion.py`
+reads the .notes dump and emits drum-channel MIDI: hi-mid tom (48) + closed
+hat (42) on EVERY low note (not per burst — a 91 s continuous section has 42
+drum hits; grouping by silence gaps missed 0:46-2:17), quiet open-hat (46)
+tail per cascade segment, pedal-hat (44) choke before real silence. Same
+tick clock as lds_to_midi, so the render is sample-aligned and amixed in by
+the pipeline's new `PERC_MIDI`/`PERC_GAIN` hook (+2.4 dB w/ FLUID_GAIN
+0.48). 8251725a is vol 0 in the map. Full render: `fluidr3v9` (mean −19.4,
+max −2.1 dB). An OPL-chip-layer fallback also prototyped and rejected in
+favor of the rewrite.
+
+## Mix balance vs classic (2026-07-10, measured, NOT yet applied)
+
+`tools/compare_mix_balance.py` (+ `tools/stem_groups_30.txt`) renders each
+group solo through both chains and compares group-relative loudness. First
+60 s: melody −4.1 dB vs classic balance (too quiet), ticks −3.5, brassriff
+−2.3, choir +1.7 hot, figuration +1.6 hot, bass ~neutral except 13fecaf5
+~+1 dB hot broadband. Suggested CC7 set is in the session log; user has not
+yet picked which moves to apply.

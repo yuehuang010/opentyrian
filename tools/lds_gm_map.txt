@@ -69,7 +69,7 @@ bf6c72e9  38  0  100  34  # ch5,6  bass line (26..53)               -> Synth Bas
 efa39919  47  0  80  # ch6,7  fixed note 36 hits (V10)    -> Timpani (restored 2026-07-10 at user request, vol 80)
 e647c759  43  0  100  -69  # ch1    4 very long low notes (37)       -> Contrabass; Contrabass preset ~+0.86 st sharp across fonts -> -69c OPL-referenced correction
 690de1b2  115  # ch8    fixed note 85 ticking            -> Woodblock
-8251725a  12  0  60  # ch7  4751-note 37ms arpeggio (V13)  -> Marimba, quiet (restored 2026-07-10 at user request; only mallets articulate the 37ms repeats)
+8251725a  12  0  0  # ch7  4751-note 37ms arpeggio (V13)  -> vol 0 here: the part is REWRITTEN as drum-kit percussion by tools/v13_percussion.py (tom+hats per burst) and amixed in via the pipeline's PERC_MIDI hook -- no GM program articulates the OPL's fused 37ms bursts
 4b52fb40  56  0  127  0  gate=85 echo=75  # ch0,1  second melody (45..81) (V14)  -> Trumpet, dry render, notes trimmed to 85%, +86ms delay-echo doubles at 75% velocity (see internal/hd-music-track30.md)
 9e5b1e21  45   # ch5,6  high ostinato (69..77)           -> Pizzicato Strings
 7d7e14af  46   # ch4,5  fast high runs/fills             -> Orchestral Harp
