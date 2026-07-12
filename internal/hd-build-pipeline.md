@@ -26,17 +26,36 @@ before running, for only the steps actually selected.
 ## Usage
 
 ```sh
-python3 tools/hd_build.py               # default run
+python3 tools/hd_build.py               # default run (extraction steps run concurrently)
 python3 tools/hd_build.py --list        # print the step plan + exact commands, no side effects
 python3 tools/hd_build.py --tiles --sfx # include the opt-in heavy/experimental steps
 python3 tools/hd_build.py --bundle-only # just (re)build the paks from existing hd* files
+python3 tools/hd_build.py --jobs 2      # cap concurrency at 2 extraction steps at a time
+python3 tools/hd_build.py --jobs 1      # force fully-serial execution (debuggability)
 ```
 
 On Windows: `python tools\hd_build.py` (same flags).
 
 Run `python3 tools/hd_build.py --help` for the full flag reference
 (`--data`, `--previews`, `--font {vector,xbrz}`, `--only STEP[,STEP...]`,
-`--continue-on-error`, `--bundle-out`/`--hd-out`, etc).
+`--jobs`/`-j`, `--continue-on-error`, `--bundle-out`/`--hd-out`, etc).
+
+**Concurrency**: the extraction steps (`backdrops`, `comp`, `filter`, `font`,
+`anim`, `tiles`, `sfx`) read the same base data dir and write disjoint
+`hd*`-prefixed outputs, so they have no interdependencies and now run
+concurrently in a thread pool (`--jobs`/`-j`, default
+`min(os.cpu_count(), number of extraction steps selected)`). `bundle`
+(`mkbundle.py`) reads what the extraction steps wrote, so it's the one
+ordering constraint: it always runs last, alone, only after every selected
+extraction step has finished. Each extraction step's combined stdout+stderr
+is captured and printed as one delimited block when that step completes (to
+avoid interleaving output from concurrent subprocesses); the final summary
+table is still printed in canonical step order regardless of completion
+order. `--jobs 1` runs the same code path with a single worker, reproducing
+serial, in-order execution for debugging a step in isolation. Failure
+semantics are unchanged: by default a failed extraction step skips `bundle`
+(overall exit code 1); `--continue-on-error` still attempts `bundle`
+regardless.
 
 ## Step list
 

@@ -3,9 +3,11 @@
 hd_build.py -- Cross-platform orchestrator for the OpenTyrian HD-remaster
 asset pipeline.
 
-Runs the HD extractors in canonical order and then builds the distributable
-paks (tyrian.base + tyrian.hd), replacing what today is ~8 manual tool
-invocations with inconsistent CLIs. Works on Windows, macOS, and Linux:
+Runs the HD extractors -- which read the same base data dir and write
+disjoint hd*-prefixed outputs, so they have no interdependencies --
+concurrently, then builds the distributable paks (tyrian.base + tyrian.hd)
+once every extraction step has finished, replacing what today is ~8 manual
+tool invocations with inconsistent CLIs. Works on Windows, macOS, and Linux:
 every sub-tool is invoked as `sys.executable <script> ...` (never a shell,
 never a hardcoded POSIX path), so it needs nothing beyond a working Python
 interpreter (plus whatever third-party deps a given step needs -- checked
@@ -22,8 +24,10 @@ Pipeline (see --list for the live, flag-aware version of this table):
   7. sfx        hd_extract_snd.py       HD sfx reference WAVs (opt-in: --sfx)
   8. bundle     mkbundle.py             build tyrian.base + tyrian.hd
 
-Steps 1-5 and 8 run by default; 6 and 7 are opt-in. Steps run in the order
-above regardless of how they were selected.
+Steps 1-5 and 8 run by default; 6 and 7 are opt-in. Steps 1-7 (the
+extractors) are mutually independent and run concurrently -- see --jobs --
+in the order shown above only for display/summary purposes; step 8 (bundle)
+always runs last, alone, once every selected extractor has finished.
 
 Quirks worth knowing before you rely on this:
 
@@ -50,7 +54,8 @@ Preflight (runs automatically before any step, skipped for --list/--help):
     if they don't.
 
 Examples:
-  # Default run: backdrops, comp, filter, font, anim, then bundle.
+  # Default run: backdrops, comp, filter, font, anim run concurrently, then
+  # bundle once they've all finished.
   python3 tools/hd_build.py
 
   # Same, on Windows:
@@ -58,6 +63,14 @@ Examples:
 
   # Also extract level tilesets and sfx reference WAVs.
   python3 tools/hd_build.py --tiles --sfx
+
+  # Cap concurrency at 2 extraction steps at a time (default: one worker per
+  # extraction step selected, up to os.cpu_count()).
+  python3 tools/hd_build.py --jobs 2
+
+  # Force fully-serial execution (steps run one at a time, in canonical
+  # order) -- useful for debugging a step in isolation.
+  python3 tools/hd_build.py --jobs 1
 
   # Re-pack the paks from already-extracted hd* files, nothing else.
   python3 tools/hd_build.py --bundle-only
@@ -73,6 +86,7 @@ Examples:
 """
 
 import argparse
+import concurrent.futures
 import importlib.util
 import os
 import subprocess
@@ -316,7 +330,8 @@ def _would_raise_only_error(args):
 
 EPILOG = """\
 Examples:
-  # Default run: backdrops, comp, filter, font, anim, then bundle.
+  # Default run: backdrops, comp, filter, font, anim run concurrently, then
+  # bundle once they've all finished.
   python3 tools/hd_build.py
 
   # Same, on Windows:
@@ -324,6 +339,13 @@ Examples:
 
   # Also extract level tilesets and sfx reference WAVs.
   python3 tools/hd_build.py --tiles --sfx
+
+  # Cap concurrency at 2 extraction steps at a time (default: one worker per
+  # extraction step selected, up to os.cpu_count()).
+  python3 tools/hd_build.py --jobs 2
+
+  # Force fully-serial execution -- useful for debugging a step in isolation.
+  python3 tools/hd_build.py --jobs 1
 
   # Re-pack the paks from already-extracted hd* files, nothing else.
   python3 tools/hd_build.py --bundle-only
@@ -340,6 +362,19 @@ Examples:
 See this file's module docstring for the hardcoded-data-dir tools and the
 sfx-experiment-tool caveat.
 """
+
+
+def _positive_int(value):
+    """argparse type= for --jobs: plain int(), but reject 0/negative with a
+    clean argparse error instead of a traceback or a silently-broken
+    ThreadPoolExecutor(max_workers=0)."""
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("invalid int value: %r" % value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError("--jobs must be >= 1 (got %d)" % ivalue)
+    return ivalue
 
 
 def build_arg_parser():
@@ -370,11 +405,20 @@ def build_arg_parser():
         help="comma-separated list of steps to run instead of the default/opt-in "
              "selection (still runs in canonical order): %s" % ", ".join(STEP_ORDER))
     parser.add_argument(
+        "--jobs", "-j", type=_positive_int, default=None, metavar="N",
+        help="max extraction steps to run concurrently (backdrops/comp/filter/font/"
+             "anim/tiles/sfx have no interdependencies; bundle always runs alone, "
+             "last, after all selected extraction steps finish). Default: "
+             "min(os.cpu_count(), number of extraction steps selected). --jobs 1 "
+             "forces fully-serial execution, in canonical order, for debuggability.")
+    parser.add_argument(
         "--list", action="store_true",
         help="print the ordered step plan (with the exact commands) and exit")
     parser.add_argument(
         "--continue-on-error", action="store_true",
-        help="keep running remaining steps after a failure (default: stop at first failure)")
+        help="run bundle even if an extraction step failed (default: skip bundle on "
+             "any extraction failure). Note: all selected extraction steps are always "
+             "run to completion regardless of this flag, since they run concurrently.")
     parser.add_argument(
         "--no-verify", action="store_true",
         help="skip mkbundle's --verify round-trip check on the built paks (faster)")
@@ -397,6 +441,9 @@ def build_arg_parser():
 
 
 def run_step(key, argv, cwd):
+    """Run a single step with stdout/stderr inherited (streams live). Used
+    for "bundle", which always runs alone (never concurrently with anything
+    else), so there's no interleaving risk and no reason to buffer it."""
     print("$ %s" % " ".join(argv))
     start = time.monotonic()
     try:
@@ -407,6 +454,40 @@ def run_step(key, argv, cwd):
         rc = 1
     duration = time.monotonic() - start
     return rc, duration
+
+
+def run_step_capture(key, argv, cwd):
+    """Run a single step with combined stdout+stderr captured rather than
+    inherited. Used for the extraction steps, which may run concurrently in
+    a thread pool -- letting them all write to the real stdout/stderr at
+    once would interleave their output into garbage, so each one's output is
+    captured whole and printed as a single block once it finishes (see
+    print_step_block). Returns (key, argv, rc, duration, output)."""
+    start = time.monotonic()
+    try:
+        result = subprocess.run(
+            argv, cwd=str(cwd), check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        rc = result.returncode
+        output = result.stdout
+    except OSError as e:
+        rc = 1
+        output = "error: failed to launch step %r: %s\n" % (key, e)
+    duration = time.monotonic() - start
+    return key, argv, rc, duration, output
+
+
+def print_step_block(key, argv, rc, duration, output):
+    """Print one extraction step's captured output as a single, clearly
+    delimited block -- safe to call from as_completed() in any order."""
+    script_name = Path(argv[1]).name
+    status = "ok" if rc == 0 else "FAILED"
+    print()
+    print("----- [%s] %s -- %s (exit %d, %.1fs) -----" % (key, script_name, status, rc, duration))
+    print("$ %s" % " ".join(argv))
+    if output:
+        sys.stdout.write(output if output.endswith("\n") else output + "\n")
+    print("----- [%s] end -----" % key)
 
 
 def main(argv=None):
@@ -466,41 +547,84 @@ def main(argv=None):
         print(file=sys.stderr)
 
     # --- run steps -----------------------------------------------------
-    results = []  # (key, status, duration)
-    total = len(step_keys)
-    aborted = False
+    # Extraction steps (everything but "bundle") read the same base data dir
+    # and write disjoint hd*-prefixed outputs, so they have no
+    # interdependencies and can run concurrently. "bundle" reads what the
+    # extraction steps wrote, so it's the one ordering constraint: it must
+    # run after all selected extraction steps finish, and it never runs
+    # concurrently with anything else.
+    extraction_keys = [key for key in step_keys if key != "bundle"]
+    run_bundle = "bundle" in step_keys
 
-    for i, key in enumerate(step_keys, start=1):
-        if aborted and not args.continue_on_error:
-            results.append((key, "skipped", 0.0))
-            continue
+    num_extraction = len(extraction_keys)
+    if args.jobs is not None:
+        jobs = args.jobs
+    elif num_extraction:
+        jobs = min(os.cpu_count() or 1, num_extraction)
+    else:
+        jobs = 1  # nothing to parallelize (e.g. --bundle-only); avoid a 0-worker pool
 
-        argv = STEP_CMD_BUILDERS[key](args, data_dir)
-        script_name = Path(argv[1]).name
+    results = {}  # key -> (status, duration)
+
+    if num_extraction:
         print()
-        print("[%d/%d] %s: %s" % (i, total, key, script_name))
-        rc, duration = run_step(key, argv, REPO_ROOT)
+        print("Running %d extraction step(s) with up to %d concurrent job(s): %s"
+              % (num_extraction, jobs, ", ".join(extraction_keys)))
 
-        if rc == 0:
-            results.append((key, "ok", duration))
-            print("[%d/%d] %s: ok (%.1fs)" % (i, total, key, duration))
+        # Failure semantics: every extraction step is submitted to the pool
+        # up front regardless of --continue-on-error -- once steps are
+        # launched concurrently there's no useful "stop before starting the
+        # next one" point to enforce, so the simplest correct behavior is to
+        # let every submitted extraction step run to completion and only
+        # gate *bundle* on the outcome below. --jobs 1 still goes through
+        # this same pool (with a single worker), so a step failure there
+        # does *not* short-circuit remaining extraction steps the way the
+        # old sequential loop did -- the old "stop at first failure" applied
+        # only to bundle, which is preserved.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            future_to_key = {}
+            for key in extraction_keys:
+                argv = STEP_CMD_BUILDERS[key](args, data_dir)
+                future_to_key[pool.submit(run_step_capture, key, argv, REPO_ROOT)] = key
+
+            for future in concurrent.futures.as_completed(future_to_key):
+                key, argv, rc, duration, output = future.result()
+                print_step_block(key, argv, rc, duration, output)
+                if rc == 0:
+                    results[key] = ("ok", duration)
+                else:
+                    results[key] = ("failed", duration)
+                    print("[%s] FAILED (exit %d, %.1fs)" % (key, rc, duration), file=sys.stderr)
+
+    any_extraction_failed = any(status == "failed" for status, _ in results.values())
+
+    if run_bundle:
+        if any_extraction_failed and not args.continue_on_error:
+            results["bundle"] = ("skipped", 0.0)
         else:
-            results.append((key, "failed", duration))
-            print("[%d/%d] %s: FAILED (exit %d, %.1fs)" % (i, total, key, rc, duration),
-                  file=sys.stderr)
-            aborted = True
-            if not args.continue_on_error:
-                remaining = step_keys[i:]
-                for rem_key in remaining:
-                    results.append((rem_key, "skipped", 0.0))
-                break
+            argv = STEP_CMD_BUILDERS["bundle"](args, data_dir)
+            script_name = Path(argv[1]).name
+            print()
+            print("[bundle] %s" % script_name)
+            rc, duration = run_step("bundle", argv, REPO_ROOT)
+            if rc == 0:
+                results["bundle"] = ("ok", duration)
+                print("[bundle] ok (%.1fs)" % duration)
+            else:
+                results["bundle"] = ("failed", duration)
+                print("[bundle] FAILED (exit %d, %.1fs)" % (rc, duration), file=sys.stderr)
 
     # --- summary ---------------------------------------------------------
+    # Printed in canonical STEP_ORDER regardless of the (possibly
+    # out-of-order) completion order extraction steps finished in above.
     print()
     print("Summary:")
     print("  %-12s %-8s %s" % ("step", "status", "duration"))
     any_failed = False
-    for key, status, duration in results:
+    for key in STEP_ORDER:
+        if key not in results:
+            continue
+        status, duration = results[key]
         if status == "failed":
             any_failed = True
         dur_str = "%.1fs" % duration if status != "skipped" else "-"

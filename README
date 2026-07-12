@@ -10,6 +10,21 @@ to fight MicroSol and save the galaxy.
 Tyrian features a story mode, one- and two-player arcade modes, and networked
 multiplayer.
 
+== Building ====================================================================
+
+Requires SDL2 and SDL2_net, plus a C99 compiler.  Two build systems are
+supported and kept in sync:
+
+  # CMake (cross-platform)
+  cmake -S . -B build && cmake --build build -j
+
+  # or the classic Makefile (Unix)
+  make
+
+The optional HD asset paks (see below) can be built through CMake too:
+
+  cmake --build build --target hd-assets
+
 == Additional Necessary Files ==================================================
 
 Tyrian 2.1 data files which have been released as freeware:
