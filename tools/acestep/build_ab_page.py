@@ -25,24 +25,33 @@ SONGS = {
         "loop_seconds": 113.669048,
         # 7 tracks: trim to one pass so the page stays under the 16 MB cap
         "trim_seconds": 113.669048,
-        "sub": ("Locked cover recipe (seed 4242, melody 0.80 unless noted), "
-                "caption varied per genre. One loop pass each (113.7&nbsp;s). "
-                "Switching tracks keeps the playhead."),
+        "sub": ("Round 2: at melody 0.80 the caption is a no-op (the turbo "
+                "schedule leaves 1 denoise step), so genre variants run at "
+                "lower retention where the caption gets steps to act. "
+                "&ldquo;text-only finish&rdquo; = late steps conditioned on "
+                "the caption alone (audio_cover_strength 0.5). One loop pass "
+                "each (113.7&nbsp;s). Switching tracks keeps the playhead."),
         "tracks": [
             ("classic", "Classic OPL", os.path.join(CLASSICDIR, "hdmusic_30_x2.wav"),
              "render_music reference"),
-            ("synthony", "Synthony &middot; orchestra + EDM", os.path.join(GENRES, "t30_synthony.flac"),
-             "symphony orchestra fused with driving synths, four-on-the-floor"),
+            ("baseline", "Faithful baseline &middot; melody 0.80", os.path.join(GENRES, "t30_synthony.flac"),
+             "caption-independent HD refinement — the landed soundtrack's style"),
             ("synthony_n050", "Synthony &middot; melody 0.50", os.path.join(GENRES, "t30_synthony_n050.flac"),
-             "same caption, more style freedom (less melody retention)"),
-            ("synthwave", "Synthwave / retrowave", os.path.join(GENRES, "t30_synthwave.flac"),
+             "orchestra + EDM caption, 2 denoise steps"),
+            ("synthony_n035", "Synthony &middot; melody 0.35", os.path.join(GENRES, "t30_synthony_n035.flac"),
+             "orchestra + EDM, 3 steps — more style freedom"),
+            ("synthony_n020", "Synthony &middot; melody 0.20", os.path.join(GENRES, "t30_synthony_n020.flac"),
+             "orchestra + EDM, 6 steps — max style, loosest melody"),
+            ("synthwave_n020", "Synthwave &middot; melody 0.20", os.path.join(GENRES, "t30_synthwave_n020.flac"),
              "80s analog polysynths, arpeggiated bass, gated reverb drums"),
-            ("metal", "Symphonic power metal", os.path.join(GENRES, "t30_metal.flac"),
+            ("metal_n020", "Symphonic metal &middot; melody 0.20", os.path.join(GENRES, "t30_metal_n020.flac"),
              "distorted guitars + double kick under orchestra"),
-            ("trance", "Uplifting trance", os.path.join(GENRES, "t30_trance.flac"),
+            ("trance_n020", "Uplifting trance &middot; melody 0.20", os.path.join(GENRES, "t30_trance_n020.flac"),
              "supersaw lead, rolling bassline, club production"),
-            ("funk", "Jazz-funk fusion", os.path.join(GENRES, "t30_funk.flac"),
-             "electric piano, slap bass, horn section"),
+            ("metal_n035_cs05", "Metal &middot; melody 0.35 &middot; text-only finish", os.path.join(GENRES, "t30_metal_n035_cs05.flac"),
+             "tighter melody, caption alone drives the last steps"),
+            ("synthony_n050_cs05", "Synthony &middot; melody 0.50 &middot; text-only finish", os.path.join(GENRES, "t30_synthony_n050_cs05.flac"),
+             "tightest melody of the style variants, caption-driven finish"),
         ],
     },
     "30": {

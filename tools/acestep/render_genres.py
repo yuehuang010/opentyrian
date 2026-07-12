@@ -25,36 +25,68 @@ OUT = os.path.join(WORK, "acestep", "genres")
 SEED = 4242
 MAX_SRC_SECONDS = 590.0
 
-# (key, cover_noise_strength, caption). 0.80 is the locked retention; the
-# extra synthony variant at 0.50 trades melody for style freedom, since high
-# retention is documented to resist style change.
+SYNTHONY = (
+    "Epic symphonic EDM hybrid, full symphony orchestra fused with driving "
+    "analog synthesizers; soaring string ensemble and heroic brass over "
+    "pulsing synth bass and four-on-the-floor electronic drums, festival "
+    "main-stage energy, cinematic modern production, instrumental")
+SYNTHWAVE = (
+    "80s synthwave retrowave, analog polysynth lead melody, arpeggiated "
+    "sequencer bassline, gated reverb drums, warm analog pads, neon "
+    "nighttime driving energy, punchy retro production, instrumental")
+METAL = (
+    "Symphonic power metal, distorted electric rhythm guitars and double "
+    "kick drums under orchestral strings and heroic brass, epic anthemic "
+    "energy, tight modern metal production, instrumental")
+TRANCE = (
+    "Uplifting trance, euphoric supersaw lead melody, rolling bassline, "
+    "four-on-the-floor kick, shimmering arpeggios, wide breakdowns, clean "
+    "club production, instrumental")
+FUNK = (
+    "Jazz-funk fusion, electric piano and clavinet, slap bass groove, "
+    "tight funky drums, punchy horn section stabs, groovy energetic "
+    "instrumental")
+
+# The turbo sampler's stock 8-step schedule ends [..., 0.5, 0.3]:
+# cover_noise_strength=0.80 starts at t=0.3 (1 step -> caption is a no-op,
+# round-1 finding: all genres byte-similar), 0.50 starts at t=0.5 (2 steps),
+# 0.35/0.20 start at t=0.64/0.83 (3/6 steps -> caption gets room to act).
+# A dense custom schedule covers all 20 valid timesteps, so after the
+# cover-noise truncation more low-noise refinement steps remain.
+DENSE_TIMESTEPS = [
+    1.0, 0.9545454545454546, 0.9333333333333333, 0.9, 0.875,
+    0.8571428571428571, 0.8333333333333334, 0.7692307692307693, 0.75,
+    0.6666666666666666, 0.6428571428571429, 0.625, 0.5454545454545454,
+    0.5, 0.4, 0.375, 0.3, 0.25, 0.2222222222222222, 0.125,
+]
+
+# (key, cover_noise_strength, audio_cover_strength, caption, timesteps-or-None)
+# audio_cover_strength < 1.0 hands the last (1-strength) fraction of steps to
+# text-only conditioning (the caption, no source FSQ codes) — the second
+# style lever besides retention.
 VARIANTS = [
-    ("synthony", 0.80,
-     "Epic symphonic EDM hybrid, full symphony orchestra fused with driving "
-     "analog synthesizers; soaring string ensemble and heroic brass over "
-     "pulsing synth bass and four-on-the-floor electronic drums, festival "
-     "main-stage energy, cinematic modern production, instrumental"),
-    ("synthony_n050", 0.50,
-     "Epic symphonic EDM hybrid, full symphony orchestra fused with driving "
-     "analog synthesizers; soaring string ensemble and heroic brass over "
-     "pulsing synth bass and four-on-the-floor electronic drums, festival "
-     "main-stage energy, cinematic modern production, instrumental"),
-    ("synthwave", 0.80,
-     "80s synthwave retrowave, analog polysynth lead melody, arpeggiated "
-     "sequencer bassline, gated reverb drums, warm analog pads, neon "
-     "nighttime driving energy, punchy retro production, instrumental"),
-    ("metal", 0.80,
-     "Symphonic power metal, distorted electric rhythm guitars and double "
-     "kick drums under orchestral strings and heroic brass, epic anthemic "
-     "energy, tight modern metal production, instrumental"),
-    ("trance", 0.80,
-     "Uplifting trance, euphoric supersaw lead melody, rolling bassline, "
-     "four-on-the-floor kick, shimmering arpeggios, wide breakdowns, clean "
-     "club production, instrumental"),
-    ("funk", 0.80,
-     "Jazz-funk fusion, electric piano and clavinet, slap bass groove, "
-     "tight funky drums, punchy horn section stabs, groovy energetic "
-     "instrumental"),
+    # round 1 (kept for skip-idempotency; all five 0.80s rendered identical)
+    ("synthony", 0.80, 1.0, SYNTHONY, None),
+    ("synthony_n050", 0.50, 1.0, SYNTHONY, None),
+    ("synthwave", 0.80, 1.0, SYNTHWAVE, None),
+    ("metal", 0.80, 1.0, METAL, None),
+    ("trance", 0.80, 1.0, TRANCE, None),
+    ("funk", 0.80, 1.0, FUNK, None),
+    # round 2: retention low enough for the caption to bite
+    # (finding: 0.35 genres differ only subtly, corr 0.94-0.96; 0.20 has
+    # real latitude, corr 0.61 vs 0.35; dense schedule was a no-op, 0.998)
+    ("synthony_n035", 0.35, 1.0, SYNTHONY, None),
+    ("synthony_n020", 0.20, 1.0, SYNTHONY, None),
+    ("synthwave_n035", 0.35, 1.0, SYNTHWAVE, None),
+    ("metal_n035", 0.35, 1.0, METAL, None),
+    ("trance_n035", 0.35, 1.0, TRANCE, None),
+    ("synthony_n050_dense", 0.50, 1.0, SYNTHONY, DENSE_TIMESTEPS),
+    # round 2b: genre spread at 0.20 + text-only late steps
+    ("synthwave_n020", 0.20, 1.0, SYNTHWAVE, None),
+    ("metal_n020", 0.20, 1.0, METAL, None),
+    ("trance_n020", 0.20, 1.0, TRANCE, None),
+    ("metal_n035_cs05", 0.35, 0.5, METAL, None),
+    ("synthony_n050_cs05", 0.50, 0.5, SYNTHONY, None),
 ]
 
 
@@ -152,7 +184,7 @@ def main():
     if not ok:
         sys.exit(1)
 
-    for key, noise, caption in VARIANTS:
+    for key, noise, cover_strength, caption, timesteps in VARIANTS:
         flac = os.path.join(OUT, f"t{nn:02d}_{key}.flac")
         if os.path.exists(flac):
             print(f"[skip] {key}: exists", flush=True)
@@ -162,8 +194,9 @@ def main():
             src_audio=src,
             caption=caption,
             lyrics="[Instrumental]",
-            audio_cover_strength=1.0,
+            audio_cover_strength=cover_strength,
             cover_noise_strength=noise,
+            timesteps=timesteps,
             thinking=False,
         )
         config = GenerationConfig(

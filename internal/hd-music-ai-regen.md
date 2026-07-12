@@ -152,19 +152,39 @@ a triage hint only. Next-lowest band (36/37/18/17, 0.42-0.53) also shipped. Best
 Full table in the render log; large negative gains (31/32/40, -11..-14 dB)
 are quiet ambient classics the cover rendered hot.
 
-## Genre-remake experiment (2026-07-11, in progress)
+## Genre-remake experiment (2026-07-11, in progress) + gotcha #4
 
 User (post-landing): the landed remixes are faithful; now try an experimental
 "synthony" remake (symphony-orchestra-meets-synths) and other genres.
 `tools/acestep/render_genres.py` sweeps captions on one track with the locked
-cover mechanics (torch/MPS, seed 4242, cover strength 1.0). Round 1 on
-track 30: synthony (0.80 + a 0.50 melody variant), synthwave, symphonic
-power metal, uplifting trance, jazz-funk — all at envelope corr 0.65-0.69,
-i.e. genre captions restyle without losing melody retention vs the orchestral
-baseline (0.686). A/B page (one loop pass per variant, 16 MB-cap trim):
+cover mechanics (torch/MPS, seed 4242).
+
+**Gotcha #4 — the caption is a NO-OP at cover_noise_strength 0.80 on turbo**
+(user caught it by ear: round-1 genre variants "all sound the same"; pairwise
+raw-waveform corr 1.000 across five different captions). The turbo sampler
+has a fixed 8-step schedule ending [..., 0.5, 0.3]; cover-noise truncation
+starts at the nearest timestep to (1-noise), so 0.80 -> t=0.3 -> ONE denoise
+step over 70%-source latents: enough to HD-ify timbre, zero room for style.
+Corollary: **the landed soundtrack's orchestral caption did nothing** — the
+approved faithful-HD sound is caption-independent source refinement.
+Style-vs-melody map (track 30, raw-waveform corr between genre captions):
+0.80 -> identical (1.000); 0.50 -> 2 steps; 0.35 -> 3 steps, subtle
+differences (0.94-0.96); 0.20 -> 6 steps, real genre separation (0.73-0.94)
+with envelope corr vs classic still ~0.60. Two dead ends measured: a dense
+20-timestep custom schedule (more low-noise steps) changes nothing (0.998 —
+style is decided at the high-t steps the truncation removes), and
+audio_cover_strength=0.5 (text-only late steps) is nearly a no-op (0.97-
+0.996). So on turbo, **cover_noise_strength is the only style lever**, and
+genre transfer costs melody: usable range ~0.20-0.35. The proper tool would
+be `flow_edit_morph` (source-caption -> target-caption V_delta integration),
+but it requires a non-turbo base DiT checkpoint (not downloaded).
+
+Round-2 A/B page (same artifact, one loop pass per variant): classic,
+faithful-0.80 baseline, synthony at 0.50/0.35/0.20, synthwave/metal/trance
+at 0.20, and the two cs05 hybrids:
 <https://claude.ai/code/artifact/25c055a1-95a9-4ac7-b7a6-990a44833633>.
 Awaiting listening verdict; next knobs if a genre wins: sweep more tracks,
-or per-track genre assignment (calm tracks vs combat tracks).
+per-track genre assignment (calm vs combat), or the base-model flow-edit.
 
 ## Open questions for the verdict
 
