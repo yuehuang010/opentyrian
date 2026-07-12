@@ -31,12 +31,6 @@ MAX_SRC_SECONDS = 590.0
 # timesteps and audio_cover_strength<1.0 are measured dead ends. So
 # exploration runs at retention 0.10-0.20 where the caption has real power.
 
-OPERA = (
-    "Epic operatic symphony, live full symphony orchestra in a grand "
-    "concert hall; dramatic wordless operatic choir and soaring soprano "
-    "vocalise over lush legato strings, French horns and trumpets, timpani "
-    "rolls and harp flourishes; expressive dynamics, lifelike acoustic "
-    "recording, film-score grandeur")
 FILMSCORE = (
     "Hollywood film score, live symphony orchestra recorded on a scoring "
     "stage; realistic acoustic instruments: violins, cellos, French horns, "
@@ -48,15 +42,33 @@ OPERASYNTH = (
     "fused with a deep analog synthesizer pulse; realistic strings and "
     "brass carry the melody over an electronic bass heartbeat, cinematic "
     "hybrid production, epic and theatrical")
+FILMSYNTH = (
+    "Epic hybrid film score, live symphony orchestra on a scoring stage "
+    "layered with a deep analog synthesizer pulse; realistic violins, "
+    "cellos, French horns and timpani carry the heroic theme over "
+    "electronic bass and subtle synthetic percussion, dynamic crescendos, "
+    "warm hall reverb, modern trailer production, instrumental")
 
+# Exploration verdict (user): film score 0.20 and operatic synthony 0.20 won
+# over the opera-choir captions and the 0.10 retention takes. Iterate around
+# the winners: seed re-rolls (raw corr 0.40 between seeds — the big lever at
+# low retention), a tighter 0.25-retention take (5 denoise steps vs 6), and
+# a hybrid caption merging both winners.
 # (key, cover_noise_strength, audio_cover_strength, caption, seed)
 VARIANTS = [
-    ("opera_n020", 0.20, 1.0, OPERA, SEED),
-    ("opera_n010", 0.10, 1.0, OPERA, SEED),
-    ("opera_n020_alt", 0.20, 1.0, OPERA, 1337),
+    # winners (kept; skip-idempotent)
     ("filmscore_n020", 0.20, 1.0, FILMSCORE, SEED),
-    ("filmscore_n010", 0.10, 1.0, FILMSCORE, SEED),
     ("operasynth_n020", 0.20, 1.0, OPERASYNTH, SEED),
+    # seed re-rolls of each winner
+    ("filmscore_n020_s1337", 0.20, 1.0, FILMSCORE, 1337),
+    ("filmscore_n020_s9001", 0.20, 1.0, FILMSCORE, 9001),
+    ("operasynth_n020_s1337", 0.20, 1.0, OPERASYNTH, 1337),
+    ("operasynth_n020_s9001", 0.20, 1.0, OPERASYNTH, 9001),
+    # tighter melody (0.25 -> starts t=0.75, 5 steps)
+    ("filmscore_n025", 0.25, 1.0, FILMSCORE, SEED),
+    ("operasynth_n025", 0.25, 1.0, OPERASYNTH, SEED),
+    # hybrid of the two winning captions
+    ("filmsynth_n020", 0.20, 1.0, FILMSYNTH, SEED),
 ]
 
 

@@ -21,33 +21,40 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ab_template
 
 SONGS = {
     "genres": {
-        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; operatic symphony exploration',
-        "title": "Track 30 &mdash; operatic symphony A/B",
+        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; film score / operatic synthony iteration',
+        "title": "Track 30 &mdash; winner iteration A/B",
         "loop_seconds": 113.669048,
         # trim to one pass so the page stays under the 16 MB cap
         "trim_seconds": 113.669048,
-        "sub": ("Exploration round: low retention (melody 0.10-0.20, where "
-                "the caption has real power), captions pushing realistic "
-                "acoustic instruments with operatic character. Seed 4242 "
-                "unless noted. One loop pass each (113.7&nbsp;s). Switching "
-                "tracks keeps the playhead."),
+        "bitrate": "56k",  # 11 tracks; keep the page under the cap
+        "sub": ("Iterating on the two winners (film score 0.20, operatic "
+                "synthony 0.20): seed re-rolls, a tighter melody-0.25 take, "
+                "and a hybrid caption merging both. Seed 4242 unless noted. "
+                "One loop pass each (113.7&nbsp;s). Switching tracks keeps "
+                "the playhead."),
         "tracks": [
             ("classic", "Classic OPL", os.path.join(CLASSICDIR, "hdmusic_30_x2.wav"),
              "render_music reference"),
             ("landed", "Landed HD (faithful)", os.path.join(VARIANTSDIR, "hdmusic_30.acestep.ogg"),
              "the installed melody-0.80 remix, for calibration"),
-            ("opera_n020", "Operatic symphony &middot; melody 0.20", os.path.join(GENRES, "t30_opera_n020.flac"),
-             "live orchestra + wordless operatic choir, concert hall"),
-            ("opera_n010", "Operatic symphony &middot; melody 0.10", os.path.join(GENRES, "t30_opera_n010.flac"),
-             "same caption, maximum style freedom"),
-            ("opera_n020_alt", "Operatic symphony &middot; 0.20 &middot; seed 1337", os.path.join(GENRES, "t30_opera_n020_alt.flac"),
-             "alternate take of the same recipe"),
-            ("filmscore_n020", "Film score &middot; melody 0.20", os.path.join(GENRES, "t30_filmscore_n020.flac"),
-             "scoring-stage orchestra, realistic acoustic instruments, no choir"),
-            ("filmscore_n010", "Film score &middot; melody 0.10", os.path.join(GENRES, "t30_filmscore_n010.flac"),
-             "same caption, maximum style freedom"),
-            ("operasynth_n020", "Operatic synthony &middot; melody 0.20", os.path.join(GENRES, "t30_operasynth_n020.flac"),
+            ("filmscore_n020", "Film score &middot; 0.20 (winner)", os.path.join(GENRES, "t30_filmscore_n020.flac"),
+             "scoring-stage orchestra, realistic acoustic instruments"),
+            ("filmscore_n020_s1337", "Film score &middot; 0.20 &middot; seed 1337", os.path.join(GENRES, "t30_filmscore_n020_s1337.flac"),
+             "alternate take"),
+            ("filmscore_n020_s9001", "Film score &middot; 0.20 &middot; seed 9001", os.path.join(GENRES, "t30_filmscore_n020_s9001.flac"),
+             "alternate take"),
+            ("filmscore_n025", "Film score &middot; 0.25 (tighter)", os.path.join(GENRES, "t30_filmscore_n025.flac"),
+             "5 denoise steps instead of 6 — closer to the original"),
+            ("operasynth_n020", "Operatic synthony &middot; 0.20 (winner)", os.path.join(GENRES, "t30_operasynth_n020.flac"),
              "real orchestra + choir over an analog synth pulse"),
+            ("operasynth_n020_s1337", "Operatic synthony &middot; 0.20 &middot; seed 1337", os.path.join(GENRES, "t30_operasynth_n020_s1337.flac"),
+             "alternate take"),
+            ("operasynth_n020_s9001", "Operatic synthony &middot; 0.20 &middot; seed 9001", os.path.join(GENRES, "t30_operasynth_n020_s9001.flac"),
+             "alternate take"),
+            ("operasynth_n025", "Operatic synthony &middot; 0.25 (tighter)", os.path.join(GENRES, "t30_operasynth_n025.flac"),
+             "5 denoise steps instead of 6 — closer to the original"),
+            ("filmsynth_n020", "Hybrid film-score + synth &middot; 0.20", os.path.join(GENRES, "t30_filmsynth_n020.flac"),
+             "merges both winning captions: realistic orchestra over electronic pulse"),
         ],
     },
     "30": {
@@ -108,11 +115,11 @@ SONGS = {
 }
 
 
-def encode_opus(path: str, trim=None) -> bytes:
+def encode_opus(path: str, trim=None, bitrate="64k") -> bytes:
     cmd = ["ffmpeg", "-v", "error", "-i", path]
     if trim:
         cmd += ["-t", f"{trim:.6f}"]
-    cmd += ["-c:a", "libopus", "-b:a", "64k", "-f", "ogg", "-"]
+    cmd += ["-c:a", "libopus", "-b:a", bitrate, "-f", "ogg", "-"]
     p = subprocess.run(cmd, capture_output=True, check=True)
     return p.stdout
 
@@ -141,7 +148,8 @@ def main() -> None:
             print(f"skip (missing): {path}", file=sys.stderr)
             continue
         print(f"encoding {tid}...", flush=True)
-        data = base64.b64encode(encode_opus(path, cfg.get("trim_seconds"))).decode("ascii")
+        data = base64.b64encode(encode_opus(
+            path, cfg.get("trim_seconds"), cfg.get("bitrate", "64k"))).decode("ascii")
         tracks.append({
             "id": tid, "label": label, "note": note,
             "loudness": loudness(path), "b64": data,

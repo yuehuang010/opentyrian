@@ -200,6 +200,13 @@ same-family orchestral captions differ only modestly (0.94-0.95).
 Same A/B artifact updated with: classic, landed-HD reference, the six
 exploration variants. Awaiting verdict.
 
+**Round-2 verdict (user):** film score 0.20 and operatic synthony 0.20 won;
+opera-choir captions and the 0.10 takes dropped (samples deleted). Iteration
+round rendered around the winners: seed re-rolls (1337/9001 — corr vs
+classic 0.52-0.59, all healthy), tighter melody 0.25 takes (5 steps,
+corr 0.62), and a filmsynth hybrid caption merging both winners (0.62).
+Same artifact updated (11 tracks, opus 56k to fit the cap). Awaiting verdict.
+
 ## Open questions for the verdict
 
 - Does any cover beat "enhanced classic" (path 1) on ensemble coherence?
