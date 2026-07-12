@@ -152,7 +152,9 @@ cmd_classic() {
 		meta_args=(-metadata "LOOPSTART=$loopstart" -metadata "LOOPLENGTH=$looplength")
 	fi
 
-	ffmpeg -y -loglevel error -i "$wav" -c:a libvorbis -qscale:a 6 "${meta_args[@]}" "$out"
+	# ${arr[@]+...} guard: bash 3.2's set -u errors on expanding an empty
+	# array (non-looping songs write no .loop file, leaving meta_args empty)
+	ffmpeg -y -loglevel error -i "$wav" -c:a libvorbis -qscale:a 6 ${meta_args[@]+"${meta_args[@]}"} "$out"
 	echo "wrote $out"
 }
 
