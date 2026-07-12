@@ -1,0 +1,253 @@
+<title>__PAGE_TITLE__</title>
+<style>
+:root {
+	--bg: #15141a;
+	--panel: #1e1c25;
+	--panel-edge: #2b2833;
+	--text: #eae7e1;
+	--muted: #8d8896;
+	--accent: #c05a8e;
+	--accent-soft: rgba(192, 90, 142, 0.16);
+	--chip: #d9a544;
+	--chip-soft: rgba(217, 165, 68, 0.16);
+}
+@media (prefers-color-scheme: light) {
+	:root {
+		--bg: #f5f2ec;
+		--panel: #fdfcf9;
+		--panel-edge: #e3ded4;
+		--text: #26222c;
+		--muted: #6f6a78;
+		--accent: #a03a6f;
+		--accent-soft: rgba(160, 58, 111, 0.12);
+		--chip: #a87718;
+		--chip-soft: rgba(168, 119, 24, 0.14);
+	}
+}
+:root[data-theme="dark"] {
+	--bg: #15141a; --panel: #1e1c25; --panel-edge: #2b2833; --text: #eae7e1;
+	--muted: #8d8896; --accent: #c05a8e; --accent-soft: rgba(192,90,142,0.16);
+	--chip: #d9a544; --chip-soft: rgba(217,165,68,0.16);
+}
+:root[data-theme="light"] {
+	--bg: #f5f2ec; --panel: #fdfcf9; --panel-edge: #e3ded4; --text: #26222c;
+	--muted: #6f6a78; --accent: #a03a6f; --accent-soft: rgba(160,58,111,0.12);
+	--chip: #a87718; --chip-soft: rgba(168,119,24,0.14);
+}
+html, body { background: var(--bg); color: var(--text); }
+body {
+	font: 15px/1.5 "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+	max-width: 720px; margin: 0 auto; padding: 32px 20px 60px;
+}
+h1 { font-size: 21px; font-weight: 600; margin: 0 0 4px; text-wrap: balance; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+.card {
+	background: var(--panel); border: 1px solid var(--panel-edge);
+	border-radius: 10px; padding: 16px; margin-bottom: 20px;
+}
+.transport { display: flex; align-items: center; gap: 14px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+#play {
+	width: 52px; height: 52px; border-radius: 50%; border: none; flex: none;
+	background: var(--accent); color: #fff; font-size: 20px;
+}
+#play:focus-visible, .trk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.timewrap { flex: 1; min-width: 0; }
+#timeline {
+	width: 100%; height: 44px; display: block; cursor: pointer;
+	border-radius: 6px; background: var(--bg);
+}
+.readout {
+	display: flex; justify-content: space-between; margin-top: 6px;
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.hint { color: var(--muted); font-size: 12px; margin: 10px 2px 0; }
+kbd {
+	font-family: ui-monospace, monospace; font-size: 11px;
+	border: 1px solid var(--panel-edge); border-bottom-width: 2px;
+	border-radius: 4px; padding: 0 5px; background: var(--panel);
+}
+.tracks { display: flex; flex-direction: column; gap: 8px; }
+.trk {
+	display: flex; align-items: baseline; gap: 12px; text-align: left;
+	background: var(--panel); border: 1px solid var(--panel-edge);
+	border-radius: 8px; padding: 10px 14px; width: 100%;
+}
+.trk.active { border-color: var(--accent); background: var(--accent-soft); }
+.trk.active.is-classic { border-color: var(--chip); background: var(--chip-soft); }
+.trk .key {
+	font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted);
+	flex: none; width: 14px;
+}
+.trk .label { font-weight: 600; flex: none; }
+.trk.is-classic .label { color: var(--chip); }
+.trk:not(.is-classic) .label { color: var(--accent); }
+.trk .note { color: var(--muted); font-size: 12.5px; flex: 1; min-width: 0; }
+.trk .loud {
+	font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted);
+	flex: none; font-variant-numeric: tabular-nums;
+}
+.status { color: var(--muted); font-size: 13px; }
+@media (max-width: 560px) {
+	.trk { flex-wrap: wrap; gap: 4px 12px; }
+	.trk .note { flex-basis: 100%; }
+}
+</style>
+
+<h1>__H1__</h1>
+<p class="sub">__SUB__</p>
+
+<div class="card">
+	<div class="transport">
+		<button id="play" aria-label="Play or pause">&#9654;</button>
+		<div class="timewrap">
+			<canvas id="timeline" height="44"></canvas>
+			<div class="readout"><span id="tcur">0:00.0</span><span id="tdur">&ndash;:&ndash;&ndash;</span></div>
+		</div>
+	</div>
+	<p class="hint"><kbd>space</kbd> play/pause &middot; <kbd>1</kbd>&ndash;<kbd>9</kbd> switch track &middot;
+	<kbd>&larr;</kbd>/<kbd>&rarr;</kbd> seek 5&nbsp;s &middot; <kbd>L</kbd> jump to loop seam</p>
+</div>
+
+<div class="tracks" id="tracks"></div>
+<p class="status" id="status">Decoding embedded audio&hellip;</p>
+
+<script>
+"use strict";
+const TRACKS = /*__TRACKS_JSON__*/[];
+const LOOP_SECONDS = /*__LOOP_SECONDS__*/0;
+const AUDIO_B64 = {};
+/*__AUDIO_B64__*/
+
+const els = {}, audios = {};
+let current = null, raf = 0;
+
+function fmt(t) {
+	if (!isFinite(t)) return "\u2013:\u2013\u2013";
+	const m = Math.floor(t / 60), s = (t - m * 60);
+	return m + ":" + (s < 10 ? "0" : "") + s.toFixed(1);
+}
+
+function makeAudio(id) {
+	const bin = atob(AUDIO_B64[id]);
+	const buf = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+	const a = new Audio(URL.createObjectURL(new Blob([buf], { type: "audio/ogg" })));
+	a.preload = "auto";
+	return a;
+}
+
+function drawTimeline() {
+	const c = document.getElementById("timeline");
+	const dpr = window.devicePixelRatio || 1;
+	const w = c.clientWidth, h = 44;
+	c.width = w * dpr; c.height = h * dpr;
+	const g = c.getContext("2d");
+	g.scale(dpr, dpr);
+	const css = getComputedStyle(document.documentElement);
+	const dur = audios[current] && isFinite(audios[current].duration) ? audios[current].duration : NaN;
+	g.clearRect(0, 0, w, h);
+	g.fillStyle = css.getPropertyValue("--panel-edge");
+	g.fillRect(0, h / 2 - 2, w, 4);
+	if (isFinite(dur)) {
+		const seamX = (LOOP_SECONDS / dur) * w;
+		g.fillStyle = css.getPropertyValue("--muted");
+		g.beginPath();
+		g.moveTo(seamX, h / 2 - 9); g.lineTo(seamX + 4, h / 2);
+		g.lineTo(seamX, h / 2 + 9); g.lineTo(seamX - 4, h / 2);
+		g.closePath(); g.fill();
+		const x = (audios[current].currentTime / dur) * w;
+		const isClassic = current === "classic";
+		g.fillStyle = css.getPropertyValue(isClassic ? "--chip" : "--accent");
+		g.fillRect(0, h / 2 - 2, x, 4);
+		g.beginPath(); g.arc(x, h / 2, 7, 0, 7); g.fill();
+	}
+	document.getElementById("tcur").textContent = fmt(audios[current] ? audios[current].currentTime : 0);
+	document.getElementById("tdur").textContent = fmt(dur);
+}
+
+function tick() { drawTimeline(); raf = requestAnimationFrame(tick); }
+
+function setPlayIcon() {
+	const a = audios[current];
+	document.getElementById("play").textContent = (a && !a.paused) ? "\u275A\u275A" : "\u25B6";
+}
+
+function select(id) {
+	if (id === current) return;
+	const prev = current ? audios[current] : null;
+	const next = audios[id];
+	if (prev) {
+		next.currentTime = prev.currentTime;
+		if (!prev.paused) { next.play(); }
+		prev.pause();
+	}
+	current = id;
+	document.querySelectorAll(".trk").forEach(b =>
+		b.classList.toggle("active", b.dataset.id === id));
+	setPlayIcon();
+	drawTimeline();
+}
+
+function togglePlay() {
+	const a = audios[current];
+	if (!a) return;
+	if (a.paused) a.play(); else a.pause();
+	setPlayIcon();
+}
+
+function seek(dt) {
+	const a = audios[current];
+	if (!a || !isFinite(a.duration)) return;
+	a.currentTime = Math.max(0, Math.min(a.duration - 0.05, a.currentTime + dt));
+	drawTimeline();
+}
+
+function init() {
+	const wrap = document.getElementById("tracks");
+	TRACKS.forEach((t, i) => {
+		audios[t.id] = makeAudio(t.id);
+		audios[t.id].addEventListener("ended", setPlayIcon);
+		const b = document.createElement("button");
+		b.className = "trk" + (t.id === "classic" ? " is-classic" : "");
+		b.dataset.id = t.id;
+		b.innerHTML = '<span class="key">' + (i + 1) + '</span>' +
+			'<span class="label"></span><span class="note"></span><span class="loud"></span>';
+		b.querySelector(".label").textContent = t.label;
+		b.querySelector(".note").textContent = t.note;
+		b.querySelector(".loud").textContent = t.loudness;
+		b.addEventListener("click", () => select(t.id));
+		wrap.appendChild(b);
+	});
+	current = TRACKS[0].id;
+	document.querySelector(".trk").classList.add("active");
+	document.getElementById("status").textContent =
+		TRACKS.length + " tracks embedded \u00B7 nothing leaves this page";
+
+	document.getElementById("play").addEventListener("click", togglePlay);
+	document.getElementById("timeline").addEventListener("click", e => {
+		const a = audios[current];
+		if (!a || !isFinite(a.duration)) return;
+		const r = e.currentTarget.getBoundingClientRect();
+		a.currentTime = ((e.clientX - r.left) / r.width) * a.duration;
+		drawTimeline();
+	});
+	document.addEventListener("keydown", e => {
+		if (e.key === " ") { e.preventDefault(); togglePlay(); }
+		else if (e.key === "ArrowLeft") seek(-5);
+		else if (e.key === "ArrowRight") seek(5);
+		else if (e.key.toLowerCase() === "l") {
+			const a = audios[current];
+			if (a) { a.currentTime = LOOP_SECONDS - 4; drawTimeline(); }
+		}
+		else if (e.key >= "1" && e.key <= "9") {
+			const t = TRACKS[+e.key - 1];
+			if (t) select(t.id);
+		}
+	});
+	window.addEventListener("resize", drawTimeline);
+	tick();
+}
+init();
+</script>

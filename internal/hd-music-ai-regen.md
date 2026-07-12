@@ -20,7 +20,7 @@ control.
   lyrics="[Instrumental]", audio_cover_strength=0..1)`; strength 1.0 =
   tightest adherence to source structure. Docs: `docs/en/INFERENCE.md`.
 
-## Spike scripts (in gitignored `hdmusic_work/acestep/`, worktree ai-music-regeneration)
+## Spike scripts (landed in `tools/acestep/` — see its README; originals were in gitignored `hdmusic_work/acestep/`)
 
 - `run_cover.py` / `run_cover_batch.py` — headless cover renders, single model
   load for a batch. Run from the ACE-Step repo root:
@@ -129,7 +129,7 @@ Track-18 verdict: user prefers melody 0.80 ("the more I listen, the more I
 prefer" it); **recipe locked: cover, torch/MPS, noise 0.80, seed 4242,
 generic orchestral caption.**
 
-- `hdmusic_work/acestep/render_all.py` (run under the ACE-Step venv) rendered
+- `tools/acestep/render_all.py` (run under the ACE-Step venv) rendered
   ALL 41 songs: classic render -> loop-aware cover source (full + looped
   region; single pass for the 6 non-looping jingles 10/11/19/25/31/34) ->
   cover -> cut to one pass, 44.1 kHz stereo, mean-volume-matched to classic,
