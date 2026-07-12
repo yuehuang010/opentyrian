@@ -123,6 +123,35 @@ If the ear verdict matches the numbers, knobs to try: noise 0.9, a
 tempo/genre-matched caption (driving synth/rock rather than orchestral),
 other seeds.
 
+## Recipe locked + full-soundtrack render + in-game A/B (2026-07-11)
+
+Track-18 verdict: user prefers melody 0.80 ("the more I listen, the more I
+prefer" it); **recipe locked: cover, torch/MPS, noise 0.80, seed 4242,
+generic orchestral caption.**
+
+- `hdmusic_work/acestep/render_all.py` (run under the ACE-Step venv) rendered
+  ALL 41 songs: classic render -> loop-aware cover source (full + looped
+  region; single pass for the 6 non-looping jingles 10/11/19/25/31/34) ->
+  cover -> cut to one pass, 44.1 kHz stereo, mean-volume-matched to classic,
+  LOOPSTART/LOOPLENGTH tags -> `variants/hdmusic_NN.acestep.ogg`. Fixed en
+  route: pipeline classic cmd errored on non-looping songs under bash 3.2
+  (empty-array expansion, `6b9296c`).
+- All 41 **installed** into the shared tyrian21 DATA_DIR (previous
+  enhanced-classic oggs backed up in this worktree's `hdmusic_work/backup/`;
+  `hd_music_pipeline.sh restore <NN>` reverses). Format verified against the
+  engine's requirements (2ch/44100, vorbis stream comments).
+- **Jukebox H key** (`1e531c5`) A/Bs HD remix vs classic OPL synth live, with
+  an [HD]/[OPL] indicator (`hd_music_playing()` accessor).
+
+Envelope corr vs classic per song (recipe determinism confirmed: track 30
+re-rendered at 0.688 vs 0.686 in the sweep). Suspect outliers worth a re-roll
+(different seed or genre-matched caption): **6 Deli Shop Quartet (-0.15),
+22 Come Back again to Savara (-0.09)**, then 36 Sarah's Song (0.42),
+37 A Field for Mag (0.43), 18 Tyrian The Level (0.47), 17 Tunneling Trolls
+(0.53). Best: 5 (0.98), 10 (0.95), 27 (0.95), 32 (0.93), 40 (0.91).
+Full table in the render log; large negative gains (31/32/40, -11..-14 dB)
+are quiet ambient classics the cover rendered hot.
+
 ## Open questions for the verdict
 
 - Does any cover beat "enhanced classic" (path 1) on ensemble coherence?
