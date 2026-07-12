@@ -21,40 +21,34 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ab_template
 
 SONGS = {
     "genres": {
-        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; film score / operatic synthony iteration',
-        "title": "Track 30 &mdash; winner iteration A/B",
+        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; bass-drop rescue',
+        "title": "Track 30 &mdash; bass-drop rescue A/B",
         "loop_seconds": 113.669048,
         # trim to one pass so the page stays under the 16 MB cap
         "trim_seconds": 113.669048,
-        "bitrate": "56k",  # 11 tracks; keep the page under the cap
-        "sub": ("Iterating on the two winners (film score 0.20, operatic "
-                "synthony 0.20): seed re-rolls, a tighter melody-0.25 take, "
-                "and a hybrid caption merging both. Seed 4242 unless noted. "
-                "One loop pass each (113.7&nbsp;s). Switching tracks keeps "
-                "the playhead."),
+        "sub": ("The classic slams into full bass at ~22.2&nbsp;s; the "
+                "low-retention covers smear it. Rescue attempts: source "
+                "pre-emphasis (duck &minus;6&nbsp;dB before the drop / boost "
+                "+4&nbsp;dB after) and caption dynamics language. Listen "
+                "around 18&ndash;26&nbsp;s. Seed 4242 throughout. One loop "
+                "pass each; switching tracks keeps the playhead."),
         "tracks": [
             ("classic", "Classic OPL", os.path.join(CLASSICDIR, "hdmusic_30_x2.wav"),
-             "render_music reference"),
-            ("landed", "Landed HD (faithful)", os.path.join(VARIANTSDIR, "hdmusic_30.acestep.ogg"),
-             "the installed melody-0.80 remix, for calibration"),
-            ("filmscore_n020", "Film score &middot; 0.20 (winner)", os.path.join(GENRES, "t30_filmscore_n020.flac"),
-             "scoring-stage orchestra, realistic acoustic instruments"),
-            ("filmscore_n020_s1337", "Film score &middot; 0.20 &middot; seed 1337", os.path.join(GENRES, "t30_filmscore_n020_s1337.flac"),
-             "alternate take"),
-            ("filmscore_n020_s9001", "Film score &middot; 0.20 &middot; seed 9001", os.path.join(GENRES, "t30_filmscore_n020_s9001.flac"),
-             "alternate take"),
-            ("filmscore_n025", "Film score &middot; 0.25 (tighter)", os.path.join(GENRES, "t30_filmscore_n025.flac"),
-             "5 denoise steps instead of 6 — closer to the original"),
-            ("operasynth_n020", "Operatic synthony &middot; 0.20 (winner)", os.path.join(GENRES, "t30_operasynth_n020.flac"),
-             "real orchestra + choir over an analog synth pulse"),
-            ("operasynth_n020_s1337", "Operatic synthony &middot; 0.20 &middot; seed 1337", os.path.join(GENRES, "t30_operasynth_n020_s1337.flac"),
-             "alternate take"),
-            ("operasynth_n020_s9001", "Operatic synthony &middot; 0.20 &middot; seed 9001", os.path.join(GENRES, "t30_operasynth_n020_s9001.flac"),
-             "alternate take"),
-            ("operasynth_n025", "Operatic synthony &middot; 0.25 (tighter)", os.path.join(GENRES, "t30_operasynth_n025.flac"),
-             "5 denoise steps instead of 6 — closer to the original"),
-            ("filmsynth_n020", "Hybrid film-score + synth &middot; 0.20", os.path.join(GENRES, "t30_filmsynth_n020.flac"),
-             "merges both winning captions: realistic orchestra over electronic pulse"),
+             "render_music reference — the drop lands at 22.2 s"),
+            ("filmscore_n020", "Film score &middot; 0.20 (winner, has the issue)", os.path.join(GENRES, "t30_filmscore_n020.flac"),
+             "unmodified winner for comparison"),
+            ("filmscore_n020_duck", "Film score &middot; duck before drop", os.path.join(GENRES, "t30_filmscore_n020_duck.flac"),
+             "source dimmed -6 dB at 18-22.1 s so the slam reads louder"),
+            ("filmscore_n020_boost", "Film score &middot; boost after drop", os.path.join(GENRES, "t30_filmscore_n020_boost.flac"),
+             "source +4 dB at 22.1-24.5 s"),
+            ("filmscore_n020_dropcap", "Film score &middot; drop in caption", os.path.join(GENRES, "t30_filmscore_n020_dropcap.flac"),
+             "caption asks for heavy bass drop + dynamic contrast"),
+            ("operasynth_n020", "Operatic synthony &middot; 0.20 (winner, has the issue)", os.path.join(GENRES, "t30_operasynth_n020.flac"),
+             "unmodified winner for comparison"),
+            ("operasynth_n020_duck", "Operatic synthony &middot; duck before drop", os.path.join(GENRES, "t30_operasynth_n020_duck.flac"),
+             "source dimmed -6 dB at 18-22.1 s"),
+            ("operasynth_n020_dropcap", "Operatic synthony &middot; drop in caption", os.path.join(GENRES, "t30_operasynth_n020_dropcap.flac"),
+             "caption asks for heavy bass drop + dynamic contrast"),
         ],
     },
     "30": {

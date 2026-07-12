@@ -207,6 +207,18 @@ classic 0.52-0.59, all healthy), tighter melody 0.25 takes (5 steps,
 corr 0.62), and a filmsynth hybrid caption merging both winners (0.62).
 Same artifact updated (11 tracks, opus 56k to fit the cap). Awaiting verdict.
 
+**Bass-drop bug (user, all low-retention takes incl. winners):** the classic
+slams into full bass at ~22.2 s (user heard "~23 s"); the covers smear it —
+measured: covers' pre-drop low band (<200 Hz) is ~57 dB vs classic's 70,
+i.e. the regeneration thins the intro bass and softens the transition.
+Rescue attempts rendered (render_genres.py gained a per-variant `src_af`
+ffmpeg-filter hook to pre-emphasize the source): duck -6 dB before the
+drop (jump +20 dB vs winner's +14), boost +4 dB after (post level 74 dB =
+classic's 73.5), and caption dynamics language (no measurable change).
+Lesson: **structural dynamics that must survive low retention can be
+pre-emphasized in the cover source** — the exaggerated cue survives the
+6-step regeneration. Awaiting ear verdict on which rescue feels right.
+
 ## Open questions for the verdict
 
 - Does any cover beat "enhanced classic" (path 1) on ensemble coherence?

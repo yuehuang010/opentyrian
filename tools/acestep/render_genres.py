@@ -49,26 +49,36 @@ FILMSYNTH = (
     "electronic bass and subtle synthetic percussion, dynamic crescendos, "
     "warm hall reverb, modern trailer production, instrumental")
 
-# Exploration verdict (user): film score 0.20 and operatic synthony 0.20 won
-# over the opera-choir captions and the 0.10 retention takes. Iterate around
-# the winners: seed re-rolls (raw corr 0.40 between seeds — the big lever at
-# low retention), a tighter 0.25-retention take (5 denoise steps vs 6), and
-# a hybrid caption merging both winners.
-# (key, cover_noise_strength, audio_cover_strength, caption, seed)
+FILMSCORE_DROP = FILMSCORE.replace(
+    ", instrumental",
+    "; dramatic buildup into a heavy bass drop, hard-hitting low end, "
+    "strong dynamic contrast between sections, instrumental")
+OPERASYNTH_DROP = (OPERASYNTH +
+    "; dramatic buildup into a heavy bass drop, hard-hitting low end, "
+    "strong dynamic contrast between sections")
+
+# User bug report: the classic slams into full bass at ~22.2s (the "drop");
+# all low-retention covers smear it. Countermeasure: pre-emphasize the
+# event in the cover source so the exaggerated dynamics survive the
+# regeneration. Times cover both loop passes (second = t + 113.669048).
+DUCK_PRE_DROP = ("volume=volume=0.5:enable="
+                 "'between(t,18.0,22.12)+between(t,131.67,135.79)'")
+BOOST_DROP = ("volume=volume=1.6:enable="
+              "'between(t,22.12,24.5)+between(t,135.79,138.17)'")
+
+# (key, cover_noise_strength, audio_cover_strength, caption, seed, src_af)
+# src_af: optional ffmpeg audio filter applied to the cover source.
 VARIANTS = [
     # winners (kept; skip-idempotent)
-    ("filmscore_n020", 0.20, 1.0, FILMSCORE, SEED),
-    ("operasynth_n020", 0.20, 1.0, OPERASYNTH, SEED),
-    # seed re-rolls of each winner
-    ("filmscore_n020_s1337", 0.20, 1.0, FILMSCORE, 1337),
-    ("filmscore_n020_s9001", 0.20, 1.0, FILMSCORE, 9001),
-    ("operasynth_n020_s1337", 0.20, 1.0, OPERASYNTH, 1337),
-    ("operasynth_n020_s9001", 0.20, 1.0, OPERASYNTH, 9001),
-    # tighter melody (0.25 -> starts t=0.75, 5 steps)
-    ("filmscore_n025", 0.25, 1.0, FILMSCORE, SEED),
-    ("operasynth_n025", 0.25, 1.0, OPERASYNTH, SEED),
-    # hybrid of the two winning captions
-    ("filmsynth_n020", 0.20, 1.0, FILMSYNTH, SEED),
+    ("filmscore_n020", 0.20, 1.0, FILMSCORE, SEED, None),
+    ("operasynth_n020", 0.20, 1.0, OPERASYNTH, SEED, None),
+    # drop rescue: source pre-emphasis
+    ("filmscore_n020_duck", 0.20, 1.0, FILMSCORE, SEED, DUCK_PRE_DROP),
+    ("operasynth_n020_duck", 0.20, 1.0, OPERASYNTH, SEED, DUCK_PRE_DROP),
+    ("filmscore_n020_boost", 0.20, 1.0, FILMSCORE, SEED, BOOST_DROP),
+    # drop rescue: caption dynamics language, plain source
+    ("filmscore_n020_dropcap", 0.20, 1.0, FILMSCORE_DROP, SEED, None),
+    ("operasynth_n020_dropcap", 0.20, 1.0, OPERASYNTH_DROP, SEED, None),
 ]
 
 
@@ -166,14 +176,23 @@ def main():
     if not ok:
         sys.exit(1)
 
-    for key, noise, cover_strength, caption, seed in VARIANTS:
+    for key, noise, cover_strength, caption, seed, src_af in VARIANTS:
         flac = os.path.join(OUT, f"t{nn:02d}_{key}.flac")
         if os.path.exists(flac):
             print(f"[skip] {key}: exists", flush=True)
             continue
+        variant_src = src
+        if src_af:
+            variant_src = os.path.join(CLASSIC, f"hdmusic_{nn:02d}_x2_{key}.wav")
+            if not os.path.exists(variant_src):
+                p = run(["ffmpeg", "-y", "-v", "error", "-i", src,
+                         "-af", src_af, variant_src])
+                if p.returncode != 0:
+                    print(f"[error] {key}: src filter failed: {p.stderr.strip()[-200:]}", flush=True)
+                    continue
         params = GenerationParams(
             task_type="cover",
-            src_audio=src,
+            src_audio=variant_src,
             caption=caption,
             lyrics="[Instrumental]",
             audio_cover_strength=cover_strength,
