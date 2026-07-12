@@ -531,6 +531,14 @@ void refresh_current_song(void)
 		stop_song();
 }
 
+// Read-only peek at hd_active for UI (e.g. the jukebox's [HD]/[OPL] indicator).
+// A plain bool read racing the audio thread's writes is fine here -- same as
+// the other shared playback flags (playing, songlooped, etc.).
+bool hd_music_playing(void)
+{
+	return hd_active;
+}
+
 // Reloads the sound-effect/voice banks so a runtime hd_sfx change takes effect
 // immediately. Held under the audio lock, and any in-flight channels are
 // silenced first, because loadSndFile() frees and reallocates the sample

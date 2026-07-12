@@ -46,6 +46,10 @@ void fade_song(void);
 
 // Apply a runtime hd_music / hd_sfx toggle immediately (see loudness.c).
 void refresh_current_song(void);
+// True if the currently-playing track is actually being decoded from the HD
+// OGG (as opposed to the LDS/OPL2 synth, whether because hd_music is off or
+// because this song has no HD rendition -- per-song fallback).
+bool hd_music_playing(void);
 void reload_sound_samples(bool xmas);
 
 void set_volume(Uint8 musicVolume, Uint8 sampleVolume);

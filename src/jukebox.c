@@ -100,16 +100,18 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 		if (!hide_text)
 		{
 			char buffer[60];
-			
+
 			if (fx)
 				snprintf(buffer, sizeof(buffer), "%d %s", fx_num + 1, soundTitle[fx_num]);
 			else
-				snprintf(buffer, sizeof(buffer), "%d %s", song_playing + 1, musicTitle[song_playing]);
-			
+				snprintf(buffer, sizeof(buffer), "%d %s [%s]", song_playing + 1, musicTitle[song_playing],
+				         hd_music_playing() ? "HD" : "OPL");
+
 			const int x = VGAScreen->w / 2;
-			
-			drawFontHvAligned(VGAScreen, x, 170, "Press ESC to quit the jukebox.",           FONT_SMALL, ALIGN_CENTER, 1, 0);
-			drawFontHvAligned(VGAScreen, x, 180, "Arrow keys change the song being played.", FONT_SMALL, ALIGN_CENTER, 1, 0);
+
+			drawFontHvAligned(VGAScreen, x, 163, "Press ESC to quit the jukebox.",           FONT_SMALL, ALIGN_CENTER, 1, 0);
+			drawFontHvAligned(VGAScreen, x, 172, "Arrow keys change the song being played.", FONT_SMALL, ALIGN_CENTER, 1, 0);
+			drawFontHvAligned(VGAScreen, x, 181, "H toggles HD remix / classic synth.",       FONT_SMALL, ALIGN_CENTER, 1, 0);
 			drawFontHvAligned(VGAScreen, x, 190, buffer,                                     FONT_SMALL, ALIGN_CENTER, 1, 4);
 		}
 
@@ -145,6 +147,11 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 			case SDL_SCANCODE_N:
 			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_N):
 				fade_looped_songs = !fade_looped_songs;
+				break;
+			case SDL_SCANCODE_H:
+			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_H):
+				hd_music = !hd_music;
+				refresh_current_song();
 				break;
 			case SDL_SCANCODE_V:
 			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_V):
