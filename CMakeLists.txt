@@ -155,28 +155,58 @@ if(NOT WIN32)
     target_link_libraries(opentyrian PRIVATE m)
 endif()
 
-# --- HD-asset target ----------------------------------------------------------
-# Wraps tools/hd_build.py, the cross-platform orchestrator for the HD asset
+# --- HD-asset targets ---------------------------------------------------------
+# Drives tools/hd_build.py, the cross-platform orchestrator for the HD asset
 # extraction + bundling pipeline (writes tyrian.base / tyrian.hd). Owned by
 # a different track of work; we only invoke it here.
+#
+# Rather than one opaque target that shells out to the whole pipeline, each
+# pipeline step gets its own target (`hd_build.py --only <step>`), so the build
+# tool schedules them: the extraction steps are mutually independent and run
+# concurrently under `--parallel`, and `bundle` is serialized after all of them.
+# `hd-assets` stays the documented user-facing entry point.
+#
+# Note: the step targets deliberately do NOT use USES_TERMINAL. Ninja maps that
+# onto the `console` pool, which has depth 1 -- it would serialize every step
+# and defeat the whole point. Output is buffered and printed per step instead
+# (which is what hd_build.py does internally anyway).
 find_package(Python3 COMPONENTS Interpreter QUIET)
 option(OPENTYRIAN_BUILD_HD_ASSETS "Build the HD asset paks as part of the default build" OFF)
 if(Python3_Interpreter_FOUND)
+    set(HD_BUILD_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/tools/hd_build.py)
+
+    # The default (non-opt-in) extraction steps, per `hd_build.py --list`. The
+    # opt-in `tiles` / `sfx` steps are not part of the default pipeline.
+    set(HD_EXTRACT_STEPS backdrops comp filter font anim music)
+
+    set(HD_EXTRACT_TARGETS "")
+    foreach(step IN LISTS HD_EXTRACT_STEPS)
+        add_custom_target(hd-assets-${step}
+            COMMAND ${Python3_EXECUTABLE} ${HD_BUILD_SCRIPT} --only ${step}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "HD assets: extracting ${step}"
+        )
+        list(APPEND HD_EXTRACT_TARGETS hd-assets-${step})
+    endforeach()
+
+    # bundle packs whatever the extraction steps wrote into the data dir, so it
+    # is the one ordering constraint in the pipeline: it must not start until
+    # every extraction step has finished.
+    add_custom_target(hd-assets-bundle
+        COMMAND ${Python3_EXECUTABLE} ${HD_BUILD_SCRIPT} --bundle-only
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "HD assets: bundling tyrian.base + tyrian.hd"
+    )
+    add_dependencies(hd-assets-bundle ${HD_EXTRACT_TARGETS})
+
+    # User-facing entry point (`cmake --build build --target hd-assets`), and
+    # the ALL hook when the assets are baked into the default build.
     if(OPENTYRIAN_BUILD_HD_ASSETS)
-        add_custom_target(hd-assets ALL
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/hd_build.py
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            USES_TERMINAL
-            COMMENT "Building HD asset paks (tyrian.base + tyrian.hd)"
-        )
+        add_custom_target(hd-assets ALL)
     else()
-        add_custom_target(hd-assets
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/hd_build.py
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-            USES_TERMINAL
-            COMMENT "Building HD asset paks (tyrian.base + tyrian.hd)"
-        )
+        add_custom_target(hd-assets)
     endif()
+    add_dependencies(hd-assets hd-assets-bundle)
 else()
     message(STATUS "Python3 interpreter not found -- skipping hd-assets target")
 endif()
