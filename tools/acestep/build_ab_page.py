@@ -15,9 +15,36 @@ HERE = os.path.join(
     "hdmusic_work", "acestep")
 CLASSICDIR = os.path.join(HERE, "..", "classic")
 OUT = os.path.join(HERE, "out")
+GENRES = os.path.join(HERE, "genres")
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ab_template.html")
 
 SONGS = {
+    "genres": {
+        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; genre remakes',
+        "title": "Track 30 &mdash; genre remakes A/B",
+        "loop_seconds": 113.669048,
+        # 7 tracks: trim to one pass so the page stays under the 16 MB cap
+        "trim_seconds": 113.669048,
+        "sub": ("Locked cover recipe (seed 4242, melody 0.80 unless noted), "
+                "caption varied per genre. One loop pass each (113.7&nbsp;s). "
+                "Switching tracks keeps the playhead."),
+        "tracks": [
+            ("classic", "Classic OPL", os.path.join(CLASSICDIR, "hdmusic_30_x2.wav"),
+             "render_music reference"),
+            ("synthony", "Synthony &middot; orchestra + EDM", os.path.join(GENRES, "t30_synthony.flac"),
+             "symphony orchestra fused with driving synths, four-on-the-floor"),
+            ("synthony_n050", "Synthony &middot; melody 0.50", os.path.join(GENRES, "t30_synthony_n050.flac"),
+             "same caption, more style freedom (less melody retention)"),
+            ("synthwave", "Synthwave / retrowave", os.path.join(GENRES, "t30_synthwave.flac"),
+             "80s analog polysynths, arpeggiated bass, gated reverb drums"),
+            ("metal", "Symphonic power metal", os.path.join(GENRES, "t30_metal.flac"),
+             "distorted guitars + double kick under orchestra"),
+            ("trance", "Uplifting trance", os.path.join(GENRES, "t30_trance.flac"),
+             "supersaw lead, rolling bassline, club production"),
+            ("funk", "Jazz-funk fusion", os.path.join(GENRES, "t30_funk.flac"),
+             "electric piano, slap bass, horn section"),
+        ],
+    },
     "30": {
         "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; ACE-Step 1.5 covers',
         "title": "Track 30 &mdash; ACE-Step covers A/B",
@@ -76,11 +103,12 @@ SONGS = {
 }
 
 
-def encode_opus(path: str) -> bytes:
-    p = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path, "-c:a", "libopus", "-b:a", "64k",
-         "-f", "ogg", "-"],
-        capture_output=True, check=True)
+def encode_opus(path: str, trim=None) -> bytes:
+    cmd = ["ffmpeg", "-v", "error", "-i", path]
+    if trim:
+        cmd += ["-t", f"{trim:.6f}"]
+    cmd += ["-c:a", "libopus", "-b:a", "64k", "-f", "ogg", "-"]
+    p = subprocess.run(cmd, capture_output=True, check=True)
     return p.stdout
 
 
@@ -108,7 +136,7 @@ def main() -> None:
             print(f"skip (missing): {path}", file=sys.stderr)
             continue
         print(f"encoding {tid}...", flush=True)
-        data = base64.b64encode(encode_opus(path)).decode("ascii")
+        data = base64.b64encode(encode_opus(path, cfg.get("trim_seconds"))).decode("ascii")
         tracks.append({
             "id": tid, "label": label, "note": note,
             "loudness": loudness(path), "b64": data,

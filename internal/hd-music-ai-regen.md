@@ -152,6 +152,20 @@ a triage hint only. Next-lowest band (36/37/18/17, 0.42-0.53) also shipped. Best
 Full table in the render log; large negative gains (31/32/40, -11..-14 dB)
 are quiet ambient classics the cover rendered hot.
 
+## Genre-remake experiment (2026-07-11, in progress)
+
+User (post-landing): the landed remixes are faithful; now try an experimental
+"synthony" remake (symphony-orchestra-meets-synths) and other genres.
+`tools/acestep/render_genres.py` sweeps captions on one track with the locked
+cover mechanics (torch/MPS, seed 4242, cover strength 1.0). Round 1 on
+track 30: synthony (0.80 + a 0.50 melody variant), synthwave, symphonic
+power metal, uplifting trance, jazz-funk — all at envelope corr 0.65-0.69,
+i.e. genre captions restyle without losing melody retention vs the orchestral
+baseline (0.686). A/B page (one loop pass per variant, 16 MB-cap trim):
+<https://claude.ai/code/artifact/25c055a1-95a9-4ac7-b7a6-990a44833633>.
+Awaiting listening verdict; next knobs if a genre wins: sweep more tracks,
+or per-track genre assignment (calm tracks vs combat tracks).
+
 ## Open questions for the verdict
 
 - Does any cover beat "enhanced classic" (path 1) on ensemble coherence?
