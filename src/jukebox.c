@@ -35,6 +35,7 @@
 #include "palette.h"
 #include "sprite.h"
 #include "starlib.h"
+#include "vga256d.h"
 #include "vga_palette.h"
 #include "video.h"
 
@@ -109,10 +110,30 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 
 			const int x = VGAScreen->w / 2;
 
-			drawFontHvAligned(VGAScreen, x, 163, "Press ESC to quit the jukebox.",           FONT_SMALL, ALIGN_CENTER, 1, 0);
-			drawFontHvAligned(VGAScreen, x, 172, "Arrow keys change the song being played.", FONT_SMALL, ALIGN_CENTER, 1, 0);
-			drawFontHvAligned(VGAScreen, x, 181, "H toggles HD remix / classic synth.",       FONT_SMALL, ALIGN_CENTER, 1, 0);
-			drawFontHvAligned(VGAScreen, x, 190, buffer,                                     FONT_SMALL, ALIGN_CENTER, 1, 4);
+			// Progress bar for the current track, when a length is known (i.e.
+			// an HD rendition exists to clock the duration) and not in FX mode.
+			if (!fx)
+			{
+				Uint32 pos, len;
+				music_position(&pos, &len);
+				if (len > 0)
+				{
+					const int bx1 = 60, bx2 = 260, by = 157;
+					const int inner = bx2 - bx1 - 2;
+					int fill = (int)((Uint64)inner * pos / len);
+					if (fill > inner)
+						fill = inner;
+
+					JE_rectangle(VGAScreen, bx1, by, bx2, by + 3, 8);
+					if (fill > 0)
+						fill_rectangle_xy(VGAScreen, bx1 + 1, by + 1, bx1 + fill, by + 2, 13);
+				}
+			}
+
+			drawFontHvAligned(VGAScreen, x, 163, "Press ESC to quit the jukebox.",       FONT_SMALL, ALIGN_CENTER, 1, 0);
+			drawFontHvAligned(VGAScreen, x, 172, "Up/Down change song. Left/Right seek.", FONT_SMALL, ALIGN_CENTER, 1, 0);
+			drawFontHvAligned(VGAScreen, x, 181, "H toggles HD remix / classic synth.",   FONT_SMALL, ALIGN_CENTER, 1, 0);
+			drawFontHvAligned(VGAScreen, x, 190, buffer,                                 FONT_SMALL, ALIGN_CENTER, 1, 4);
 		}
 
 		if (palette_fade_steps > 0)
@@ -150,8 +171,7 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 				break;
 			case SDL_SCANCODE_H:
 			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_H):
-				hd_music = !hd_music;
-				refresh_current_song();
+				set_hd_music_playing(!hd_music);
 				break;
 			case SDL_SCANCODE_V:
 			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_V):
@@ -178,16 +198,20 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 					JE_playSampleNum(fx_num + 1);
 				break;
 
-			case SDL_SCANCODE_LEFT:
 			case SDL_SCANCODE_UP:
 				play_song((song_playing > 0 ? song_playing : MUSIC_NUM) - 1);
 				stopped = false;
 				break;
 			case SDL_SCANCODE_RETURN:
-			case SDL_SCANCODE_RIGHT:
 			case SDL_SCANCODE_DOWN:
 				play_song((song_playing + 1) % MUSIC_NUM);
 				stopped = false;
+				break;
+			case SDL_SCANCODE_LEFT:
+				music_seek_relative(-5 * audioSampleRate);
+				break;
+			case SDL_SCANCODE_RIGHT:
+				music_seek_relative(5 * audioSampleRate);
 				break;
 			case SDL_SCANCODE_S:
 			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_S):

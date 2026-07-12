@@ -75,6 +75,17 @@ static int samplesPerLdsUpdateFrac;
 static int samplesUntilLdsUpdate = 0;
 static int samplesUntilLdsUpdateFrac = 0;
 
+// Position tracking for the synth path, so the jukebox can show a progress bar
+// and seek. ldsFrameCounter counts mono output frames produced by the synth
+// branch of the callback; ldsTickCounter counts lds_update() calls since the
+// song started (needed to translate a target frame back into sequencer ticks).
+// 64-bit so a song left looping for hours can't overflow the intermediate math.
+// Frames<->ticks is exact: samplesPerLdsUpdate*R + samplesPerLdsUpdateFrac ==
+// 2*audioSampleRate (R = ldsUpdate2Rate), so tick k produces audio starting at
+// frame floor(2*(k-1)*audioSampleRate/R).
+static Uint64 ldsFrameCounter = 0;
+static Uint64 ldsTickCounter = 0;
+
 static FILE *music_file = NULL;
 static Uint32 *song_offset;
 static Uint16 song_count = 0;
@@ -107,6 +118,7 @@ static bool hd_ended = false;         // a non-looping OGG has played to its end
 static bool hd_has_loop = false;
 static Uint32 hd_loop_start = 0;      // per-channel sample offset to loop back to
 static Uint32 hd_loop_end = 0;        // per-channel sample offset of loop end
+static Uint32 hd_pos = 0;             // current decode position (per-channel frames)
 
 // Fade-out for the HD path (fade_song): a Q12 gain ramped down to zero, at
 // which point the track is stopped. Mirrors what lds_fade() does for the synth.
@@ -139,6 +151,7 @@ static void hd_music_close(void)
 	hd_ended = false;
 	hd_has_loop = false;
 	hd_fade_active = false;
+	hd_pos = 0;
 }
 
 // Parses LOOPSTART / LOOPLENGTH Vorbis comments into hd_loop_*.
@@ -176,7 +189,11 @@ static void hd_music_load_song(unsigned int song_num)
 {
 	hd_music_close();
 
-	if (!hd_music || music_disabled)
+	// Load the decoder whenever the OGG exists and music isn't disabled, even
+	// if hd_music is currently off. Both renditions then coexist (the LDS song
+	// is always loaded too) and hd_active merely selects the audible path, so
+	// the jukebox H toggle can cross-fade between them seamlessly.
+	if (music_disabled)
 		return;
 
 	char filename[32];
@@ -225,9 +242,10 @@ static void hd_music_load_song(unsigned int song_num)
 
 	hd_vorbis = v;
 	hd_ogg_data = data;
-	hd_active = true;
+	hd_active = hd_music;  // decoder loaded; audible only if hd_music is on
 	hd_ended = false;
 	hd_fade_active = false;
+	hd_pos = 0;
 	hd_parse_loop_comments(v);
 }
 
@@ -251,16 +269,95 @@ static void hd_music_decode(Sint16 *out, int count)
 		for (int i = 0; i < got; ++i)
 			out[filled + i] = (Sint16)(((Sint32)hd_stereo[2 * i] + hd_stereo[2 * i + 1]) / 2);
 		filled += got;
+		hd_pos += got;
 
 		if (got < want)
 		{
 			// Reached end of stream mid-request.
 			if (hd_has_loop)
+			{
 				stb_vorbis_seek(hd_vorbis, hd_loop_start);
+				hd_pos = hd_loop_start;
+			}
 			else
+			{
 				hd_ended = true;
+			}
 		}
 	}
+}
+
+// Duration (in output frames) of the current track, taken from the HD decoder
+// when one is loaded. This is the sequencer's natural length even in OPL mode,
+// since the OGG was pre-rendered from the same sequencer clock. 0 = unknown
+// (no HD rendition for this song). Caller must hold the audio lock.
+static Uint32 hd_duration_locked(void)
+{
+	return hd_vorbis != NULL ? stb_vorbis_stream_length_in_samples(hd_vorbis) : 0;
+}
+
+// Wraps a raw frame position into the loop region when it has run past the
+// known duration (i.e. the synth looped). No duration -> returned unchanged.
+// Caller must hold the audio lock.
+static Uint32 wrap_frame_locked(Uint32 pos)
+{
+	Uint32 len = hd_duration_locked();
+	if (len == 0 || pos < len)
+		return pos;
+	if (hd_has_loop && len > hd_loop_start)
+		return hd_loop_start + (pos - hd_loop_start) % (len - hd_loop_start);
+	return pos % len;
+}
+
+// Seeks the HD decoder to an absolute output-frame target (assumed already in
+// [0, len)). Caller must hold the audio lock.
+static void hd_seek_locked(Uint32 target)
+{
+	Uint32 len = hd_duration_locked();
+	if (len > 0 && target > len - 1)
+		target = len - 1;  // non-looping tail / clamp
+
+	stb_vorbis_seek(hd_vorbis, target);
+	hd_pos = target;
+	hd_ended = false;
+	hd_fade_active = false;
+}
+
+// Seeks the LDS synth to an absolute output-frame target by fast-forwarding the
+// sequencer. A backward (or from-a-finished-song) target rewinds first; a
+// forward target advances only the difference. Fast-forward calls lds_update()
+// WITHOUT opl_update() -- the register writes still reach the OPL emulator (so
+// the chip state is correct), but no audio is synthesized, which is what makes
+// it fast. Caller must hold the audio lock.
+static void synth_seek_locked(Uint32 target_frames)
+{
+	// target_ticks = floor(target_frames * R / (2 * audioSampleRate)), 64-bit.
+	Uint64 target_ticks = (Uint64)target_frames * (Uint64)ldsUpdate2Rate
+	                    / (2 * (Uint64)audioSampleRate);
+
+	if (!playing || target_ticks < ldsTickCounter)
+	{
+		lds_rewind();  // resets the sequencer and sets playing = true
+		for (Uint64 t = 0; t < target_ticks; ++t)
+			lds_update();
+	}
+	else
+	{
+		for (Uint64 t = ldsTickCounter; t < target_ticks; ++t)
+			lds_update();
+	}
+
+	ldsTickCounter = target_ticks;
+	// Frame at which the NEXT tick fires == floor(2*target_ticks*S/R); parking
+	// the frame counter there and zeroing the pacing makes the next callback
+	// fire tick (target_ticks+1) immediately, coherently continuing playback.
+	ldsFrameCounter = (2 * (Uint64)audioSampleRate * target_ticks) / (Uint64)ldsUpdate2Rate;
+	samplesUntilLdsUpdate = 0;
+	samplesUntilLdsUpdateFrac = 0;
+
+	// A fast-forward may have crossed the loop point; don't let that trip the
+	// jukebox's auto-fade-on-loop right after a deliberate seek.
+	songlooped = false;
 }
 
 bool init_audio(void)
@@ -352,6 +449,7 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 			if (samplesUntilLdsUpdate == 0)
 			{
 				lds_update();
+				ldsTickCounter += 1;
 
 				// The number of samples that should be produced per Loudness
 				// update is not an integer, but we can only produce an integer
@@ -369,6 +467,7 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 			int count = MIN(samplesUntilLdsUpdate, remainingCount);
 
 			opl_update(remaining, count);
+			ldsFrameCounter += count;
 
 			remaining += count;
 			remainingCount -= count;
@@ -503,6 +602,13 @@ void play_song(unsigned int song_num)  // FKA NortSong.playSong
 		// while we swap it -- same reasoning as load_song above.
 		hd_music_load_song(song_num);
 
+		// New song starts at frame 0 on both paths; reset the position trackers
+		// and the synth pacing so tick 1 fires at frame 0.
+		ldsFrameCounter = 0;
+		ldsTickCounter = 0;
+		samplesUntilLdsUpdate = 0;
+		samplesUntilLdsUpdateFrac = 0;
+
 		song_playing = song_num;
 	}
 
@@ -539,6 +645,98 @@ bool hd_music_playing(void)
 	return hd_active;
 }
 
+// Reports the play position and length (in mono output frames at audioSampleRate)
+// of the *audible* rendition. *len is 0 when the length is unknown (no HD
+// rendition for this song). A synth position that has run past the known length
+// (looped) is reported wrapped into the loop region.
+void music_position(Uint32 *pos, Uint32 *len)
+{
+	Uint32 p = 0, l = 0;
+
+	if (!audio_disabled)
+	{
+		SDL_LockAudioDevice(audioDevice);
+
+		l = hd_duration_locked();
+		p = wrap_frame_locked(hd_active ? hd_pos : (Uint32)ldsFrameCounter);
+
+		SDL_UnlockAudioDevice(audioDevice);
+	}
+
+	if (pos != NULL)
+		*pos = p;
+	if (len != NULL)
+		*len = l;
+}
+
+// Seeks the audible rendition by delta_frames (negative = backward). Clamped to
+// [0, len-1] when the length is known; otherwise only clamped at 0 (the synth
+// can still seek forward blind). No-op when audio/music is disabled or stopped.
+void music_seek_relative(Sint32 delta_frames)
+{
+	if (audio_disabled)
+		return;
+
+	SDL_LockAudioDevice(audioDevice);
+
+	if (!music_disabled && !music_stopped)
+	{
+		Uint32 len = hd_duration_locked();
+		// Seek relative to the *displayed* (wrapped) position so the bar tracks.
+		Uint32 base = wrap_frame_locked(hd_active ? hd_pos : (Uint32)ldsFrameCounter);
+
+		Sint64 target = (Sint64)base + (Sint64)delta_frames;
+		if (target < 0)
+			target = 0;
+		if (len > 0 && target > (Sint64)len - 1)
+			target = (Sint64)len - 1;
+
+		if (hd_active)
+			hd_seek_locked((Uint32)target);
+		else
+			synth_seek_locked((Uint32)target);
+	}
+
+	SDL_UnlockAudioDevice(audioDevice);
+}
+
+// Seamless HD<->OPL toggle: reads the audible side's current position, flips the
+// active path (to HD only if a decoder is loaded), and seeks the newly-selected
+// side to that position. Also updates the hd_music global so config persistence
+// keeps working. Toggling to HD with no OGG for this song is a silent no-op
+// (stays on the synth).
+void set_hd_music_playing(bool on)
+{
+	if (audio_disabled)
+	{
+		hd_music = on;
+		return;
+	}
+
+	SDL_LockAudioDevice(audioDevice);
+
+	hd_music = on;  // persist the preference regardless of what's available
+
+	bool newHd = on && (hd_vorbis != NULL);
+	if (newHd != hd_active)
+	{
+		// Position of the currently-audible side, before we flip.
+		Uint32 pos = wrap_frame_locked(hd_active ? hd_pos : (Uint32)ldsFrameCounter);
+
+		hd_active = newHd;
+
+		if (!music_stopped)
+		{
+			if (hd_active)
+				hd_seek_locked(pos);
+			else
+				synth_seek_locked(pos);  // pos already wrapped into the loop region
+		}
+	}
+
+	SDL_UnlockAudioDevice(audioDevice);
+}
+
 // Reloads the sound-effect/voice banks so a runtime hd_sfx change takes effect
 // immediately. Held under the audio lock, and any in-flight channels are
 // silenced first, because loadSndFile() frees and reallocates the sample
@@ -569,11 +767,21 @@ void restart_song(void)  // FKA Player.selectSong(1)
 		stb_vorbis_seek_start(hd_vorbis);
 		hd_ended = false;
 		hd_fade_active = false;
+		hd_pos = 0;
 	}
-	else
-	{
-		lds_rewind();
-	}
+
+	// Always rewind the sequencer, even when the HD path is audible: the synth
+	// keeps its position implicitly (sequencer state must equal ldsTickCounter),
+	// so leaving it mid-song while zeroing the counter would make a later HD->OPL
+	// toggle fast-forward from the wrong baseline. The HD side has no such
+	// hidden state -- a toggle always seeks it absolutely.
+	lds_rewind();
+
+	// Both paths are back at frame 0.
+	ldsFrameCounter = 0;
+	ldsTickCounter = 0;
+	samplesUntilLdsUpdate = 0;
+	samplesUntilLdsUpdateFrac = 0;
 
 	music_stopped = false;
 

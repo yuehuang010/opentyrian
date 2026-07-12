@@ -50,6 +50,16 @@ void refresh_current_song(void);
 // OGG (as opposed to the LDS/OPL2 synth, whether because hd_music is off or
 // because this song has no HD rendition -- per-song fallback).
 bool hd_music_playing(void);
+
+// Play position / length of the audible rendition, in mono output frames at
+// audioSampleRate. *len == 0 when unknown (no HD rendition for the song).
+void music_position(Uint32 *pos, Uint32 *len);
+// Seek the audible rendition by delta_frames (negative = backward).
+void music_seek_relative(Sint32 delta_frames);
+// Seamlessly switch the audible rendition between the HD OGG and the LDS/OPL2
+// synth, preserving play position. Also updates the hd_music global.
+void set_hd_music_playing(bool on);
+
 void reload_sound_samples(bool xmas);
 
 void set_volume(Uint8 musicVolume, Uint8 sampleVolume);
