@@ -15,6 +15,18 @@ multiplayer.
 Tyrian 2.1 data files which have been released as freeware:
   https://camanis.net/tyrian/tyrian21.zip
 
+== HD Assets (optional) ========================================================
+
+The HD remaster assets are generated from the Tyrian 2.1 data above, not
+shipped in the repository.  With the data unpacked into tyrian21/, build them
+with one cross-platform command:
+
+  python3 tools/hd_build.py          (Windows: python tools\hd_build.py)
+
+This runs the extractors and writes the bundles tyrian.hd and tyrian.base.
+See "python3 tools/hd_build.py --list" for the steps and
+internal/hd-build-pipeline.md for details.
+
 == Keyboard Controls ===========================================================
 
 alt-enter      -- toggle full-screen

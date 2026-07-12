@@ -50,6 +50,7 @@ tyrian.sav
 /tools/hdcompb_previews/
 /tools/hdfont_previews/
 /tools/hdtile_previews/
+/tools/hdsfx_previews/
 /doc/remaster_title_verified.png
 
 # Python venvs for the asset-regen tooling (numpy/scipy/soxr/pillow)

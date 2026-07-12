@@ -130,6 +130,15 @@ compdb :
 tags :
 	ctags src/*.c src/*.h
 
+# hd-bundle - Unix convenience wrapper around the HD asset pipeline
+#             orchestrator. The Python script is the primary cross-platform
+#             entry point (works on Windows too: `python tools\hd_build.py`);
+#             this target is just `make`-muscle-memory sugar for it. See
+#             internal/hd-build-pipeline.md.
+.PHONY : hd-bundle
+hd-bundle :
+	python3 tools/hd_build.py
+
 .PHONY : installdirs
 installdirs :
 	mkdir -p $(DESTDIR)$(bindir)
