@@ -217,7 +217,16 @@ drop (jump +20 dB vs winner's +14), boost +4 dB after (post level 74 dB =
 classic's 73.5), and caption dynamics language (no measurable change).
 Lesson: **structural dynamics that must survive low retention can be
 pre-emphasized in the cover source** — the exaggerated cue survives the
-6-step regeneration. Awaiting ear verdict on which rescue feels right.
+6-step regeneration.
+
+**Experiment closed (user, 2026-07-11): "Nothing new is good enough."**
+No genre remake ships; the landed faithful-HD soundtrack (melody 0.80)
+stands as-is on hd-remaster. Intermediates deleted; the sweep tooling
+(`tools/acestep/render_genres.py`, per-variant src_af hook, page builder
+options) and the measured findings above are the keepers — if genre
+remakes are revisited, the open leads are: base-model `flow_edit_morph`
+(needs a non-turbo checkpoint download), per-track genre assignment, and
+automated transition pre-emphasis on the cover source.
 
 ## Open questions for the verdict
 
