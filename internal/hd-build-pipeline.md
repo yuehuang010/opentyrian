@@ -20,7 +20,7 @@ before running, for only the steps actually selected.
     step (`hd_extract_tiles.py`).
   - `Pillow` — the tiles step only (used for `--method lanczos`, the
     orchestrator's default, and for `--preview`).
-  - Everything else (backdrops, comp, filter, xBRZ font, anim, sfx,
+  - Everything else (backdrops, comp, filter, xBRZ font, anim, sfx, music,
     mkbundle) is stdlib-only.
 
 ## Usage
@@ -41,7 +41,7 @@ Run `python3 tools/hd_build.py --help` for the full flag reference
 `--jobs`/`-j`, `--continue-on-error`, `--bundle-out`/`--hd-out`, etc).
 
 **Concurrency**: the extraction steps (`backdrops`, `comp`, `filter`, `font`,
-`anim`, `tiles`, `sfx`) read the same base data dir and write disjoint
+`anim`, `tiles`, `sfx`, `music`) read the same base data dir and write disjoint
 `hd*`-prefixed outputs, so they have no interdependencies and now run
 concurrently in a thread pool (`--jobs`/`-j`, default
 `min(os.cpu_count(), number of extraction steps selected)`). `bundle`
@@ -66,7 +66,9 @@ Default steps (run unless `--only`/`--no-bundle` says otherwise), in order:
 3. `filter` — `hd_extract_filter.py` — enemy hue-band brightness maps
 4. `font` — `hd_vectorize_font.py` (or `hd_extract_font.py` with `--font xbrz`)
 5. `anim` — `hd_extract_anim.py` — ending cutscene
-6. `bundle` — `mkbundle.py` — writes `tyrian.base` + `tyrian.hd`
+6. `music` — `stage_music.py` — stage committed HD music OGGs (`hdmusic/`)
+   into the data dir
+7. `bundle` — `mkbundle.py` — writes `tyrian.base` + `tyrian.hd`
 
 Opt-in steps (off by default):
 
@@ -77,9 +79,26 @@ Opt-in steps (off by default):
 - `sfx` (`--sfx`) — `hd_extract_snd.py`. **Read the caveat below** — this
   does not feed the bundle by itself.
 
-Not wired (out of scope): the music pipeline (`hd_music_pipeline.sh` — bash,
-needs external soundfonts + compiled C tools). Run it separately; see
-`internal/hd-music-*.md`.
+`music` stages the 41 frozen HD music renders (`hdmusic/hdmusic_01.ogg` …
+`hdmusic/hdmusic_41.ogg`) that are committed as source in the repo via Git
+LFS into the data dir (default `tyrian21/`), so both direct engine playback
+(`dir_fopen`-based loading in `src/loudness.c`) and `mkbundle.py` — which
+only ever reads files physically present in its single `--src` dir via a
+flat `os.listdir()` — can find them. **A fresh clone needs `git lfs pull`**
+to materialize the real OGGs; a shallow/no-LFS clone leaves `hdmusic/` full
+of ~130-byte Git LFS pointer stub files instead of audio.
+`tools/stage_music.py` detects any source file under 1 KB as such a stub and
+refuses to stage it, erroring with a `git lfs pull` hint rather than copying
+a broken pointer file into the data dir. See `tools/MUSIC_REMASTER.md` for
+how the OGGs were originally rendered/encoded (that render/encode pipeline,
+`hd_music_pipeline.sh`, is a separate, unwired, bash + external-soundfont +
+compiled-C-tools process — not needed for normal builds now that the output
+is committed).
+
+Not wired (out of scope): the music *render/encode* pipeline
+(`hd_music_pipeline.sh` — bash, needs external soundfonts + compiled C
+tools). It produces the OGGs that live in `hdmusic/`; you don't need to run
+it unless you're re-rendering the music from scratch.
 
 ## Caveats discovered while wiring this up
 

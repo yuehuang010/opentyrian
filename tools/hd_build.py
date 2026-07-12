@@ -22,11 +22,12 @@ Pipeline (see --list for the live, flag-aware version of this table):
   5. anim       hd_extract_anim.py      ending cutscene
   6. tiles      hd_extract_tiles.py     level tilesets (opt-in: --tiles; HEAVY, ~1GB)
   7. sfx        hd_extract_snd.py       HD sfx reference WAVs (opt-in: --sfx)
-  8. bundle     mkbundle.py             build tyrian.base + tyrian.hd
+  8. music      stage_music.py          stage committed HD music OGGs (hdmusic/) into the data dir
+  9. bundle     mkbundle.py             build tyrian.base + tyrian.hd
 
-Steps 1-5 and 8 run by default; 6 and 7 are opt-in. Steps 1-7 (the
+Steps 1-5, 8, and 9 run by default; 6 and 7 are opt-in. Steps 1-8 (the
 extractors) are mutually independent and run concurrently -- see --jobs --
-in the order shown above only for display/summary purposes; step 8 (bundle)
+in the order shown above only for display/summary purposes; step 9 (bundle)
 always runs last, alone, once every selected extractor has finished.
 
 Quirks worth knowing before you rely on this:
@@ -42,8 +43,14 @@ Quirks worth knowing before you rely on this:
     pak by itself. Producing bundle-ready HD sfx needs the further
     hd_upsample_snd.py + mkhdsnd.py steps, which (like the music pipeline)
     are out of scope for this orchestrator.
-  - The music pipeline (hd_music_pipeline.sh) is bash and needs external
-    soundfonts plus compiled C tools; it is intentionally not wired here.
+  - The music *render/encode* pipeline (hd_music_pipeline.sh) is bash and
+    needs external soundfonts plus compiled C tools; it is intentionally not
+    wired here. What IS wired is the "music" step, which stages the 41
+    already-rendered HD music OGGs committed as source under <repo>/hdmusic/
+    (via Git LFS) into the data dir -- see tools/stage_music.py and
+    tools/MUSIC_REMASTER.md. A shallow/no-LFS clone leaves those as tiny LFS
+    pointer stubs; stage_music.py detects that and errors with a
+    `git lfs pull` hint rather than staging broken files.
 
 Preflight (runs automatically before any step, skipped for --list/--help):
   - Checks the third-party deps needed by the steps that will actually run
@@ -54,8 +61,9 @@ Preflight (runs automatically before any step, skipped for --list/--help):
     if they don't.
 
 Examples:
-  # Default run: backdrops, comp, filter, font, anim run concurrently, then
-  # bundle once they've all finished.
+  # Default run: backdrops, comp, filter, font, anim, and music (staging the
+  # committed hdmusic/ OGGs) run concurrently, then bundle once they've all
+  # finished.
   python3 tools/hd_build.py
 
   # Same, on Windows:
@@ -124,8 +132,8 @@ HARDCODED_SCRIPTS = {
 # hd_extract_font.py joins that list only when --font xbrz is selected.
 HARDCODED_FONT_XBRZ_SCRIPT = "hd_extract_font.py"
 
-STEP_ORDER = ["backdrops", "comp", "filter", "font", "anim", "tiles", "sfx", "bundle"]
-DEFAULT_STEP_KEYS = {"backdrops", "comp", "filter", "font", "anim", "bundle"}
+STEP_ORDER = ["backdrops", "comp", "filter", "font", "anim", "tiles", "sfx", "music", "bundle"]
+DEFAULT_STEP_KEYS = {"backdrops", "comp", "filter", "font", "anim", "music", "bundle"}
 OPTIN_STEP_KEYS = {"tiles", "sfx"}
 
 STEP_DESCRIPTIONS = {
@@ -136,6 +144,7 @@ STEP_DESCRIPTIONS = {
     "anim": "ending cutscene",
     "tiles": "level tilesets (HEAVY, ~1GB; opt-in via --tiles)",
     "sfx": "HD sfx reference WAVs (opt-in via --sfx; does NOT feed the bundle -- see docstring)",
+    "music": "stage committed HD music OGGs (hdmusic/) into the data dir",
     "bundle": "build tyrian.base + tyrian.hd from the extracted hd* assets",
 }
 
@@ -196,6 +205,11 @@ def _cmd_sfx(args, data_dir):
     return [sys.executable, str(TOOLS_DIR / "hd_extract_snd.py"), str(data_dir)]
 
 
+def _cmd_music(args, data_dir):
+    return [sys.executable, str(TOOLS_DIR / "stage_music.py"),
+            "--data", str(data_dir)]
+
+
 def _cmd_bundle(args, data_dir):
     argv = [sys.executable, str(TOOLS_DIR / "mkbundle.py"),
             "--src", str(data_dir),
@@ -216,6 +230,7 @@ STEP_CMD_BUILDERS = {
     "anim": _cmd_anim,
     "tiles": _cmd_tiles,
     "sfx": _cmd_sfx,
+    "music": _cmd_music,
     "bundle": _cmd_bundle,
 }
 
@@ -330,8 +345,9 @@ def _would_raise_only_error(args):
 
 EPILOG = """\
 Examples:
-  # Default run: backdrops, comp, filter, font, anim run concurrently, then
-  # bundle once they've all finished.
+  # Default run: backdrops, comp, filter, font, anim, and music (staging the
+  # committed hdmusic/ OGGs) run concurrently, then bundle once they've all
+  # finished.
   python3 tools/hd_build.py
 
   # Same, on Windows:
@@ -407,7 +423,7 @@ def build_arg_parser():
     parser.add_argument(
         "--jobs", "-j", type=_positive_int, default=None, metavar="N",
         help="max extraction steps to run concurrently (backdrops/comp/filter/font/"
-             "anim/tiles/sfx have no interdependencies; bundle always runs alone, "
+             "anim/tiles/sfx/music have no interdependencies; bundle always runs alone, "
              "last, after all selected extraction steps finish). Default: "
              "min(os.cpu_count(), number of extraction steps selected). --jobs 1 "
              "forces fully-serial execution, in canonical order, for debuggability.")

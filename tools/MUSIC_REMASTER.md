@@ -75,6 +75,31 @@ Requires `ffmpeg` with `libvorbis`. Copies each `.loop` sidecar's values into
   exposes a live On/Off toggle. Off → the classic LDS synth, byte-for-byte as
   before.
 
+## Shipping (Git LFS)
+
+The 41 frozen `hdmusic_NN.ogg` renders produced by the pipeline above are
+committed as source in this repo under the top-level `hdmusic/` directory,
+tracked via Git LFS — the render/encode steps above don't need to be re-run
+for a normal build. `tools/stage_music.py` copies them from `hdmusic/` into
+a data dir so the engine's direct-play `dir_fopen` lookup and
+`tools/mkbundle.py` (which only packs files physically present in its
+single `--src` dir) both find them:
+
+```sh
+python3 tools/stage_music.py --data ./tyrian21
+```
+
+or automatically, as the `music` step of `tools/hd_build.py` (runs by
+default, immediately before `bundle`):
+
+```sh
+python3 tools/hd_build.py
+```
+
+A fresh clone must run `git lfs pull` to materialize the real OGGs — without
+it, `hdmusic/` contains small Git LFS pointer stub files instead of audio,
+which `stage_music.py` detects (anything under 1 KB) and refuses to stage.
+
 ## Known limitation — device sample rate
 
 The loader requires `info.sample_rate == audioSampleRate` (the SDL-negotiated

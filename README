@@ -42,6 +42,12 @@ This runs the extractors and writes the bundles tyrian.hd and tyrian.base.
 See "python3 tools/hd_build.py --list" for the steps and
 internal/hd-build-pipeline.md for details.
 
+HD music is the one exception: it is shipped in-repo (not generated) under
+hdmusic/, tracked via Git LFS -- run "git lfs pull" after cloning to
+materialize the OGG files.  It is staged into the data dir by
+tools/stage_music.py, or automatically as the "music" step of the command
+above.
+
 == Keyboard Controls ===========================================================
 
 alt-enter      -- toggle full-screen
