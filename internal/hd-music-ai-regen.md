@@ -1,6 +1,6 @@
 # HD music via AI regeneration (ACE-Step 1.5 cover spike)
 
-Status: **awaiting listening verdict** (2026-07-11). Direction: instead of
+Status: **landed** (2026-07-11) — recipe locked, all 41 tracks rendered+installed, jukebox A/B shipped; see the final sections. Direction: instead of
 note-level transcoding (LDS -> MIDI -> soundfont, see `hd-music-track30.md`),
 feed the *audio* of the classic OPL render to an audio-to-audio model and let
 it regenerate the whole piece in an HD style. Directly attacks the
@@ -144,11 +144,11 @@ generic orchestral caption.**
   an [HD]/[OPL] indicator (`hd_music_playing()` accessor).
 
 Envelope corr vs classic per song (recipe determinism confirmed: track 30
-re-rendered at 0.688 vs 0.686 in the sweep). Suspect outliers worth a re-roll
-(different seed or genre-matched caption): **6 Deli Shop Quartet (-0.15),
-22 Come Back again to Savara (-0.09)**, then 36 Sarah's Song (0.42),
-37 A Field for Mag (0.43), 18 Tyrian The Level (0.47), 17 Tunneling Trolls
-(0.53). Best: 5 (0.98), 10 (0.95), 27 (0.95), 32 (0.93), 40 (0.91).
+re-rendered at 0.688 vs 0.686 in the sweep). The two statistical outliers —
+6 Deli Shop Quartet (-0.15) and 22 Come Back again to Savara (-0.09) — were
+**cleared by ear (user, 2026-07-11: "no oddities")**, i.e. very low envelope
+corr can be a legitimate reinterpretation, not a failure; treat the metric as
+a triage hint only. Next-lowest band (36/37/18/17, 0.42-0.53) also shipped. Best: 5 (0.98), 10 (0.95), 27 (0.95), 32 (0.93), 40 (0.91).
 Full table in the render log; large negative gains (31/32/40, -11..-14 dB)
 are quiet ambient classics the cover rendered hot.
 
