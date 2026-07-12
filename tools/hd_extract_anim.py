@@ -93,6 +93,7 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import json
 import math
 import os
@@ -295,9 +296,18 @@ def resample_axis_vertical(src, src_w, src_h, dst_h, taps, channels=3):
     return dst
 
 
-def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3, channels=3):
-    h_taps = build_taps(src_w, dst_w, a)
-    v_taps = build_taps(src_h, dst_h, a)
+def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3, channels=3, h_taps=None, v_taps=None):
+    """
+    `h_taps`/`v_taps` may be passed in precomputed (they only depend on
+    src/dst dimensions, not on any per-frame pixel data) to skip the
+    redundant build_taps() recomputation -- used by the parallel frame
+    workers below, which compute the taps once per worker process instead
+    of once per frame.
+    """
+    if h_taps is None:
+        h_taps = build_taps(src_w, dst_w, a)
+    if v_taps is None:
+        v_taps = build_taps(src_h, dst_h, a)
 
     stage1 = resample_axis_horizontal(rgb, src_w, src_h, dst_w, h_taps, channels)
     stage2 = resample_axis_vertical(stage1, dst_w, src_h, dst_h, v_taps, channels)
@@ -517,19 +527,73 @@ def decode_anm(path):
 # main
 # ===========================================================================
 
-def process_frame(frame_index, indices, palette):
+def process_frame(frame_index, indices, palette, h_taps=None, v_taps=None):
     rgb = colorize(indices, palette)
-    upscaled = lanczos_upscale(rgb, SRC_W, SRC_H, DST_W, DST_H, a=3)
+    upscaled = lanczos_upscale(rgb, SRC_W, SRC_H, DST_W, DST_H, a=3, h_taps=h_taps, v_taps=v_taps)
     out_name = "hdanim_tyrend_%04d.dat" % frame_index
     out_path = os.path.join(DATA_DIR, out_name)
     write_hdpx_asset(out_path, upscaled, DST_W, DST_H)
     return out_name, upscaled
 
 
+# ---------------------------------------------------------------------------
+# Parallel per-frame processing
+#
+# Each frame's palette lookup + Lanczos upscale + HDPX write is independent
+# of every other frame (the animation's inter-frame delta compression is
+# fully resolved by decode_anm() before any of this runs -- `frames` is
+# already a list of complete, standalone framebuffer snapshots), so frames
+# are farmed out to a process pool.
+#
+# The Lanczos taps (build_taps()) and the palette are constant across all
+# 111 frames (same SRC_W/SRC_H/DST_W/DST_H every time), so they are computed
+# ONCE in the parent and handed to each worker process a single time via
+# ProcessPoolExecutor's `initializer`/`initargs`, rather than being
+# re-pickled and re-sent on every one of the per-frame tasks. Windows has no
+# fork(), so the pool uses the (default, cross-platform) "spawn" start
+# method: worker processes start fresh and re-import this module, so all
+# per-worker state must arrive either via initargs or be a plain
+# module-level constant (DATA_DIR etc. qualify; they're computed at import
+# time and don't depend on anything set up under `if __name__ == "__main__"`).
+# ---------------------------------------------------------------------------
+
+_worker_palette = None
+_worker_h_taps = None
+_worker_v_taps = None
+
+
+def _init_worker(palette, h_taps, v_taps):
+    """
+    ProcessPoolExecutor initializer: stashes the (constant, per-pool-lifetime)
+    palette and precomputed Lanczos taps into this worker process's globals,
+    once, instead of resending them on every submitted task.
+    """
+    global _worker_palette, _worker_h_taps, _worker_v_taps
+    _worker_palette = palette
+    _worker_h_taps = h_taps
+    _worker_v_taps = v_taps
+
+
+def _process_frame_worker(frame_index, indices, need_preview):
+    """
+    Runs in a worker process. Colorizes + upscales + writes the .dat file for
+    one frame, using the palette/taps stashed by _init_worker(). Only returns
+    the (large, ~3MB) upscaled RGB buffer when `need_preview` is set (for the
+    3 frames a PNG preview gets written for); otherwise returns None in its
+    place to avoid shipping the buffer back across the process boundary for
+    the ~108 frames that don't need it.
+    """
+    out_name, upscaled = process_frame(
+        frame_index, indices, _worker_palette, _worker_h_taps, _worker_v_taps)
+    return frame_index, out_name, (upscaled if need_preview else None)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract HD frame assets from tyrian21/tyrend.anm (OpenTyrian ending cutscene).")
     parser.add_argument("--no-preview", action="store_true", help="skip writing PNG previews (faster)")
+    parser.add_argument("--jobs", type=int, default=(os.cpu_count() or 1),
+                         help="number of worker processes for the per-frame upscale (default: os.cpu_count())")
     args = parser.parse_args()
 
     if not os.path.isfile(ANM_PATH):
@@ -553,23 +617,39 @@ def main():
 
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    manifest_files = []
+    manifest_files = [None] * frame_count
     preview_indices = {0: "first", frame_count // 2: "mid", frame_count - 1: "last"}
     preview_written = []
 
-    for frame_index, indices in enumerate(frames):
-        out_name, upscaled = process_frame(frame_index, indices, palette)
-        manifest_files.append(out_name)
+    # Lanczos taps depend only on SRC_W/SRC_H/DST_W/DST_H, which never vary
+    # across frames -- compute them once here rather than once per frame (the
+    # old serial code recomputed them on every process_frame() call via
+    # lanczos_upscale()'s internal build_taps() calls).
+    h_taps = build_taps(SRC_W, DST_W, a=3)
+    v_taps = build_taps(SRC_H, DST_H, a=3)
 
-        if frame_index % 10 == 0 or frame_index == frame_count - 1:
-            print("  frame %d/%d -> %s" % (frame_index + 1, frame_count, out_name))
+    jobs = max(1, args.jobs)
+    with concurrent.futures.ProcessPoolExecutor(
+            max_workers=jobs, initializer=_init_worker, initargs=(palette, h_taps, v_taps)) as executor:
+        tasks = (
+            (frame_index, indices, not args.no_preview and frame_index in preview_indices)
+            for frame_index, indices in enumerate(frames)
+        )
+        # executor.map() preserves submission order in its result order
+        # (regardless of which worker finishes first), so manifest_files
+        # ends up in frame_index order 0..frame_count-1 for free.
+        for frame_index, out_name, upscaled in executor.map(_process_frame_worker, *zip(*tasks)):
+            manifest_files[frame_index] = out_name
 
-        if not args.no_preview and frame_index in preview_indices:
-            os.makedirs(PREVIEW_DIR, exist_ok=True)
-            label = preview_indices[frame_index]
-            preview_path = os.path.join(PREVIEW_DIR, "hdanim_tyrend_%s.png" % label)
-            write_png(preview_path, upscaled, DST_W, DST_H)
-            preview_written.append(preview_path)
+            if frame_index % 10 == 0 or frame_index == frame_count - 1:
+                print("  frame %d/%d -> %s" % (frame_index + 1, frame_count, out_name))
+
+            if upscaled is not None:
+                os.makedirs(PREVIEW_DIR, exist_ok=True)
+                label = preview_indices[frame_index]
+                preview_path = os.path.join(PREVIEW_DIR, "hdanim_tyrend_%s.png" % label)
+                write_png(preview_path, upscaled, DST_W, DST_H)
+                preview_written.append(preview_path)
 
     manifest = {
         "source": "tyrend.anm",
