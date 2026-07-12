@@ -16,42 +16,38 @@ HERE = os.path.join(
 CLASSICDIR = os.path.join(HERE, "..", "classic")
 OUT = os.path.join(HERE, "out")
 GENRES = os.path.join(HERE, "genres")
+VARIANTSDIR = os.path.join(HERE, "..", "variants")
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ab_template.html")
 
 SONGS = {
     "genres": {
-        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; genre remakes',
-        "title": "Track 30 &mdash; genre remakes A/B",
+        "h1": 'Track 30 &ldquo;Tyrian: The Song&rdquo; &mdash; operatic symphony exploration',
+        "title": "Track 30 &mdash; operatic symphony A/B",
         "loop_seconds": 113.669048,
-        # 7 tracks: trim to one pass so the page stays under the 16 MB cap
+        # trim to one pass so the page stays under the 16 MB cap
         "trim_seconds": 113.669048,
-        "sub": ("Round 2: at melody 0.80 the caption is a no-op (the turbo "
-                "schedule leaves 1 denoise step), so genre variants run at "
-                "lower retention where the caption gets steps to act. "
-                "&ldquo;text-only finish&rdquo; = late steps conditioned on "
-                "the caption alone (audio_cover_strength 0.5). One loop pass "
-                "each (113.7&nbsp;s). Switching tracks keeps the playhead."),
+        "sub": ("Exploration round: low retention (melody 0.10-0.20, where "
+                "the caption has real power), captions pushing realistic "
+                "acoustic instruments with operatic character. Seed 4242 "
+                "unless noted. One loop pass each (113.7&nbsp;s). Switching "
+                "tracks keeps the playhead."),
         "tracks": [
             ("classic", "Classic OPL", os.path.join(CLASSICDIR, "hdmusic_30_x2.wav"),
              "render_music reference"),
-            ("baseline", "Faithful baseline &middot; melody 0.80", os.path.join(GENRES, "t30_synthony.flac"),
-             "caption-independent HD refinement — the landed soundtrack's style"),
-            ("synthony_n050", "Synthony &middot; melody 0.50", os.path.join(GENRES, "t30_synthony_n050.flac"),
-             "orchestra + EDM caption, 2 denoise steps"),
-            ("synthony_n035", "Synthony &middot; melody 0.35", os.path.join(GENRES, "t30_synthony_n035.flac"),
-             "orchestra + EDM, 3 steps — more style freedom"),
-            ("synthony_n020", "Synthony &middot; melody 0.20", os.path.join(GENRES, "t30_synthony_n020.flac"),
-             "orchestra + EDM, 6 steps — max style, loosest melody"),
-            ("synthwave_n020", "Synthwave &middot; melody 0.20", os.path.join(GENRES, "t30_synthwave_n020.flac"),
-             "80s analog polysynths, arpeggiated bass, gated reverb drums"),
-            ("metal_n020", "Symphonic metal &middot; melody 0.20", os.path.join(GENRES, "t30_metal_n020.flac"),
-             "distorted guitars + double kick under orchestra"),
-            ("trance_n020", "Uplifting trance &middot; melody 0.20", os.path.join(GENRES, "t30_trance_n020.flac"),
-             "supersaw lead, rolling bassline, club production"),
-            ("metal_n035_cs05", "Metal &middot; melody 0.35 &middot; text-only finish", os.path.join(GENRES, "t30_metal_n035_cs05.flac"),
-             "tighter melody, caption alone drives the last steps"),
-            ("synthony_n050_cs05", "Synthony &middot; melody 0.50 &middot; text-only finish", os.path.join(GENRES, "t30_synthony_n050_cs05.flac"),
-             "tightest melody of the style variants, caption-driven finish"),
+            ("landed", "Landed HD (faithful)", os.path.join(VARIANTSDIR, "hdmusic_30.acestep.ogg"),
+             "the installed melody-0.80 remix, for calibration"),
+            ("opera_n020", "Operatic symphony &middot; melody 0.20", os.path.join(GENRES, "t30_opera_n020.flac"),
+             "live orchestra + wordless operatic choir, concert hall"),
+            ("opera_n010", "Operatic symphony &middot; melody 0.10", os.path.join(GENRES, "t30_opera_n010.flac"),
+             "same caption, maximum style freedom"),
+            ("opera_n020_alt", "Operatic symphony &middot; 0.20 &middot; seed 1337", os.path.join(GENRES, "t30_opera_n020_alt.flac"),
+             "alternate take of the same recipe"),
+            ("filmscore_n020", "Film score &middot; melody 0.20", os.path.join(GENRES, "t30_filmscore_n020.flac"),
+             "scoring-stage orchestra, realistic acoustic instruments, no choir"),
+            ("filmscore_n010", "Film score &middot; melody 0.10", os.path.join(GENRES, "t30_filmscore_n010.flac"),
+             "same caption, maximum style freedom"),
+            ("operasynth_n020", "Operatic synthony &middot; melody 0.20", os.path.join(GENRES, "t30_operasynth_n020.flac"),
+             "real orchestra + choir over an analog synth pulse"),
         ],
     },
     "30": {

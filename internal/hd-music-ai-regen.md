@@ -186,6 +186,20 @@ at 0.20, and the two cs05 hybrids:
 Awaiting listening verdict; next knobs if a genre wins: sweep more tracks,
 per-track genre assignment (calm vs combat), or the base-model flow-edit.
 
+## Exploration round: operatic symphony, realistic instruments (2026-07-11)
+
+User direction: explore at low retention, captions encouraging realistic
+instruments from an "operatic synthony"; old genre samples cleared.
+Three captions (operatic symphony w/ wordless choir; Hollywood film score,
+realistic acoustic instruments, no choir; operatic synthony = orchestra +
+choir over analog synth pulse) at melody 0.20 (6 steps, envelope corr
+0.58-0.62) and 0.10 (7 steps, corr 0.42-0.44), plus a seed-1337 take.
+New lever measured: **at low retention the seed is a huge variation knob**
+(raw corr 0.40 between seeds at 0.20 — different takes of the same recipe);
+same-family orchestral captions differ only modestly (0.94-0.95).
+Same A/B artifact updated with: classic, landed-HD reference, the six
+exploration variants. Awaiting verdict.
+
 ## Open questions for the verdict
 
 - Does any cover beat "enhanced classic" (path 1) on ensemble coherence?
