@@ -396,14 +396,22 @@ static void interp_op_pos(const Op *op, float back, int *out_dx, int *out_dy)
 			int ddx = p->x - op->x;
 			int ddy = p->y - op->y;
 
-			// Background layers scroll and wrap every 28 px; unwrap so a wrap tick
-			// interpolates forward rather than snapping back a whole tile row.
+			// Background layers scroll and wrap by one tile; unwrap so a wrap tick
+			// interpolates forward rather than snapping back a whole tile. Vertical
+			// wraps every 28 px (tile height, backPos); horizontal every 24 px (tile
+			// width, mapXPos = mapXOfs % 24) -- without the horizontal unwrap, a
+			// sideways-scroll wrap smears the row ~12 px backward and stutters.
 			if (op->type == OP_BG_ROW || op->type == OP_BG_ROW_BLEND)
 			{
 				if (ddy > 14)
 					ddy -= 28;
 				else if (ddy < -14)
 					ddy += 28;
+
+				if (ddx > 12)
+					ddx -= 24;
+				else if (ddx < -12)
+					ddx += 24;
 			}
 
 			if (abs(ddx) <= MAX_INTERP_JUMP && abs(ddy) <= MAX_INTERP_JUMP)

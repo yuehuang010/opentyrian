@@ -32,6 +32,7 @@
 #include "font.h"
 #include "fonthand.h"
 #include "helptext.h"
+#include "interp.h"
 #include "joystick.h"
 #include "jukebox.h"
 #include "keyboard.h"
@@ -134,6 +135,7 @@ void setupMenu(void)
 		MENU_ITEM_HD_MUSIC,
 		MENU_ITEM_HD_SFX,
 		MENU_ITEM_HD_TILES,
+		MENU_ITEM_HIGHFPS,
 	} MenuItemId;
 
 	typedef enum
@@ -156,7 +158,7 @@ void setupMenu(void)
 	typedef struct
 	{
 		const char *header;
-		const MenuItem items[6];
+		const MenuItem items[7];
 	} Menu;
 
 	static const Menu menus[] = {
@@ -178,6 +180,7 @@ void setupMenu(void)
 				{ MENU_ITEM_SCALER, "Scaler:", "Change the pixel art scaling algorithm.", getScalerPickerItemsCount, getScalerPickerItem },
 				{ MENU_ITEM_SCALING_MODE, "Scaling Mode:", "Change the scaling mode.", getScalingModePickerItemsCount, getScalingModePickerItem },
 				{ MENU_ITEM_HD_TILES, "HD Tiles:", "Upscale in-flight level backgrounds (Off = classic).", getOnOffPickerItemsCount, getOnOffPickerItem },
+				{ MENU_ITEM_HIGHFPS, "Smooth FPS:", "Interpolate extra frames for smoother motion (Off = classic).", getOnOffPickerItemsCount, getOnOffPickerItem },
 				{ MENU_ITEM_DONE, "Done", "Return to the previous menu." },
 				{ -1 }
 			},
@@ -354,6 +357,11 @@ void setupMenu(void)
 			case MENU_ITEM_HD_TILES:
 				if (!valueHiddenByPicker)
 					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_tiles ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+				break;
+
+			case MENU_ITEM_HIGHFPS:
+				if (!valueHiddenByPicker)
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, highfps_mode ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			default:
@@ -691,6 +699,14 @@ void setupMenu(void)
 					pickerSelectedIndex = hd_tiles ? 1 : 0;
 					break;
 				}
+				case MENU_ITEM_HIGHFPS:
+				{
+					JE_playSampleNum(S_CLICK);
+
+					currentPicker = selectedMenuItemId;
+					pickerSelectedIndex = highfps_mode ? 1 : 0;
+					break;
+				}
 				case MENU_ITEM_MUSIC_VOLUME:
 				{
 					JE_playSampleNum(S_CLICK);
@@ -869,6 +885,13 @@ void setupMenu(void)
 					// no reload is needed -- the next flight frame composites (or stops
 					// compositing) HD tiles.
 					hd_tiles = pickerSelectedIndex == 1;
+					break;
+				}
+				case MENU_ITEM_HIGHFPS:
+				{
+					// Applies live: interp/flight_present reads highfps_mode each present, so
+					// no reload is needed -- the next frame starts (or stops) interpolating.
+					highfps_mode = pickerSelectedIndex == 1;
 					break;
 				}
 				default:

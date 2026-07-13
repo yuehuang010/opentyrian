@@ -320,8 +320,12 @@ read-only re-render was rejected in favor of a **display-list capture/replay**
   preserved. Mispaired/reused entity slots snap rather than smear.
 - **Verified:** clean `make`/`make debug`; the attract-mode demo runs the full
   record→replay path headless with no assert/overflow/crash. **On-device visual A/B
-  of smoothness is still pending** (no display in the build environment). Enable with
-  `[video] highfps = true`.
+  of smoothness done (2026-07-12): confirmed noticeably smoother.** Exposed in the UI
+  as Setup → Graphics → **"Smooth FPS"** (not just the `[video] highfps` config item).
+  One artifact found & fixed on-device: side-to-side scroll stuttered because the
+  interpolator unwrapped only the *vertical* background tile wrap (28 px); added the
+  symmetric *horizontal* unwrap (24 px = tile width, `mapXPos = mapXOfs % 24`) in
+  `interp_op_pos` (`src/interp.c`). Enable with `[video] highfps = true` or the menu.
 - **Not** the same as raising the *simulation* rate to 60/120 Hz (which retunes
   balance — option 2 below). That is a separate, opt-in follow-on now made far more
   tractable by this decoupling.
