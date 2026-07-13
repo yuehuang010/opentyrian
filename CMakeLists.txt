@@ -198,36 +198,106 @@ endif()
 # onto the `console` pool, which has depth 1 -- it would serialize every step
 # and defeat the whole point. Output is buffered and printed per step instead
 # (which is what hd_build.py does internally anyway).
+#
+# Each step's real outputs are hundreds to thousands of files (comp alone
+# writes 11,856 frame assets) -- far too many to enumerate as a custom_command
+# OUTPUT list, and CMake needs a concrete OUTPUT to know whether a step is up
+# to date. So each step gets a single stamp file as a proxy: the command runs
+# the real python step, then touches the stamp. add_custom_target(hd-assets-
+# <step> DEPENDS <stamp>) wraps that so the standalone target name still works
+# (`cmake --build build --target hd-assets-font`), while ninja/make now has a
+# file whose mtime it can compare against DEPENDS to skip an up-to-date step.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 option(OPENTYRIAN_BUILD_HD_ASSETS "Build the HD asset paks as part of the default build" OFF)
 if(Python3_Interpreter_FOUND)
     set(HD_BUILD_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/tools/hd_build.py)
+    set(HD_STAMP_DIR ${CMAKE_BINARY_DIR}/hd-stamps)
+    file(MAKE_DIRECTORY ${HD_STAMP_DIR})
+    set(HD_TYRIAN21 ${CMAKE_CURRENT_SOURCE_DIR}/tyrian21)
+    set(HD_TOOLS ${CMAKE_CURRENT_SOURCE_DIR}/tools)
+
+    # Configure-time globs for the two steps whose real inputs are open-ended
+    # file sets (34 dynamically-loaded enemy sheets for comp/filter; 41
+    # committed HD music tracks for music). Deliberately NOT
+    # CONFIGURE_DEPENDS: adding or removing a newsh*.shp / hdmusic_*.ogg file
+    # needs a `cmake` reconfigure to be picked up by the dependency graph.
+    # An acceptable over-declaration tradeoff for this project's fixed asset
+    # set, which doesn't change without a source-tree edit anyway.
+    file(GLOB HD_NEWSH_FILES ${HD_TYRIAN21}/newsh*.shp)
+    file(GLOB HD_MUSIC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/hdmusic/hdmusic_*.ogg)
+
+    # Per-step real inputs, read off each tool's own source (hd_extract.py,
+    # hd_extract_comp.py, hd_extract_filter.py, hd_vectorize_font.py,
+    # hd_extract_anim.py, stage_music.py) rather than assumed.
+    set(HD_DEPS_backdrops
+        ${HD_TYRIAN21}/palette.dat ${HD_TYRIAN21}/tyrian.pic ${HD_TYRIAN21}/tyrian.shp
+        ${HD_TYRIAN21}/estsc.shp
+        ${HD_TYRIAN21}/tshp2.pcx ${HD_TYRIAN21}/shipedit.pcx ${HD_TYRIAN21}/tyrset.pcx
+        ${HD_TYRIAN21}/netarena.pcx ${HD_TYRIAN21}/netset.pcx ${HD_TYRIAN21}/netmega.pcx
+        ${HD_TYRIAN21}/netfont1.pcx ${HD_TYRIAN21}/netfont2.pcx
+        ${HD_TOOLS}/hd_extract.py)
+    set(HD_DEPS_comp
+        ${HD_TYRIAN21}/palette.dat ${HD_TYRIAN21}/tyrian.shp ${HD_NEWSH_FILES}
+        ${HD_TOOLS}/hd_extract_comp.py)
+    set(HD_DEPS_filter
+        ${HD_TYRIAN21}/palette.dat ${HD_NEWSH_FILES}
+        ${HD_TOOLS}/hd_extract_filter.py)
+    set(HD_DEPS_font
+        ${HD_TYRIAN21}/tyrian.shp
+        ${HD_TOOLS}/hd_vectorize_font.py)
+    set(HD_DEPS_anim
+        ${HD_TYRIAN21}/tyrend.anm
+        ${HD_TOOLS}/hd_extract_anim.py)
+    set(HD_DEPS_music
+        ${HD_MUSIC_FILES}
+        ${HD_TOOLS}/stage_music.py)
 
     # The default (non-opt-in) extraction steps, per `hd_build.py --list`. The
     # opt-in `tiles` / `sfx` steps are not part of the default pipeline.
     set(HD_EXTRACT_STEPS backdrops comp filter font anim music)
 
     set(HD_EXTRACT_TARGETS "")
+    set(HD_STEP_STAMPS "")
     foreach(step IN LISTS HD_EXTRACT_STEPS)
-        add_custom_target(hd-assets-${step}
+        set(stamp ${HD_STAMP_DIR}/${step}.stamp)
+        add_custom_command(
+            OUTPUT ${stamp}
             COMMAND ${Python3_EXECUTABLE} ${HD_BUILD_SCRIPT} --only ${step}
+            COMMAND ${CMAKE_COMMAND} -E touch ${stamp}
+            # $<TARGET_FILE:hdkernels> (not just the add_dependencies below)
+            # is what actually makes a kernel rebuild invalidate this step --
+            # a DEPENDS entry is compared by ninja/make; a target-order
+            # dependency alone does not force a re-run when the step's other
+            # inputs are unchanged.
+            DEPENDS ${HD_BUILD_SCRIPT} ${HD_DEPS_${step}} $<TARGET_FILE:hdkernels>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             COMMENT "HD assets: extracting ${step}"
         )
-        # The tools locate the kernel library by searching <repo>/build*, so it
-        # only has to exist before a step runs -- no path is plumbed through.
+        add_custom_target(hd-assets-${step} DEPENDS ${stamp})
+        # Explicit build-order dependency, kept alongside the DEPENDS above:
+        # the tools locate the kernel library by searching <repo>/build*, so
+        # it only has to exist before a step runs -- no path is plumbed
+        # through -- but scheduling still needs hdkernels built first.
         add_dependencies(hd-assets-${step} hdkernels)
         list(APPEND HD_EXTRACT_TARGETS hd-assets-${step})
+        list(APPEND HD_STEP_STAMPS ${stamp})
     endforeach()
 
     # bundle packs whatever the extraction steps wrote into the data dir, so it
     # is the one ordering constraint in the pipeline: it must not start until
-    # every extraction step has finished.
-    add_custom_target(hd-assets-bundle
+    # every extraction step has finished. Unlike the extraction steps, its
+    # real outputs ARE the two enumerable distributable paks, so OUTPUT names
+    # them directly instead of going through a stamp.
+    set(HD_BUNDLE_OUT ${CMAKE_CURRENT_SOURCE_DIR}/tyrian.base)
+    set(HD_BUNDLE_HD_OUT ${CMAKE_CURRENT_SOURCE_DIR}/tyrian.hd)
+    add_custom_command(
+        OUTPUT ${HD_BUNDLE_OUT} ${HD_BUNDLE_HD_OUT}
         COMMAND ${Python3_EXECUTABLE} ${HD_BUILD_SCRIPT} --bundle-only
+        DEPENDS ${HD_BUILD_SCRIPT} ${HD_TOOLS}/mkbundle.py ${HD_STEP_STAMPS}
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "HD assets: bundling tyrian.base + tyrian.hd"
     )
+    add_custom_target(hd-assets-bundle DEPENDS ${HD_BUNDLE_OUT} ${HD_BUNDLE_HD_OUT})
     add_dependencies(hd-assets-bundle hdkernels ${HD_EXTRACT_TARGETS})
 
     # User-facing entry point (`cmake --build build --target hd-assets`), and
