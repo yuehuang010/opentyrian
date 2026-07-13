@@ -799,7 +799,17 @@ void JE_itemScreen(void)
 		flash = false;
 
 		/* JE: {Reset player weapons} */
-		memset(shotMultiPos, 0, sizeof(shotMultiPos));
+		// Skip while the weapon simulator is animating: shotMultiPos[] cycles
+		// 1..max to sweep the shot pattern (e.g. the vulcan's back-and-forth
+		// spray), and must persist across frames. The outer loop now runs once
+		// per frame (see the hd_mode/no-motion break below), so zeroing it here
+		// every frame would pin every shot to position 1 and freeze the sweep.
+		// The sim's one-time reset already happens in JE_initWeaponView().
+		if (!(curMenu == MENU_UPGRADE_SUB &&
+		      (curSel[MENU_UPGRADES] == 3 ||
+		       curSel[MENU_UPGRADES] == 4 ||
+		       (curSel[MENU_UPGRADES] >= 6 && curSel[MENU_UPGRADES] <= 8))))
+			memset(shotMultiPos, 0, sizeof(shotMultiPos));
 
 		JE_drawScore();
 
