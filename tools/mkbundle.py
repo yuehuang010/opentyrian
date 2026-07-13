@@ -133,7 +133,7 @@ def qoi_encode(rgba_bytes, width, height, channels=4):
 
     index = [0] * 64          # packed-pixel value per hash slot, init to 0x00000000 (r=g=b=0,a=0)
     out = bytearray()
-    prev = 0x000000ff         # r=0,g=0,b=0,a=255 packed little-endian (a is high byte)
+    prev = 0xff000000         # canonical QOI seed pixel r=0,g=0,b=0,a=255 (a is the high byte)
     run = 0
 
     append = out.append

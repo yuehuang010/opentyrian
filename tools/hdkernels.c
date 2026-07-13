@@ -774,16 +774,10 @@ HDK_API int64_t hdk_qoi_encode(const uint8_t *rgba, int64_t px_count, uint8_t *o
                                int64_t out_cap)
 {
 	uint32_t index[64];
-	/*
-	 * mkbundle.py seeds `prev` with 0x000000ff, which under its r|g<<8|b<<16|a<<24
-	 * packing is (r=255, g=0, b=0, a=0) -- NOT the canonical QOI seed of
-	 * (0,0,0,255). Harmless in practice (the first pixel of every asset either
-	 * has a != 0, forcing an absolute OP_RGBA, or is fully-zero and hits the
-	 * all-zero index table), and mkbundle.py --verify round-trips every entry
-	 * against its decoder anyway. Reproduced verbatim because the pak bytes are
-	 * the acceptance test.
-	 */
-	uint32_t prev = 0x000000ffu;
+	/* Canonical QOI seed pixel r=0,g=0,b=0,a=255, packed r|g<<8|b<<16|a<<24 --
+	 * must stay in lockstep with mkbundle.py's qoi_encode() and with the
+	 * decoders (hdk_qoi_decode below, mkbundle.py's qoi_decode, src/qoi.h). */
+	uint32_t prev = 0xff000000u;
 	int64_t out_len = 0;
 	int64_t run = 0;
 	int64_t i;
