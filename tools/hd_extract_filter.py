@@ -164,7 +164,29 @@ Standard library only (no Pillow/numpy). Offline tooling; reads from
 tools/).
 
 Usage:
-  python3 tools/hd_extract_filter.py
+  python3 tools/hd_extract_filter.py [--jobs N]
+
+PARALLELIZATION: the main process only parses each enemy sheet's frame table
+(cheap); everything else -- per-frame RLE decode, brightness map, xBRZ 4x
+upscale, HDPX write -- is farmed out to a ProcessPoolExecutor, ONE TASK PER
+SHEET (31 tasks, each covering all of its sheet's 304 frames), not one task
+per frame.
+
+Per-frame dispatch was the original design, on the theory that sheets differ
+enough in frame complexity to need dynamic load balancing. That rationale no
+longer holds: with the C xBRZ kernel (tools/hdkernels.c) one frame costs only
+tens of microseconds, so ~9,424 round trips of pickling/IPC dwarfed the actual
+work. Per-sheet tasks are naturally balanced anyway -- every Sprite2 sheet has
+exactly 304 frames (structural, see hd_extract_comp.py's format notes) -- so
+each of the 31 tasks carries the same frame budget, and the only residual
+variation is per-frame opaque-pixel count, which is noise at C-kernel speeds.
+Under the pure-Python fallback (HD_KERNELS=0) a sheet is a much bigger slug of
+serial work per task, but the 304-frames-per-task uniformity still keeps the
+pool balanced.
+
+Workers write their own .dat files and return only an aggregated per-sheet
+result (frame records, decode errors, and the preview payload for the one
+sheet that owns it), so nothing travels back per frame.
 """
 
 import argparse
@@ -773,88 +795,81 @@ def reconstruct_band_rgb(indices, palette, band, width, height):
 # ---------------------------------------------------------------------------
 # Extraction driver
 #
-# Parallelization unit: one Sprite2 FRAME (across ALL sheets), not one sheet.
-# Frame counts and per-frame opaque-pixel counts vary a lot between enemy
-# sheets, and decode/xBRZ cost scales with opaque pixel count, so chunking by
-# sheet would repeat mkbundle.py's load-imbalance trap (one worker stuck with
-# a disproportionately expensive sheet while the rest idle). Instead every
-# frame from every sheet is queued as its own task and handed to
-# executor.map() with chunksize=1 so the pool dynamically self-balances.
+# Parallelization unit: one SHEET (all 304 of its frames), not one frame --
+# see the module docstring's PARALLELIZATION section for why. Each worker
+# reads its sheet's file, decodes/upscales/writes every frame's hdcompb_*.dat
+# itself, and returns one aggregated result, so no per-frame payload crosses
+# back to the parent.
 #
-# Each worker writes its own hdcompb_*.dat file directly and returns only
-# small metadata, EXCEPT for frames belonging to the first enemy sheet, which
-# also return their raw decoded indices (need_raw=True) -- the serial code's
-# preview-target selection is "first sheet, first frame with any nonzero raw
-# index", and that can't be known ahead of decode, so the cheapest way to
-# preserve exact selection semantics is to have all of that one sheet's
-# (small, 12x14) frames ship their raw indices back and let the parent pick.
+# The one exception is the preview: the serial code's preview target is "the
+# first enemy sheet's first frame with any nonzero raw index", which isn't
+# known until decode. Since a sheet is now a single task, its worker walks its
+# frames in index order and can make that selection itself -- so only that one
+# frame's raw indices + upscaled buffer ride back, and only from the sheet
+# flagged need_raw.
 # ---------------------------------------------------------------------------
 
-# Per-worker cache of sheet file bytes, keyed by path. chunksize=1 means a
-# worker's tasks are not guaranteed to be contiguous within a sheet, but a
-# worker typically still processes several frames from the same sheet over
-# its lifetime, so caching avoids redundant re-reads of the same small file.
-_worker_sheet_cache = {}
-
-
-def _get_sheet_data(sheet_path):
-    data = _worker_sheet_cache.get(sheet_path)
-    if data is None:
-        with open(sheet_path, "rb") as f:
-            data = f.read()
-        _worker_sheet_cache[sheet_path] = data
-    return data
-
-
-def _process_frame_worker(sheet_name, sheet_path, index, offset, need_raw):
+def _process_sheet_worker(sheet_name, sheet_path, frames, need_raw):
     """
-    Runs in a worker process. Decodes one Sprite2 frame, builds its
-    brightness map, xBRZ-upscales it, and writes the hdcompb_*.dat asset
-    directly (minimizing IPC -- only metadata crosses back to the parent).
-    Returns a 9-tuple:
-      (sheet_name, index, out_name, frame_record, error_msg,
-       raw_indices, upscaled, hd_w, hd_h)
-    On decode failure, out_name/frame_record are None and error_msg is set.
-    raw_indices/upscaled/hd_w/hd_h are only populated when `need_raw` (the
-    first enemy sheet), for preview-target selection in the parent.
-    """
-    data = _get_sheet_data(sheet_path)
-    try:
-        indices, _consumed = decode_comp_frame(data, offset)
-    except DecodeError as e:
-        return sheet_name, index, None, None, str(e), None, None, None, None
+    Runs in a worker process. For every frame of one sheet -- `frames` is that
+    sheet's (index, offset) list, in index order -- decodes the Sprite2 RLE,
+    builds its brightness map, xBRZ-upscales it, and writes the hdcompb_*.dat
+    asset directly.
 
-    rgba = brightness_rgba(indices)
-    upscaled = xbrz_scale_4x(rgba, TILE_W, TILE_H)
+    Returns (sheet_name, frame_records, errors, preview):
+      - frame_records: manifest entries for the frames that decoded, in index
+        order.
+      - errors: (index, message) for the frames that didn't; the parent prints
+        these so the warnings land in the same order the serial code emitted.
+      - preview: (index, raw_indices, upscaled) for the first decoded non-blank
+        frame when `need_raw` is set (the first enemy sheet), else None.
+    """
+    with open(sheet_path, "rb") as f:
+        data = f.read()
+
     hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
+    frame_records = []
+    errors = []
+    preview = None
 
-    out_name = "hdcompb_%s_%02d.dat" % (sheet_name, index)
-    out_path = os.path.join(DATA_DIR, out_name)
-    # HARD CONSTRAINT: never overwrite an existing hdcomp_* asset. Our
-    # filenames use the distinct "hdcompb_" prefix so there is no
-    # collision by construction, but assert it defensively anyway.
-    assert out_name.startswith("hdcompb_"), "refusing to write non-hdcompb_ filename"
-    write_hdpx_asset(out_path, upscaled, hd_w, hd_h, channels=4)
+    for index, offset in frames:
+        try:
+            indices, _consumed = decode_comp_frame(data, offset)
+        except DecodeError as e:
+            errors.append((index, str(e)))
+            continue
 
-    frame_record = {
-        "index": index,
-        "file": out_name,
-        "src_width": TILE_W,
-        "src_height": TILE_H,
-        "hd_width": hd_w,
-        "hd_height": hd_h,
-    }
+        rgba = brightness_rgba(indices)
+        upscaled = xbrz_scale_4x(rgba, TILE_W, TILE_H)
 
-    if need_raw:
-        return sheet_name, index, out_name, frame_record, None, indices, upscaled, hd_w, hd_h
-    return sheet_name, index, out_name, frame_record, None, None, None, None, None
+        out_name = "hdcompb_%s_%02d.dat" % (sheet_name, index)
+        out_path = os.path.join(DATA_DIR, out_name)
+        # HARD CONSTRAINT: never overwrite an existing hdcomp_* asset. Our
+        # filenames use the distinct "hdcompb_" prefix so there is no
+        # collision by construction, but assert it defensively anyway.
+        assert out_name.startswith("hdcompb_"), "refusing to write non-hdcompb_ filename"
+        write_hdpx_asset(out_path, upscaled, hd_w, hd_h, channels=4)
+
+        frame_records.append({
+            "index": index,
+            "file": out_name,
+            "src_width": TILE_W,
+            "src_height": TILE_H,
+            "hd_width": hd_w,
+            "hd_height": hd_h,
+        })
+
+        if need_raw and preview is None and any(v != 0 for v in indices):
+            preview = (index, indices, upscaled)
+
+    return sheet_name, frame_records, errors, preview
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Extract HD enemy brightness-map assets from tyrian21/newsh*.shp.")
     parser.add_argument("--jobs", type=int, default=(os.cpu_count() or 1),
-                         help="number of worker processes for the per-frame decode/upscale "
+                         help="number of worker processes for the per-sheet decode/upscale "
                               "(default: os.cpu_count())")
     args = parser.parse_args()
 
@@ -875,13 +890,12 @@ def main():
     if not enemy_paths:
         print("note: no enemy newsh*.shp files found (beyond shop/explosion/destruct)", file=sys.stderr)
 
-    # First pass (cheap, serial): read each sheet just far enough to parse
-    # its frame table (offsets), so we know every frame task up front. The
-    # expensive per-frame decode/upscale/write happens in the worker pool
-    # below, keyed by sheet_name so results can be regrouped in the original
-    # enemy_paths order regardless of which worker processed which frame.
+    # First pass (cheap, serial): read each sheet just far enough to parse its
+    # frame table (offsets), so we know every sheet's frame list up front. The
+    # expensive decode/upscale/write of those frames happens in the worker
+    # pool below -- one task per sheet.
     sheet_infos = []  # (sheet_name, filename, frame_count) in enemy_paths order
-    tasks = []  # (sheet_name, sheet_path, index, offset, need_raw)
+    tasks = []  # (sheet_name, sheet_path, frames, need_raw) -- ONE entry per sheet
     for enemy_i, path in enumerate(enemy_paths):
         filename = os.path.basename(path)
         sheet_name = _enemy_sheet_name(filename)
@@ -896,10 +910,9 @@ def main():
 
         sheet_infos.append((sheet_name, filename, frame_count))
         need_raw = (enemy_i == 0)  # preview target can only come from the first sheet
-        for index, off in enumerate(offsets):
-            tasks.append((sheet_name, path, index, off, need_raw))
+        tasks.append((sheet_name, path, list(enumerate(offsets)), need_raw))
 
-    # Per-sheet accumulators, filled in as frame results stream back from the
+    # Per-sheet accumulators, filled in as sheet results stream back from the
     # pool (in submission order, per executor.map()'s ordering guarantee).
     sheet_written = {name: 0 for name, _f, _fc in sheet_infos}
     sheet_bad = {name: 0 for name, _f, _fc in sheet_infos}
@@ -908,26 +921,23 @@ def main():
 
     if tasks:
         jobs = max(1, args.jobs)
+        hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
         with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as executor:
-            # chunksize=1: frame decode cost is roughly proportional to
-            # opaque pixel count and varies a lot across sheets/frames, so a
-            # larger static chunksize risks the same load-imbalance trap
-            # mkbundle.py hit (one worker stuck with a cluster of expensive
-            # frames while others idle). Dynamic one-at-a-time dispatch lets
-            # the pool self-balance instead.
-            results = executor.map(_process_frame_worker, *zip(*tasks), chunksize=1)
-            for sheet_name, index, out_name, frame_record, error_msg, raw_indices, upscaled, hd_w, hd_h in results:
-                if error_msg is not None:
+            # chunksize=1 keeps dispatch dynamic, which costs nothing at 31
+            # tasks and lets a worker that finishes early pick up the next
+            # sheet instead of sitting on a pre-assigned batch.
+            results = executor.map(_process_sheet_worker, *zip(*tasks), chunksize=1)
+            for sheet_name, frame_records, errors, preview in results:
+                for index, error_msg in errors:
                     print("  warning: %s frame %d: decode error: %s" % (sheet_name, index, error_msg),
                           file=sys.stderr)
-                    sheet_bad[sheet_name] += 1
-                    continue
 
-                sheet_written[sheet_name] += 1
-                sheet_frames[sheet_name].append(frame_record)
+                sheet_written[sheet_name] = len(frame_records)
+                sheet_bad[sheet_name] = len(errors)
+                sheet_frames[sheet_name] = frame_records
 
-                if (raw_indices is not None and sheet_name not in preview_targets
-                        and any(v != 0 for v in raw_indices)):
+                if preview is not None:
+                    index, raw_indices, upscaled = preview
                     preview_targets[sheet_name] = (index, raw_indices, upscaled, hd_w, hd_h)
 
     manifest_sheets = {}

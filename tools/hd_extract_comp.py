@@ -141,15 +141,25 @@ Usage:
 
 PARALLELIZATION: per-frame decode (cheap RLE unpacking) stays serial in the
 main process; the expensive part -- xBRZ 4x upscale + HDPX write -- is farmed
-out to a ProcessPoolExecutor, one task per frame, across all sheets' frames
-combined into a single flat task list (not one pool per sheet) so the pool
-self-balances across the full ~11,856-frame workload. Tasks are dispatched
-with chunksize=1 (see executor.map() call in main()): sheets vary a lot in
-frame size/complexity, and a large static chunksize would let one worker get
-stuck with a disproportionate share of the largest sheet's frames while
-others idle (this exact trap bit tools/mkbundle.py -- see its history). The
-palette (the only data constant across every frame in the whole run) is
-shipped to each worker process once via ProcessPoolExecutor's
+out to a ProcessPoolExecutor, ONE TASK PER SHEET (39 tasks, each covering all
+of its sheet's 304 frames), not one task per frame.
+
+Per-frame dispatch was the original design, on the theory that sheets differ
+enough in frame complexity to need dynamic load balancing. That rationale no
+longer holds: with the C xBRZ kernel (tools/hdkernels.c) one frame costs only
+tens of microseconds, so ~11,856 round trips of pickling/IPC dwarfed the
+actual work. Per-sheet tasks are naturally balanced anyway -- every sheet has
+exactly 304 frames (see the format notes above; that count is structural, not
+incidental) -- so each of the 39 tasks carries the same frame budget, and the
+only residual variation is per-frame opaque-pixel count, which is noise at C-
+kernel speeds. Under the pure-Python fallback (HD_KERNELS=0) a sheet is a much
+bigger slug of serial work per task, but the 304-frames-per-task uniformity
+still keeps the pool balanced.
+
+Workers write their own .dat files and return only an aggregated per-sheet
+result, so nothing travels back per frame except the single preview buffer a
+sheet may own. The palette (the only data constant across every frame in the
+whole run) is shipped to each worker process once via ProcessPoolExecutor's
 initializer/initargs, not re-sent per task.
 """
 
@@ -777,8 +787,8 @@ def decode_sheet_frames(sheet_name, data, want_preview=False):
     """
     Decode every frame of a Sprite2 sheet into flat palette-index buffers.
     This is pure RLE unpacking -- cheap relative to the xBRZ upscale -- so it
-    stays serial in the main process; only the per-frame colorize+upscale+
-    write (see _process_frame_worker below) is farmed out to the pool.
+    stays serial in the main process; only the colorize+upscale+write of the
+    sheet's frames (see _process_sheet_worker below) is farmed out to the pool.
 
     `data`: the Sprite2_array's raw bytes (already sliced to just this
     sheet's span, if it came from a multi-block container like tyrian.shp).
@@ -790,12 +800,12 @@ def decode_sheet_frames(sheet_name, data, want_preview=False):
         decoded successfully. These are fully determined by (sheet_name,
         index) -- file name and HD dimensions don't depend on the pool's
         output -- so they're built here rather than after processing.
-      - sheet_tasks: (sheet_name, index, indices, need_preview) tuples, one
-        per successfully-decoded frame, ready to hand to the process pool.
-        need_preview is True for at most one frame per sheet: the first
-        non-blank (any nonzero index) decoded frame, when want_preview is
-        set -- matching the original serial code's "grab the first one as
-        this sheet's preview" behavior.
+      - sheet_tasks: (index, indices, need_preview) tuples, one per
+        successfully-decoded frame; the whole list is handed to the process
+        pool as ONE task (see _process_sheet_worker). need_preview is True for
+        at most one frame per sheet: the first non-blank (any nonzero index)
+        decoded frame, when want_preview is set -- matching the original serial
+        code's "grab the first one as this sheet's preview" behavior.
     """
     try:
         frame_count, offsets = load_sprite2_sheet(data)
@@ -834,19 +844,19 @@ def decode_sheet_frames(sheet_name, data, want_preview=False):
             "hd_width": hd_w,
             "hd_height": hd_h,
         })
-        sheet_tasks.append((sheet_name, index, indices, index == preview_index))
+        sheet_tasks.append((index, indices, index == preview_index))
 
     return frame_count, bad_frames, frame_records, sheet_tasks
 
 
 # ---------------------------------------------------------------------------
-# Parallel per-frame processing
+# Parallel per-sheet processing
 #
-# Colorizing + xBRZ-upscaling + HDPX-writing one frame is independent of
-# every other frame, across every sheet -- so all sheets' frames are farmed
-# out to a single process pool together (see main()), rather than one pool
-# per sheet, so the pool can self-balance across the full run instead of
-# re-paying startup cost and load-imbalance risk per sheet.
+# Colorizing + xBRZ-upscaling + HDPX-writing one frame is independent of every
+# other frame, but a frame is far too small to be a useful unit of dispatch
+# (~10-20us of work with the C kernel), so the pool's unit is a whole SHEET:
+# all 304 of its frames, done back to back inside one worker call. See the
+# module docstring's PARALLELIZATION section for why per-sheet is balanced.
 #
 # The palette is the only data constant across every task in the whole run
 # (there's no per-sheet resampling table here, unlike hd_extract_anim.py's
@@ -865,31 +875,41 @@ def _init_worker(palette):
     _worker_palette = palette
 
 
-def _process_frame_worker(sheet_name, index, indices, need_preview):
+def _process_sheet_worker(sheet_name, sheet_tasks):
     """
-    Runs in a worker process. Colorizes + xBRZ-upscales + writes the .dat
-    file for one frame, using the palette stashed by _init_worker(). Only
-    returns the (small, 48x56 RGBA = ~10KB) upscaled buffer when
-    `need_preview` is set; otherwise returns None in its place since the
-    caller already has everything else it needs (out_name/dimensions are
-    deterministic from sheet_name/index, computed in decode_sheet_frames()).
+    Runs in a worker process. For every frame of one sheet -- sheet_tasks is
+    the (index, indices, need_preview) list built by decode_sheet_frames() --
+    colorizes + xBRZ-upscales + writes the .dat file, using the palette
+    stashed by _init_worker().
+
+    Returns (sheet_name, preview), where preview is (index, upscaled) for the
+    one frame that had need_preview set, else None. Nothing else travels back:
+    the parent already knows each frame's out_name/dimensions (deterministic
+    from sheet_name/index, recorded in decode_sheet_frames()), so the only
+    payload worth shipping is that single (small, 48x56 RGBA = ~10KB) buffer.
     """
-    rgba = colorize_rgba(indices, _worker_palette)
-    upscaled = xbrz_scale_4x(rgba, TILE_W, TILE_H)
     hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
+    preview = None
 
-    out_name = "hdcomp_%s_%02d.dat" % (sheet_name, index)
-    out_path = os.path.join(DATA_DIR, out_name)
-    write_hdpx_asset(out_path, upscaled, hd_w, hd_h, channels=4)
+    for index, indices, need_preview in sheet_tasks:
+        rgba = colorize_rgba(indices, _worker_palette)
+        upscaled = xbrz_scale_4x(rgba, TILE_W, TILE_H)
 
-    return sheet_name, index, (upscaled if need_preview else None)
+        out_name = "hdcomp_%s_%02d.dat" % (sheet_name, index)
+        out_path = os.path.join(DATA_DIR, out_name)
+        write_hdpx_asset(out_path, upscaled, hd_w, hd_h, channels=4)
+
+        if need_preview:
+            preview = (index, upscaled)
+
+    return sheet_name, preview
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Extract HD frame assets from tyrian21's compiled Sprite2 sheets.")
     parser.add_argument("--jobs", type=int, default=(os.cpu_count() or 1),
-                         help="number of worker processes for the per-frame xBRZ upscale (default: os.cpu_count())")
+                         help="number of worker processes for the per-sheet xBRZ upscale (default: os.cpu_count())")
     args = parser.parse_args()
 
     print(hdkernels.describe())
@@ -903,7 +923,7 @@ def main():
     palette = load_palette(PALETTE_PATH, MAIN_PALETTE_INDEX)
 
     manifest = {}
-    all_tasks = []  # flat (sheet_name, index, indices, need_preview), every sheet combined
+    all_tasks = []  # (sheet_name, sheet_tasks) -- ONE entry per sheet, see _process_sheet_worker
     total_written = 0
     total_failed = 0
     sheet_summaries = []  # (name, src, frame_count, written, failed) for the report
@@ -911,9 +931,8 @@ def main():
     def record_sheet(sheet_name, src, result):
         # Records manifest/summary data immediately from the (serial) decode
         # step -- these fields don't depend on the pool's output, see
-        # decode_sheet_frames()'s docstring -- and stashes the sheet's
-        # per-frame tasks into the single flat list processed by one pool
-        # for the whole run (below), rather than one pool per sheet.
+        # decode_sheet_frames()'s docstring -- and queues the sheet's frame
+        # list as a single pool task.
         nonlocal total_written, total_failed
         if result is None:
             return
@@ -924,7 +943,7 @@ def main():
             "frames_failed": bad_frames,
             "frames": frame_records,
         }
-        all_tasks.extend(sheet_tasks)
+        all_tasks.append((sheet_name, sheet_tasks))
         total_written += len(frame_records)
         total_failed += bad_frames
         sheet_summaries.append((sheet_name, src, frame_count, len(frame_records), bad_frames))
@@ -979,12 +998,11 @@ def main():
         result = decode_sheet_frames(sheet_name, data, want_preview=(enemy_i == 0))
         record_sheet(sheet_name, filename, result)
 
-    # --- farm every sheet's frames out to a single process pool together,
-    # see the "Parallel per-frame processing" block comment above for why
-    # this is one flat pool over the whole ~11,856-frame run (not one pool
-    # per sheet) and why chunksize=1 (dynamic dispatch avoids the
-    # load-imbalance trap of a static chunksize over frames of varying
-    # decode complexity). ---
+    # --- farm the sheets out to one process pool, one task per sheet (each
+    # doing all 304 of its frames); see the "Parallel per-sheet processing"
+    # block comment above. chunksize=1 keeps dispatch dynamic, which costs
+    # nothing at 39 tasks and lets a worker that finishes early pick up the
+    # next sheet instead of sitting on a pre-assigned batch. ---
     preview_targets = {}  # sheet_name -> (index, upscaled_rgba, hd_w, hd_h)
     if all_tasks:
         jobs = max(1, args.jobs)
@@ -994,9 +1012,10 @@ def main():
             # executor.map() preserves submission order in its result order
             # (regardless of which worker finishes first), so preview_targets
             # ends up populated in the same order the serial code produced it.
-            for sheet_name, index, upscaled in executor.map(
-                    _process_frame_worker, *zip(*all_tasks), chunksize=1):
-                if upscaled is not None:
+            for sheet_name, preview in executor.map(
+                    _process_sheet_worker, *zip(*all_tasks), chunksize=1):
+                if preview is not None:
+                    index, upscaled = preview
                     preview_targets[sheet_name] = (index, upscaled, hd_w, hd_h)
 
     with open(MANIFEST_PATH, "w") as f:
