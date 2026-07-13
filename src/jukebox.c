@@ -39,7 +39,30 @@
 #include "vga_palette.h"
 #include "video.h"
 
+#include <math.h>
 #include <stdio.h>
+
+// Goertzel-algorithm magnitude of `samples` (n of them, sampled at
+// `sampleRate` Hz) at a single target frequency `freq`, unwindowed. Used by
+// the jukebox spectrum analyzer to estimate per-band energy without a full
+// FFT (only 24 bins are needed, so this is cheaper and simpler).
+static float goertzel_mag(const Sint16 *samples, int n, double sampleRate, double freq)
+{
+	const double w = 2.0 * M_PI * freq / sampleRate;
+	const double coeff = 2.0 * cos(w);
+
+	double s0 = 0, s1 = 0, s2 = 0;
+	for (int i = 0; i < n; ++i)
+	{
+		s0 = (double)samples[i] + coeff * s1 - s2;
+		s2 = s1;
+		s1 = s0;
+	}
+
+	double real = s1 - s2 * cos(w);
+	double imag = s2 * sin(w);
+	return (float)sqrt(real * real + imag * imag);
+}
 
 void jukebox(void)  // FKA Setup.jukeboxGo
 {
@@ -53,6 +76,14 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 
 	bool fx = false;
 	int fx_num = 0;
+
+	// bit 1 = oscilloscope, bit 2 = spectrum; 3 = both (default on), 0 = off.
+	// Cycled by V: 3 -> 1 -> 2 -> 0 -> 3 -> ...
+	int visualizer_mode = 3;
+	// Smoothed instantaneous bar heights and peak-hold markers for the
+	// spectrum analyzer; persist across frames (decay each frame).
+	float barHeight[24] = { 0 };
+	float barPeak[24] = { 0 };
 
 	int palette_fade_steps = 15;
 
@@ -98,6 +129,88 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 
 		bool gotKeyboardInput = starLibMain(&keyboardInput);
 
+		if (visualizer_mode != 0)
+		{
+			Sint16 vis[2048];
+			audio_visualizer_snapshot(vis, 2048);
+
+			if (visualizer_mode & 1)
+			{
+				// Oscilloscope: newest 320 samples as a connected waveform
+				// across the full screen width, centered at y=64.
+				int prevY = 0;
+				for (int sx = 0; sx < 320; ++sx)
+				{
+					Sint16 sample = vis[2048 - 320 + sx];
+					int y = 64 - (sample * 40 / 32768);
+					if (y < 2)
+						y = 2;
+					if (y > 197)
+						y = 197;
+
+					if (sx == 0)
+					{
+						JE_pix(VGAScreen, 0, y, 10);
+					}
+					else
+					{
+						int y0 = prevY, y1 = y;
+						if (y0 > y1)
+						{
+							int t = y0; y0 = y1; y1 = t;
+						}
+						for (int py = y0; py <= y1; ++py)
+							JE_pix(VGAScreen, sx, py, 10);
+					}
+					prevY = y;
+				}
+			}
+
+			if (visualizer_mode & 2)
+			{
+				// Spectrum: 24 log-spaced bars, 60 Hz .. 10000 Hz, magnitude
+				// via Goertzel over the newest 1024 samples.
+				const Sint16 *spectrumSamples = vis + (2048 - 1024);
+
+				for (int i = 0; i < 24; ++i)
+				{
+					double freq = 60.0 * pow(10000.0 / 60.0, i / 23.0);
+					float mag = goertzel_mag(spectrumSamples, 1024, audioSampleRate, freq);
+
+					double db = 20.0 * log10(mag / (512.0 * 32768.0) + 1e-9);
+					float instant;
+					if (db <= -60.0)
+						instant = 0.0f;
+					else if (db >= 0.0)
+						instant = 48.0f;
+					else
+						instant = (float)((db + 60.0) / 60.0 * 48.0);
+
+					barHeight[i] = fmaxf(instant, barHeight[i] - 4.0f);
+
+					if (barHeight[i] > barPeak[i])
+						barPeak[i] = barHeight[i];
+					else
+						barPeak[i] -= 0.4f;
+					if (barPeak[i] < 0)
+						barPeak[i] = 0;
+
+					int x1 = 60 + i * 8;
+					int x2 = x1 + 6;
+
+					if (barHeight[i] >= 1.0f)
+						fill_rectangle_xy(VGAScreen, x1, 150 - (int)barHeight[i], x2, 150, 13);
+
+					int peakY = 150 - (int)barPeak[i];
+					if (peakY < 102)
+						peakY = 102;
+					if (peakY > 150)
+						peakY = 150;
+					fill_rectangle_xy(VGAScreen, x1, peakY, x2, peakY, 15);
+				}
+			}
+		}
+
 		if (!hide_text)
 		{
 			char buffer[60];
@@ -106,7 +219,7 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 				snprintf(buffer, sizeof(buffer), "%d %s", fx_num + 1, soundTitle[fx_num]);
 			else
 				snprintf(buffer, sizeof(buffer), "%d %s [%s]", song_playing + 1, musicTitle[song_playing],
-				         hd_music_playing() ? "HD" : "OPL");
+				         hd_music_playing() ? "HD" : "Classic");
 
 			const int x = VGAScreen->w / 2;
 
@@ -132,7 +245,7 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 
 			drawFontHvAligned(VGAScreen, x, 163, "Press ESC to quit the jukebox.",       FONT_SMALL, ALIGN_CENTER, 1, 0);
 			drawFontHvAligned(VGAScreen, x, 172, "Up/Down change song. Left/Right seek.", FONT_SMALL, ALIGN_CENTER, 1, 0);
-			drawFontHvAligned(VGAScreen, x, 181, "H toggles HD remix / classic synth.",   FONT_SMALL, ALIGN_CENTER, 1, 0);
+			drawFontHvAligned(VGAScreen, x, 181, "H toggles HD/Classic. V cycles visualizer.", FONT_SMALL, ALIGN_CENTER, 1, 0);
 			drawFontHvAligned(VGAScreen, x, 190, buffer,                                 FONT_SMALL, ALIGN_CENTER, 1, 4);
 		}
 
@@ -174,6 +287,15 @@ void jukebox(void)  // FKA Setup.jukeboxGo
 				set_hd_music_playing(!hd_music);
 				break;
 			case SDL_SCANCODE_V:
+				if (visualizer_mode == 3)
+					visualizer_mode = 1;
+				else if (visualizer_mode == 1)
+					visualizer_mode = 2;
+				else if (visualizer_mode == 2)
+					visualizer_mode = 0;
+				else
+					visualizer_mode = 3;
+				break;
 			case KEY_COMBO(KMOD_SHIFT, SDL_SCANCODE_V):
 				// Not implemented.
 				break;

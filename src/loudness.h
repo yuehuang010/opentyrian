@@ -66,4 +66,10 @@ void set_volume(Uint8 musicVolume, Uint8 sampleVolume);
 
 void multiSamplePlay(const Sint16 *samples, size_t sampleCount, Uint8 chan, Uint8 vol);
 
+// Copy the most recent `count` mixed output samples (mono Sint16) into `out`,
+// oldest-first (out[count-1] is the most recent sample). For the jukebox
+// visualizer. Zero-fills `out` if audio is disabled or count exceeds the ring
+// capacity (2048).
+void audio_visualizer_snapshot(Sint16 *out, size_t count);
+
 #endif /* LOUDNESS_H */

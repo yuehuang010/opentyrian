@@ -55,6 +55,13 @@ static SDL_AudioDeviceID audioDevice = 0;
 static Uint8 musicVolume = 255;
 static Uint8 sampleVolume = 255;
 
+// Ring buffer of the most recent mixed output samples, for the jukebox
+// visualizer (see audio_visualizer_snapshot). Written at the end of
+// audioCallback; capacity must stay a power of two (wraparound uses masking,
+// never modulo).
+static Sint16 visualizerRing[2048];
+static size_t visualizerRingPos = 0;
+
 static const float volumeRange = 30.0f;  // dB
 
 // Fixed point Q20.12; needs to be able to store (10 * INT16_MIN/MAX)
@@ -544,6 +551,13 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 			remainingCount -= 1;
 		}
 	}
+
+	// Tap the final mixed output into the visualizer ring buffer.
+	for (int i = 0; i < samplesCount; ++i)
+	{
+		visualizerRing[visualizerRingPos & (2048 - 1)] = samples[i];
+		visualizerRingPos += 1;
+	}
 }
 
 void deinit_audio(void)
@@ -859,6 +873,23 @@ void multiSamplePlay(const Sint16 *samples, size_t sampleCount, Uint8 chan, Uint
 	channelSamples[chan] = samples;
 	channelSampleCount[chan] = sampleCount;
 	channelVolume[chan] = vol;
+
+	SDL_UnlockAudioDevice(audioDevice);
+}
+
+void audio_visualizer_snapshot(Sint16 *out, size_t count)
+{
+	if (audio_disabled || count > 2048)
+	{
+		memset(out, 0, count * sizeof(Sint16));
+		return;
+	}
+
+	SDL_LockAudioDevice(audioDevice);
+
+	size_t pos = visualizerRingPos;
+	for (size_t i = 0; i < count; ++i)
+		out[count - 1 - i] = visualizerRing[(pos - 1 - i) & (2048 - 1)];
 
 	SDL_UnlockAudioDevice(audioDevice);
 }
