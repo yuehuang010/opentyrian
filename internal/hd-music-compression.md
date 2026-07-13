@@ -34,9 +34,17 @@ Opus is the only option with a big win (30 MB @96k, ~46% smaller), but it breaks
 seamless looping and needs real engineering:
 
 - **35 of 41 tracks carry `LOOPSTART`/`LOOPLENGTH`** Vorbis comments (sample
-  offsets, under ffprobe `stream_tags` not `format_tags`; only 6 one-shot
-  stingers lack them — tracks 10, 11, 19, 25, 31, 34). `src/loudness.c`
-  `hd_music_load_song()` seeks to `LOOPSTART` at end-of-stream.
+  offsets, under ffprobe `stream_tags` not `format_tags`; 6 lack them — tracks
+  10, 11, 19, 25, 31, 34). `src/loudness.c` `hd_music_load_song()` seeks to
+  `LOOPSTART` at end-of-stream.
+  - **Correction (2026-07-12):** these 6 are NOT all one-shot stingers — that
+    earlier assumption was wrong and it hid a bug. Only tracks 10 (Level End)
+    and 11 (Game Over) are true one-shots. Tracks **19 (The MusicMan), 25 (The
+    final edge), 31 (ZANAC3), 34 (High Score Table) are looping tracks whose
+    OGGs simply were never tagged** — so in HD mode they fell silent at EOF
+    mid-mission. Fixed engine-side (loop untagged tracks from 0 while the LDS
+    master is still `playing`); assets untouched. See
+    [[issue/hd-music-untagged-loop-silence]].
 - Opus is hard-locked to **48000 Hz** and carries a **312-sample pre-skip**, so
   44100-domain loop offsets don't survive a naive re-encode — they'd need
   recomputing. `ffmpeg -c:a libopus` also drops the LOOP* comments by default.

@@ -279,6 +279,17 @@ static void hd_music_decode(Sint16 *out, int count)
 				stb_vorbis_seek(hd_vorbis, hd_loop_start);
 				hd_pos = hd_loop_start;
 			}
+			else if (playing)
+			{
+				// No LOOPSTART/LOOPLENGTH tags, but the LDS master sequencer is
+				// still playing -- i.e. this is a looping track whose OGG just
+				// wasn't tagged (e.g. ZANAC3, The final edge). Mirror the synth
+				// and loop the whole OGG rather than falling silent mid-mission.
+				// Genuine one-shots (Level End, Game Over) let the LDS stop, so
+				// `playing` is false there and we fall through to hd_ended below.
+				stb_vorbis_seek(hd_vorbis, 0);
+				hd_pos = 0;
+			}
 			else
 			{
 				hd_ended = true;
