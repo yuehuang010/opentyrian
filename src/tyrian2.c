@@ -2397,7 +2397,17 @@ draw_player_shot_loop_end:
 	// interpolated frames until the tick deadline instead of a single paced frame.
 	// Only when smoothScroll paces the sim and we're not in an end-of-level frame;
 	// otherwise fall back to the classic single-present path.
-	if (highfps_mode && smoothScroll != 0 && !playerEndLevel && !skipStarShowVGA)
+	//
+	// Bail on `anySmoothies` too: when a smoothie/filter effect is active (water,
+	// lava, iced, blur -- e.g. Savara V's water), draw_background_1 is redirected
+	// to VGAScreen2 (see the `if (anySmoothies) VGAScreen = VGAScreen2` above) and
+	// the opaque base layer only reaches game_screen through the framebuffer-reading
+	// filter (water_filter et al.). interp_record_bg_row records only draws to
+	// game_screen, so bg1 is never captured; the interp replay then clears to black
+	// and paints only the sparse bg2/bg3 overlays -- a black playfield. Those filters
+	// can't be replayed op-by-op anyway, so present these frames classically (correct
+	// look, just no motion interpolation and bg1 stays 8-bit rather than HD-upscaled).
+	if (highfps_mode && smoothScroll != 0 && !playerEndLevel && !skipStarShowVGA && !anySmoothies)
 	{
 		flight_interp_capture();
 		flight_present();
