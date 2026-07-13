@@ -76,3 +76,6 @@ tyrian.hd
 
 # HD music remaster pipeline working directory (tools/hd_music_pipeline.sh)
 /hdmusic_work/
+
+# Python bytecode cache from the tools/ asset pipeline
+__pycache__/

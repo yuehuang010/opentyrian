@@ -137,9 +137,24 @@ the engine, only reads from ./tyrian21 and writes new files there (plus a
 couple of preview PNGs under tools/).
 
 Usage:
-  python3 tools/hd_extract_comp.py
+  python3 tools/hd_extract_comp.py [--jobs N]
+
+PARALLELIZATION: per-frame decode (cheap RLE unpacking) stays serial in the
+main process; the expensive part -- xBRZ 4x upscale + HDPX write -- is farmed
+out to a ProcessPoolExecutor, one task per frame, across all sheets' frames
+combined into a single flat task list (not one pool per sheet) so the pool
+self-balances across the full ~11,856-frame workload. Tasks are dispatched
+with chunksize=1 (see executor.map() call in main()): sheets vary a lot in
+frame size/complexity, and a large static chunksize would let one worker get
+stuck with a disproportionate share of the largest sheet's frames while
+others idle (this exact trap bit tools/mkbundle.py -- see its history). The
+palette (the only data constant across every frame in the whole run) is
+shipped to each worker process once via ProcessPoolExecutor's
+initializer/initargs, not re-sent per task.
 """
 
+import argparse
+import concurrent.futures
 import glob
 import json
 import math
@@ -147,6 +162,13 @@ import os
 import struct
 import sys
 import zlib
+
+import hdkernels
+
+# The C xBRZ kernel (tools/hdkernels.c, built by CMake) when it's available,
+# else None and the pure-Python scaler below runs instead -- byte-identical
+# output either way. See tools/hdkernels.py.
+_KERNELS = hdkernels.load()
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -470,6 +492,9 @@ def xbrz_scale_4x(rgba, src_w, src_h):
     xBRZ-scale an RGBA buffer (as produced by colorize_rgba()) by 4x,
     returning a new RGBA bytearray of size (src_w*4) * (src_h*4) * 4.
     """
+    if _KERNELS is not None:
+        return _KERNELS.xbrz_scale_4x(rgba, src_w, src_h)
+
     w, h = src_w, src_h
     total = w * h
 
@@ -748,12 +773,29 @@ def load_shp_block_offsets(path, shp_num=SHP_NUM):
 # Extraction driver
 # ---------------------------------------------------------------------------
 
-def process_sheet(sheet_name, data, palette, manifest, preview_targets, want_preview=False):
+def decode_sheet_frames(sheet_name, data, want_preview=False):
     """
-    data: the Sprite2_array's raw bytes (already sliced to just this
+    Decode every frame of a Sprite2 sheet into flat palette-index buffers.
+    This is pure RLE unpacking -- cheap relative to the xBRZ upscale -- so it
+    stays serial in the main process; only the per-frame colorize+upscale+
+    write (see _process_frame_worker below) is farmed out to the pool.
+
+    `data`: the Sprite2_array's raw bytes (already sliced to just this
     sheet's span, if it came from a multi-block container like tyrian.shp).
-    Returns (frame_count, written_count, dims_min, dims_max) or None on a
-    structural decode failure serious enough to abort just this sheet.
+
+    Returns None on a structural decode failure serious enough to abort just
+    this sheet. Otherwise returns (frame_count, bad_frames, frame_records,
+    sheet_tasks):
+      - frame_records: manifest entries in index order, for every frame that
+        decoded successfully. These are fully determined by (sheet_name,
+        index) -- file name and HD dimensions don't depend on the pool's
+        output -- so they're built here rather than after processing.
+      - sheet_tasks: (sheet_name, index, indices, need_preview) tuples, one
+        per successfully-decoded frame, ready to hand to the process pool.
+        need_preview is True for at most one frame per sheet: the first
+        non-blank (any nonzero index) decoded frame, when want_preview is
+        set -- matching the original serial code's "grab the first one as
+        this sheet's preview" behavior.
     """
     try:
         frame_count, offsets = load_sprite2_sheet(data)
@@ -761,10 +803,8 @@ def process_sheet(sheet_name, data, palette, manifest, preview_targets, want_pre
         print("error: %s: failed to read frame table: %s" % (sheet_name, e), file=sys.stderr)
         return None
 
-    written = 0
-    frame_records = []
     bad_frames = 0
-
+    decoded = []  # (index, indices) for successfully-decoded frames
     for index, off in enumerate(offsets):
         try:
             indices, _consumed = decode_comp_frame(data, off)
@@ -772,16 +812,20 @@ def process_sheet(sheet_name, data, palette, manifest, preview_targets, want_pre
             print("  warning: %s frame %d: decode error: %s" % (sheet_name, index, e), file=sys.stderr)
             bad_frames += 1
             continue
+        decoded.append((index, indices))
 
-        rgba = colorize_rgba(indices, palette)
-        upscaled = xbrz_scale_4x(rgba, TILE_W, TILE_H)
-        hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
+    preview_index = None
+    if want_preview:
+        for index, indices in decoded:
+            if any(v != 0 for v in indices):
+                preview_index = index
+                break
 
+    hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
+    frame_records = []
+    sheet_tasks = []
+    for index, indices in decoded:
         out_name = "hdcomp_%s_%02d.dat" % (sheet_name, index)
-        out_path = os.path.join(DATA_DIR, out_name)
-        write_hdpx_asset(out_path, upscaled, hd_w, hd_h, channels=4)
-        written += 1
-
         frame_records.append({
             "index": index,
             "file": out_name,
@@ -790,22 +834,66 @@ def process_sheet(sheet_name, data, palette, manifest, preview_targets, want_pre
             "hd_width": hd_w,
             "hd_height": hd_h,
         })
+        sheet_tasks.append((sheet_name, index, indices, index == preview_index))
 
-        if want_preview and sheet_name not in preview_targets and any(v != 0 for v in indices):
-            # non-blank frame; grab the first one as this sheet's preview
-            preview_targets[sheet_name] = (index, upscaled, hd_w, hd_h)
+    return frame_count, bad_frames, frame_records, sheet_tasks
 
-    manifest[sheet_name] = {
-        "frame_count": frame_count,
-        "frames_written": written,
-        "frames_failed": bad_frames,
-        "frames": frame_records,
-    }
 
-    return frame_count, written, bad_frames
+# ---------------------------------------------------------------------------
+# Parallel per-frame processing
+#
+# Colorizing + xBRZ-upscaling + HDPX-writing one frame is independent of
+# every other frame, across every sheet -- so all sheets' frames are farmed
+# out to a single process pool together (see main()), rather than one pool
+# per sheet, so the pool can self-balance across the full run instead of
+# re-paying startup cost and load-imbalance risk per sheet.
+#
+# The palette is the only data constant across every task in the whole run
+# (there's no per-sheet resampling table here, unlike hd_extract_anim.py's
+# Lanczos taps -- xBRZ needs no precomputed table), so it's the only thing
+# shipped via initializer/initargs rather than re-pickled per task. Windows
+# has no fork(), so the pool uses "spawn": worker processes start fresh and
+# re-import this module, so all per-worker state must arrive via initargs or
+# be a plain module-level constant.
+# ---------------------------------------------------------------------------
+
+_worker_palette = None
+
+
+def _init_worker(palette):
+    global _worker_palette
+    _worker_palette = palette
+
+
+def _process_frame_worker(sheet_name, index, indices, need_preview):
+    """
+    Runs in a worker process. Colorizes + xBRZ-upscales + writes the .dat
+    file for one frame, using the palette stashed by _init_worker(). Only
+    returns the (small, 48x56 RGBA = ~10KB) upscaled buffer when
+    `need_preview` is set; otherwise returns None in its place since the
+    caller already has everything else it needs (out_name/dimensions are
+    deterministic from sheet_name/index, computed in decode_sheet_frames()).
+    """
+    rgba = colorize_rgba(indices, _worker_palette)
+    upscaled = xbrz_scale_4x(rgba, TILE_W, TILE_H)
+    hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
+
+    out_name = "hdcomp_%s_%02d.dat" % (sheet_name, index)
+    out_path = os.path.join(DATA_DIR, out_name)
+    write_hdpx_asset(out_path, upscaled, hd_w, hd_h, channels=4)
+
+    return sheet_name, index, (upscaled if need_preview else None)
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Extract HD frame assets from tyrian21's compiled Sprite2 sheets.")
+    parser.add_argument("--jobs", type=int, default=(os.cpu_count() or 1),
+                         help="number of worker processes for the per-frame xBRZ upscale (default: os.cpu_count())")
+    args = parser.parse_args()
+
+    print(hdkernels.describe())
+
     os.makedirs(DATA_DIR, exist_ok=True)
 
     if not os.path.isfile(PALETTE_PATH):
@@ -815,10 +903,31 @@ def main():
     palette = load_palette(PALETTE_PATH, MAIN_PALETTE_INDEX)
 
     manifest = {}
-    preview_targets = {}  # sheet_name -> (index, upscaled_rgba, hd_w, hd_h)
+    all_tasks = []  # flat (sheet_name, index, indices, need_preview), every sheet combined
     total_written = 0
     total_failed = 0
-    sheet_summaries = []  # (name, frame_count, written, failed) for the report
+    sheet_summaries = []  # (name, src, frame_count, written, failed) for the report
+
+    def record_sheet(sheet_name, src, result):
+        # Records manifest/summary data immediately from the (serial) decode
+        # step -- these fields don't depend on the pool's output, see
+        # decode_sheet_frames()'s docstring -- and stashes the sheet's
+        # per-frame tasks into the single flat list processed by one pool
+        # for the whole run (below), rather than one pool per sheet.
+        nonlocal total_written, total_failed
+        if result is None:
+            return
+        frame_count, bad_frames, frame_records, sheet_tasks = result
+        manifest[sheet_name] = {
+            "frame_count": frame_count,
+            "frames_written": len(frame_records),
+            "frames_failed": bad_frames,
+            "frames": frame_records,
+        }
+        all_tasks.extend(sheet_tasks)
+        total_written += len(frame_records)
+        total_failed += bad_frames
+        sheet_summaries.append((sheet_name, src, frame_count, len(frame_records), bad_frames))
 
     # --- five Sprite2 blocks inside tyrian.shp ---
     if not os.path.isfile(SHP_PATH):
@@ -837,13 +946,8 @@ def main():
                 block = data[start:end]
                 print("Sheet %-14s tyrian.shp[%d:%d] (%d bytes) ..." % (sheet_name, start, end, end - start))
                 # sheet9 = player ship sprites; grab a preview frame from it.
-                result = process_sheet(sheet_name, block, palette, manifest, preview_targets,
-                                        want_preview=(sheet_name == "sheet9"))
-                if result:
-                    fc, w, bad = result
-                    total_written += w
-                    total_failed += bad
-                    sheet_summaries.append((sheet_name, "tyrian.shp", fc, w, bad))
+                result = decode_sheet_frames(sheet_name, block, want_preview=(sheet_name == "sheet9"))
+                record_sheet(sheet_name, "tyrian.shp", result)
 
     # --- whole-file shop/explosion/destruct sheets ---
     for filename, sheet_name in WHOLE_FILE_SHEETS:
@@ -854,12 +958,8 @@ def main():
         with open(path, "rb") as f:
             data = f.read()
         print("Sheet %-14s %s (%d bytes) ..." % (sheet_name, filename, len(data)))
-        result = process_sheet(sheet_name, data, palette, manifest, preview_targets)
-        if result:
-            fc, w, bad = result
-            total_written += w
-            total_failed += bad
-            sheet_summaries.append((sheet_name, filename, fc, w, bad))
+        result = decode_sheet_frames(sheet_name, data)
+        record_sheet(sheet_name, filename, result)
 
     # --- every remaining newsh*.shp is an enemy Sprite2 sheet ---
     enemy_paths = sorted(
@@ -876,13 +976,28 @@ def main():
             data = f.read()
         print("Sheet %-14s %s (%d bytes) ..." % (sheet_name, filename, len(data)))
         # grab a preview frame from the first enemy sheet encountered
-        result = process_sheet(sheet_name, data, palette, manifest, preview_targets,
-                                want_preview=(enemy_i == 0))
-        if result:
-            fc, w, bad = result
-            total_written += w
-            total_failed += bad
-            sheet_summaries.append((sheet_name, filename, fc, w, bad))
+        result = decode_sheet_frames(sheet_name, data, want_preview=(enemy_i == 0))
+        record_sheet(sheet_name, filename, result)
+
+    # --- farm every sheet's frames out to a single process pool together,
+    # see the "Parallel per-frame processing" block comment above for why
+    # this is one flat pool over the whole ~11,856-frame run (not one pool
+    # per sheet) and why chunksize=1 (dynamic dispatch avoids the
+    # load-imbalance trap of a static chunksize over frames of varying
+    # decode complexity). ---
+    preview_targets = {}  # sheet_name -> (index, upscaled_rgba, hd_w, hd_h)
+    if all_tasks:
+        jobs = max(1, args.jobs)
+        hd_w, hd_h = TILE_W * SCALE, TILE_H * SCALE
+        with concurrent.futures.ProcessPoolExecutor(
+                max_workers=jobs, initializer=_init_worker, initargs=(palette,)) as executor:
+            # executor.map() preserves submission order in its result order
+            # (regardless of which worker finishes first), so preview_targets
+            # ends up populated in the same order the serial code produced it.
+            for sheet_name, index, upscaled in executor.map(
+                    _process_frame_worker, *zip(*all_tasks), chunksize=1):
+                if upscaled is not None:
+                    preview_targets[sheet_name] = (index, upscaled, hd_w, hd_h)
 
     with open(MANIFEST_PATH, "w") as f:
         json.dump({

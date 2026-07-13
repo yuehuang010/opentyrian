@@ -99,12 +99,20 @@ Format references:
 """
 
 import argparse
+import concurrent.futures
 import json
 import math
 import os
 import struct
 import sys
 import zlib
+
+import hdkernels
+
+# The C Lanczos + xBRZ kernels (tools/hdkernels.c, built by CMake) when they're
+# available, else None and the pure-Python versions below run instead --
+# byte-identical output either way. See tools/hdkernels.py.
+_KERNELS = hdkernels.load()
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -367,44 +375,6 @@ def load_standalone_pcx(path):
     return bytes(out), palette, width, height
 
 
-def process_standalone_pcx(filename, prefix, want_preview):
-    """
-    Process one standalone full-screen PCX (see STANDALONE_PCX): decode with
-    its own embedded palette, Lanczos-upscale 4x (photographic/dithered art,
-    same reasoning as the tyrian.pic backdrops), and write
-    tyrian21/hdpcx_<prefix>.dat (+ optional PNG preview). Returns True on
-    success. If the source file is missing, prints a notice and returns
-    False without raising, so the caller can continue with other assets.
-    """
-    src_path = os.path.join(DATA_DIR, filename)
-    if not os.path.isfile(src_path):
-        print("skip: %s not found at %s (not present in this data dir)" % (filename, src_path),
-              file=sys.stderr)
-        return False
-
-    try:
-        out_path = os.path.join(DATA_DIR, "hdpcx_%s.dat" % prefix)
-        print("PCX %s: own embedded palette -> %s ..." % (filename, out_path))
-
-        indices, palette, src_w, src_h = load_standalone_pcx(src_path)
-        rgb = colorize(indices, palette)
-        dst_w, dst_h = src_w * SCALE, src_h * SCALE
-        upscaled = lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3)
-
-        os.makedirs(DATA_DIR, exist_ok=True)
-        write_hdpx_asset(out_path, upscaled, dst_w, dst_h)
-
-        if want_preview:
-            os.makedirs(PREVIEW_DIR, exist_ok=True)
-            preview_path = os.path.join(PREVIEW_DIR, "hdpcx_%s.png" % prefix)
-            write_png(preview_path, upscaled, dst_w, dst_h)
-
-        return True
-    except Exception as e:
-        print("error: failed to process %s: %s" % (filename, e), file=sys.stderr)
-        return False
-
-
 # ---------------------------------------------------------------------------
 # STEP 2b: tyrian.shp -> decoded sprite frames (indexed pixels + alpha mask)
 # ---------------------------------------------------------------------------
@@ -656,15 +626,13 @@ def clamp_byte(v):
     return iv
 
 
-def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3, channels=3):
-    h_taps = build_taps(src_w, dst_w, a)
-    v_taps = build_taps(src_h, dst_h, a)
-
-    # Horizontal pass first (src_w -> dst_w), producing dst_w x src_h.
-    stage1 = resample_axis_horizontal(rgb, src_w, src_h, dst_w, h_taps, channels)
-    # Vertical pass second (src_h -> dst_h), producing dst_w x dst_h.
-    stage2 = resample_axis_vertical(stage1, dst_w, src_h, dst_h, v_taps, channels)
-    return stage2
+# NOTE: there is no combining lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h)
+# helper here (unlike tools/hd_extract_anim.py) -- every caller in this file
+# runs inside a worker process and shares one Lanczos-taps cache across many
+# backdrops, so build_taps() is never called per-image; see
+# _worker_lanczos_upscale() in the "STEP 6" section below, which calls
+# resample_axis_horizontal()/resample_axis_vertical() directly against taps
+# looked up from that cache.
 
 
 # ---------------------------------------------------------------------------
@@ -977,6 +945,9 @@ def xbrz_scale_4x(rgba, src_w, src_h):
     returning a new RGBA bytearray of size (src_w*4) * (src_h*4) * 4. See
     the "STEP 4b" block comment above for what this ports and how.
     """
+    if _KERNELS is not None:
+        return _KERNELS.xbrz_scale_4x(rgba, src_w, src_h)
+
     w, h = src_w, src_h
     total = w * h
 
@@ -1108,14 +1079,16 @@ def write_hdpx_asset(path, pixels, width, height, channels=3):
             f.write(bytes(pixels))
         else:
             # Build RGBA in bulk: interleave triplets with a constant alpha.
-            out = bytearray(width * height * 4)
-            for i in range(width * height):
-                so = i * 3
-                do = i * 4
-                out[do] = pixels[so]
-                out[do + 1] = pixels[so + 1]
-                out[do + 2] = pixels[so + 2]
-                out[do + 3] = 255
+            # Extended-slice assignment on a bytearray does this in C, which
+            # matters: a 1280x800 backdrop is a million pixels, and a per-pixel
+            # Python loop here cost more than the whole (C-accelerated) upscale.
+            px_count = width * height
+            src = bytes(pixels)
+            out = bytearray(px_count * 4)
+            out[0::4] = src[0::3]
+            out[1::4] = src[1::3]
+            out[2::4] = src[2::3]
+            out[3::4] = b"\xff" * px_count
             f.write(out)
 
 
@@ -1155,180 +1128,234 @@ def write_png(path, rgb, width, height):
 
 
 # ---------------------------------------------------------------------------
-# main
+# STEP 6: parallel worker infrastructure
+#
+# Every backdrop (a tyrian.pic image or a standalone PCX) and every sprite-
+# table frame is decoded, colorized, upscaled, and written to disk
+# independently of every other one, so the whole pipeline is farmed out to a
+# ProcessPoolExecutor. The work items vary enormously in cost -- a handful of
+# full-screen Lanczos backdrops (1280x800) alongside hundreds of small xBRZ
+# sprite frames, plus one outsized PLANET_SHAPES frame (the title logo) -- so
+# every task (backdrops and sprite frames alike) is dispatched from one flat,
+# submission-ordered list with chunksize=1 (see tools/mkbundle.py's
+# chunksize=1 comment for why: any static chunking of a size-varying task
+# list risks stranding most of the work on one worker while the rest of the
+# pool idles). executor.map() yields results in submission order regardless
+# of completion order, which is what lets main() rebuild manifest_frames in
+# the same order the old serial code produced it.
+#
+# Constant data that doesn't vary per task -- the palette.dat slots actually
+# needed, and the separable-Lanczos resampling taps -- is computed once in
+# the parent process and handed to each worker a single time via
+# ProcessPoolExecutor's initializer/initargs, rather than being re-pickled
+# and re-sent on every task. Taps depend only on source sample count (not a
+# single fixed pair like hd_extract_anim.py's SRC/DST): every backdrop here
+# is upscaled by the same fixed SCALE=4x, but the standalone PCX files carry
+# their own width/height (see peek_pcx_dimensions() below), so taps are
+# cached per distinct source dimension. xBRZ sprite-frame tasks need no taps
+# at all -- it's a fixed edge-directed 4x scaler, not tap-based.
+#
+# Windows has no fork(), so the pool uses the (default, cross-platform)
+# "spawn" start method: worker processes start fresh and re-import this
+# module, so all per-worker state must arrive either via initargs or be a
+# plain module-level constant computed at import time.
 # ---------------------------------------------------------------------------
 
-def process_pic(n, palette_cache, want_preview):
+_worker_palette_cache = None
+_worker_taps_cache = None
+
+
+def _init_worker(palette_cache, taps_cache):
     """
-    Process one 1-based image number n: decode, colorize, upscale, and write
-    the engine asset (plus optional PNG preview and, for image #4, the
-    legacy hdtitle.dat). Returns True on success, False on failure (errors
-    are printed but not raised, so callers can continue with other images).
+    ProcessPoolExecutor initializer: stashes the (constant, per-pool-lifetime)
+    palette cache and precomputed Lanczos taps into this worker process's
+    globals, once, instead of resending them on every submitted task.
     """
-    try:
-        pal_index = PCXPAL[n - 1]
-
-        out_asset_path = os.path.join(DATA_DIR, "hdpic%02d.dat" % n)
-        print("Image %d/%d: palette %d -> %s ..." % (n, PCX_NUM, pal_index, out_asset_path))
-
-        palette = palette_cache.get(pal_index)
-        if palette is None:
-            palette = load_palette(PALETTE_PATH, pal_index)
-            palette_cache[pal_index] = palette
-
-        indices = load_pic_indices(PIC_PATH, n)
-        rgb = colorize(indices, palette)
-        upscaled = lanczos_upscale(rgb, SRC_W, SRC_H, DST_W, DST_H, a=3)
-
-        os.makedirs(DATA_DIR, exist_ok=True)
-        write_hdpx_asset(out_asset_path, upscaled, DST_W, DST_H)
-
-        if n == PIC_NUMBER_1BASED:
-            write_hdpx_asset(OUT_TITLE_ASSET_PATH, upscaled, DST_W, DST_H)
-            print("  also wrote legacy asset %s" % OUT_TITLE_ASSET_PATH)
-
-        if want_preview:
-            os.makedirs(PREVIEW_DIR, exist_ok=True)
-            preview_path = os.path.join(PREVIEW_DIR, "hdpic%02d.png" % n)
-            write_png(preview_path, upscaled, DST_W, DST_H)
-
-        return True
-    except Exception as e:
-        print("error: failed to process image %d: %s" % (n, e), file=sys.stderr)
-        return False
+    global _worker_palette_cache, _worker_taps_cache
+    _worker_palette_cache = palette_cache
+    _worker_taps_cache = taps_cache
 
 
-def _get_cached_palette(palette_cache, pal_index):
-    palette = palette_cache.get(pal_index)
-    if palette is None:
-        palette = load_palette(PALETTE_PATH, pal_index)
-        palette_cache[pal_index] = palette
-    return palette
-
-
-def process_sprite_tables(palette_cache, manifest_frames):
+def _worker_taps(src_n):
     """
-    Extract PLANET_SHAPES, FACE_SHAPES, OPTION_SHAPES, and WEAPON_SHAPES
-    (SPRITE_TABLES) from tyrian.shp: decode each populated frame's RLE
-    pixels, key transparency to alpha, xBRZ-upscale 4x (RGBA; edge-directed
-    pixel-art scaling, so the title logo gets smooth curved edges instead of
-    blocky/blurry ones -- see the "STEP 4b" xBRZ port above), and write one
-    hd<prefix>_NN.dat HDPX-with-alpha asset per frame. A table entry with
-    palette None (FACE_SHAPES) is recolored per-frame via FACEPAL instead of
-    one fixed palette. Appends a manifest entry per frame to manifest_frames
-    (in place). Returns the number of frames written.
+    Look up this worker's precomputed taps for a source sample count of
+    src_n (the destination sample count is always src_n * SCALE -- every
+    backdrop in this file upscales by the same fixed factor). Falls back to
+    building them locally on a cache miss, so this stays correct even if the
+    parent's dimension pre-scan (see main()) ever misses a case -- just
+    without the caching benefit for that one task.
     """
-    if not os.path.isfile(SHP_PATH):
-        print("error: tyrian.shp not found at %s" % SHP_PATH, file=sys.stderr)
-        return 0
-
-    data, shp_pos = load_shp_table_offsets(SHP_PATH)
-
-    written = 0
-    for table_index, prefix, manifest_name, pal_index in SPRITE_TABLES:
-        sprites = load_sprite_table(data, shp_pos[table_index])
-
-        if pal_index is None:
-            print("Table %d (%s): %d frames, per-frame FACEPAL palette -> %s_NN.dat ..." %
-                  (table_index, prefix, len(sprites), prefix))
-        else:
-            print("Table %d (%s): %d frames, palette %d -> %s_NN.dat ..." %
-                  (table_index, prefix, len(sprites), pal_index, prefix))
-
-        for frame_index, sprite in enumerate(sprites):
-            if sprite is None:
-                continue
-
-            if pal_index is None:
-                if frame_index >= len(FACEPAL):
-                    print("  warning: frame %d has no FACEPAL entry (table has %d frames, "
-                          "FACEPAL has %d), falling back to palette 0" %
-                          (frame_index, len(sprites), len(FACEPAL)), file=sys.stderr)
-                    frame_pal_index = 0
-                else:
-                    frame_pal_index = FACEPAL[frame_index]
-            else:
-                frame_pal_index = pal_index
-
-            palette = _get_cached_palette(palette_cache, frame_pal_index)
-
-            indices, src_w, src_h = decode_sprite_rle(sprite)
-            rgba = colorize_rgba(indices, palette)
-            upscaled = xbrz_scale_4x(rgba, src_w, src_h)
-
-            out_name = "%s_%02d.dat" % (prefix, frame_index)
-            out_path = os.path.join(DATA_DIR, out_name)
-            write_hdpx_asset(out_path, upscaled, src_w * SCALE, src_h * SCALE, channels=4)
-
-            manifest_frames.append({
-                "table": manifest_name,
-                "frame_index": frame_index,
-                "file": out_name,
-                "palette": frame_pal_index,
-                "src_width": src_w,
-                "src_height": src_h,
-                "hd_width": src_w * SCALE,
-                "hd_height": src_h * SCALE,
-            })
-            written += 1
-
-    return written
+    taps = _worker_taps_cache.get(src_n)
+    if taps is None:
+        taps = build_taps(src_n, src_n * SCALE, a=3)
+    return taps
 
 
-def process_extra_shapes(palette_cache, manifest_frames):
+def _worker_lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, channels=3):
+    """Same two-pass separable resample as the old lanczos_upscale(), just
+    against taps pulled from the pool-wide cache instead of rebuilding them
+    per call. The C kernel builds its own taps (microseconds) and ignores the
+    cache entirely."""
+    if _KERNELS is not None:
+        return _KERNELS.lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, channels)
+
+    h_taps = _worker_taps(src_w)
+    v_taps = _worker_taps(src_h)
+    stage1 = resample_axis_horizontal(rgb, src_w, src_h, dst_w, h_taps, channels)
+    return resample_axis_vertical(stage1, dst_w, src_h, dst_h, v_taps, channels)
+
+
+def _do_pic(n, want_preview):
     """
-    Extract EXTRA_SHAPES from estsc.shp (a separate file from tyrian.shp;
-    see the EXTRA_SHAPES_PAL comment above), the same way
-    process_sprite_tables() handles tyrian.shp's tables: decode each
-    populated frame's RLE pixels, key transparency to alpha, xBRZ-upscale
-    4x, and write one hdextra_NN.dat HDPX-with-alpha asset per frame.
-    Appends a manifest entry per frame to manifest_frames (in place).
-    Returns the number of frames written (0 if estsc.shp is missing).
+    Runs in a worker process: the per-image body of the old process_pic() --
+    decode tyrian.pic image n, colorize with its pcxpal palette (looked up
+    from the cache _init_worker() stashed), Lanczos 4x-upscale, and write
+    hdpicNN.dat (+ hdtitle.dat for the title image, + an optional PNG
+    preview). Returns wrote_title (bool).
     """
-    if not os.path.isfile(EXTRA_SHP_PATH):
-        print("skip: estsc.shp not found at %s (EXTRA_SHAPES not extracted)" % EXTRA_SHP_PATH,
-              file=sys.stderr)
-        return 0
+    pal_index = PCXPAL[n - 1]
+    palette = _worker_palette_cache[pal_index]
 
-    with open(EXTRA_SHP_PATH, "rb") as f:
-        data = f.read()
+    indices = load_pic_indices(PIC_PATH, n)
+    rgb = colorize(indices, palette)
+    upscaled = _worker_lanczos_upscale(rgb, SRC_W, SRC_H, DST_W, DST_H)
 
-    palette = _get_cached_palette(palette_cache, EXTRA_SHAPES_PAL)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    out_asset_path = os.path.join(DATA_DIR, "hdpic%02d.dat" % n)
+    write_hdpx_asset(out_asset_path, upscaled, DST_W, DST_H)
 
-    # estsc.shp has no leading table-offset header (unlike tyrian.shp) --
-    # load_sprites_file() in src/sprite.c reads a single sprite table
-    # straight from the start of the file, so start_offset is 0.
-    sprites = load_sprite_table(data, 0)
-    print("EXTRA_SHAPES (estsc.shp): %d frames, palette %d -> hdextra_NN.dat ..." %
-          (len(sprites), EXTRA_SHAPES_PAL))
+    wrote_title = False
+    if n == PIC_NUMBER_1BASED:
+        write_hdpx_asset(OUT_TITLE_ASSET_PATH, upscaled, DST_W, DST_H)
+        wrote_title = True
 
-    written = 0
-    for frame_index, sprite in enumerate(sprites):
-        if sprite is None:
-            continue
+    if want_preview:
+        os.makedirs(PREVIEW_DIR, exist_ok=True)
+        preview_path = os.path.join(PREVIEW_DIR, "hdpic%02d.png" % n)
+        write_png(preview_path, upscaled, DST_W, DST_H)
 
-        indices, src_w, src_h = decode_sprite_rle(sprite)
-        rgba = colorize_rgba(indices, palette)
-        upscaled = xbrz_scale_4x(rgba, src_w, src_h)
+    return wrote_title
 
-        out_name = "hdextra_%02d.dat" % frame_index
-        out_path = os.path.join(DATA_DIR, out_name)
-        write_hdpx_asset(out_path, upscaled, src_w * SCALE, src_h * SCALE, channels=4)
 
-        manifest_frames.append({
-            "table": "EXTRA_SHAPES",
-            "frame_index": frame_index,
-            "file": out_name,
-            "palette": EXTRA_SHAPES_PAL,
-            "src_width": src_w,
-            "src_height": src_h,
-            "hd_width": src_w * SCALE,
-            "hd_height": src_h * SCALE,
-        })
-        written += 1
+def _do_pcx(filename, prefix, want_preview):
+    """
+    Runs in a worker process: the per-file body of the old
+    process_standalone_pcx() -- decode a standalone full-screen PCX with its
+    own embedded palette, Lanczos 4x-upscale, and write hdpcx_<prefix>.dat
+    (+ optional PNG preview). The caller (main()) already checked the source
+    file exists before submitting this task.
+    """
+    src_path = os.path.join(DATA_DIR, filename)
+    indices, palette, src_w, src_h = load_standalone_pcx(src_path)
+    rgb = colorize(indices, palette)
+    dst_w, dst_h = src_w * SCALE, src_h * SCALE
+    upscaled = _worker_lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h)
 
-    return written
+    os.makedirs(DATA_DIR, exist_ok=True)
+    out_path = os.path.join(DATA_DIR, "hdpcx_%s.dat" % prefix)
+    write_hdpx_asset(out_path, upscaled, dst_w, dst_h)
 
+    if want_preview:
+        os.makedirs(PREVIEW_DIR, exist_ok=True)
+        preview_path = os.path.join(PREVIEW_DIR, "hdpcx_%s.png" % prefix)
+        write_png(preview_path, upscaled, dst_w, dst_h)
+
+
+def _do_sprite_frame(prefix, manifest_name, frame_index, sprite, frame_pal_index):
+    """
+    Runs in a worker process: the per-frame body of the old
+    process_sprite_tables()/process_extra_shapes() -- decode one sprite's RLE
+    pixels, key transparency to alpha, xBRZ-upscale 4x, and write
+    hd<prefix>_NN.dat. Returns the manifest entry for this frame.
+    """
+    palette = _worker_palette_cache[frame_pal_index]
+
+    indices, src_w, src_h = decode_sprite_rle(sprite)
+    rgba = colorize_rgba(indices, palette)
+    upscaled = xbrz_scale_4x(rgba, src_w, src_h)
+
+    out_name = "%s_%02d.dat" % (prefix, frame_index)
+    out_path = os.path.join(DATA_DIR, out_name)
+    write_hdpx_asset(out_path, upscaled, src_w * SCALE, src_h * SCALE, channels=4)
+
+    return {
+        "table": manifest_name,
+        "frame_index": frame_index,
+        "file": out_name,
+        "palette": frame_pal_index,
+        "src_width": src_w,
+        "src_height": src_h,
+        "hd_width": src_w * SCALE,
+        "hd_height": src_h * SCALE,
+    }
+
+
+def _worker_dispatch(task):
+    """
+    Single polymorphic entry point submitted to the pool, so every task kind
+    -- backdrops and sprite frames alike -- shares one flat, self-balancing
+    task list (see the "STEP 6" comment above). `task` is (kind, *args).
+
+    "pic" and "pcx" tasks catch their own exceptions and report failure
+    instead of raising, matching the old process_pic()/
+    process_standalone_pcx()'s try/except (one bad image shouldn't abort the
+    whole extraction run). "sprite"/"extra" tasks intentionally do NOT catch
+    exceptions -- process_sprite_tables()/process_extra_shapes() never did
+    either, so a malformed sprite frame still aborts the run, same as before.
+    """
+    kind = task[0]
+    if kind == "pic":
+        _, n, want_preview = task
+        try:
+            wrote_title = _do_pic(n, want_preview)
+            return (kind, n, True, wrote_title)
+        except Exception as e:
+            return (kind, n, False, str(e))
+    elif kind == "pcx":
+        _, filename, prefix, want_preview = task
+        try:
+            _do_pcx(filename, prefix, want_preview)
+            return (kind, filename, True, None)
+        except Exception as e:
+            return (kind, filename, False, str(e))
+    elif kind == "sprite":
+        _, prefix, manifest_name, frame_index, sprite, frame_pal_index = task
+        manifest_entry = _do_sprite_frame(prefix, manifest_name, frame_index, sprite, frame_pal_index)
+        return (kind, manifest_entry)
+    elif kind == "extra":
+        _, frame_index, sprite, pal_index = task
+        manifest_entry = _do_sprite_frame("hdextra", "EXTRA_SHAPES", frame_index, sprite, pal_index)
+        return (kind, manifest_entry)
+    else:
+        raise ValueError("unknown task kind: %r" % (kind,))
+
+
+def peek_pcx_dimensions(path):
+    """
+    Read just the 128-byte PCX header to get width/height, without decoding
+    the RLE pixel body or the palette trailer. Used by main() to determine
+    which Lanczos taps (see build_taps()) the pool's workers will need,
+    before the (redundant, done again inside the worker) full decode.
+    """
+    with open(path, "rb") as f:
+        header = f.read(128)
+    if len(header) < 128:
+        raise ValueError("%s: file too short for a PCX header" % path)
+    xmin, ymin, xmax, ymax = struct.unpack_from("<HHHH", header, 4)
+    return xmax - xmin + 1, ymax - ymin + 1
+
+
+def build_palette_cache(pal_indices):
+    cache = {}
+    for idx in pal_indices:
+        if idx not in cache:
+            cache[idx] = load_palette(PALETTE_PATH, idx)
+    return cache
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
 
 def write_credits_backdrop_filler():
     """
@@ -1372,7 +1399,12 @@ def main():
     parser.add_argument(
         "--no-preview", action="store_true",
         help="skip writing PNG previews (faster)")
+    parser.add_argument(
+        "--jobs", type=int, default=(os.cpu_count() or 1),
+        help="number of worker processes for the parallel extraction (default: os.cpu_count())")
     args = parser.parse_args()
+
+    print(hdkernels.describe())
 
     if not os.path.isfile(PALETTE_PATH):
         print("error: palette.dat not found at %s" % PALETTE_PATH, file=sys.stderr)
@@ -1381,31 +1413,144 @@ def main():
         print("error: tyrian.pic not found at %s" % PIC_PATH, file=sys.stderr)
         return 1
 
-    palette_cache = {}
-    failed = []
-    for n in args.pics:
-        ok = process_pic(n, palette_cache, want_preview=not args.no_preview)
-        if not ok:
-            failed.append(n)
-
+    want_preview = not args.no_preview
     os.makedirs(DATA_DIR, exist_ok=True)
+    if want_preview:
+        os.makedirs(PREVIEW_DIR, exist_ok=True)
+
+    tasks = []
+
+    # --- tyrian.pic backdrops ------------------------------------------------
+    for n in args.pics:
+        pal_index = PCXPAL[n - 1]
+        out_asset_path = os.path.join(DATA_DIR, "hdpic%02d.dat" % n)
+        print("Image %d/%d: palette %d -> %s ..." % (n, PCX_NUM, pal_index, out_asset_path))
+        tasks.append(("pic", n, want_preview))
 
     write_credits_backdrop_filler()
 
+    # --- standalone full-screen PCX backdrops --------------------------------
     skipped_pcx = []
-    failed_pcx = []
     for filename, prefix in STANDALONE_PCX:
         src_path = os.path.join(DATA_DIR, filename)
-        ok = process_standalone_pcx(filename, prefix, want_preview=not args.no_preview)
-        if not ok:
-            if os.path.isfile(src_path):
-                failed_pcx.append(filename)
-            else:
-                skipped_pcx.append(filename)
+        if not os.path.isfile(src_path):
+            print("skip: %s not found at %s (not present in this data dir)" % (filename, src_path),
+                  file=sys.stderr)
+            skipped_pcx.append(filename)
+            continue
+        out_path = os.path.join(DATA_DIR, "hdpcx_%s.dat" % prefix)
+        print("PCX %s: own embedded palette -> %s ..." % (filename, out_path))
+        tasks.append(("pcx", filename, prefix, want_preview))
 
+    # --- tyrian.shp sprite tables ---------------------------------------------
+    if not os.path.isfile(SHP_PATH):
+        print("error: tyrian.shp not found at %s" % SHP_PATH, file=sys.stderr)
+    else:
+        data, shp_pos = load_shp_table_offsets(SHP_PATH)
+        for table_index, prefix, manifest_name, pal_index in SPRITE_TABLES:
+            sprites = load_sprite_table(data, shp_pos[table_index])
+
+            if pal_index is None:
+                print("Table %d (%s): %d frames, per-frame FACEPAL palette -> %s_NN.dat ..." %
+                      (table_index, prefix, len(sprites), prefix))
+            else:
+                print("Table %d (%s): %d frames, palette %d -> %s_NN.dat ..." %
+                      (table_index, prefix, len(sprites), pal_index, prefix))
+
+            for frame_index, sprite in enumerate(sprites):
+                if sprite is None:
+                    continue
+
+                if pal_index is None:
+                    if frame_index >= len(FACEPAL):
+                        print("  warning: frame %d has no FACEPAL entry (table has %d frames, "
+                              "FACEPAL has %d), falling back to palette 0" %
+                              (frame_index, len(sprites), len(FACEPAL)), file=sys.stderr)
+                        frame_pal_index = 0
+                    else:
+                        frame_pal_index = FACEPAL[frame_index]
+                else:
+                    frame_pal_index = pal_index
+
+                tasks.append(("sprite", prefix, manifest_name, frame_index, sprite, frame_pal_index))
+
+    # --- estsc.shp EXTRA_SHAPES ------------------------------------------------
+    if not os.path.isfile(EXTRA_SHP_PATH):
+        print("skip: estsc.shp not found at %s (EXTRA_SHAPES not extracted)" % EXTRA_SHP_PATH,
+              file=sys.stderr)
+    else:
+        with open(EXTRA_SHP_PATH, "rb") as f:
+            extra_data = f.read()
+        # estsc.shp has no leading table-offset header (unlike tyrian.shp) --
+        # load_sprites_file() in src/sprite.c reads a single sprite table
+        # straight from the start of the file, so start_offset is 0.
+        extra_sprites = load_sprite_table(extra_data, 0)
+        print("EXTRA_SHAPES (estsc.shp): %d frames, palette %d -> hdextra_NN.dat ..." %
+              (len(extra_sprites), EXTRA_SHAPES_PAL))
+        for frame_index, sprite in enumerate(extra_sprites):
+            if sprite is None:
+                continue
+            tasks.append(("extra", frame_index, sprite, EXTRA_SHAPES_PAL))
+
+    # --- constant data shipped to worker processes once, via the pool's ------
+    # --- initializer (see the "STEP 6" comment above) -------------------------
+    pal_indices_needed = set(PCXPAL[n - 1] for n in args.pics)
+    pal_indices_needed.update(FACEPAL)
+    pal_indices_needed.add(EXTRA_SHAPES_PAL)
+    for _, _, _, pal_index in SPRITE_TABLES:
+        if pal_index is not None:
+            pal_indices_needed.add(pal_index)
+    palette_cache = build_palette_cache(pal_indices_needed)
+
+    src_dims_needed = {SRC_W, SRC_H}
+    for filename, _ in STANDALONE_PCX:
+        src_path = os.path.join(DATA_DIR, filename)
+        if os.path.isfile(src_path):
+            try:
+                w, h = peek_pcx_dimensions(src_path)
+                src_dims_needed.add(w)
+                src_dims_needed.add(h)
+            except ValueError:
+                pass  # let the worker's own load_standalone_pcx() report the real error
+    taps_cache = {n: build_taps(n, n * SCALE, a=3) for n in src_dims_needed}
+
+    # --- run the pool -----------------------------------------------------------
+    failed = []
+    failed_pcx = []
     manifest_frames = []
-    sprite_count = process_sprite_tables(palette_cache, manifest_frames)
-    sprite_count += process_extra_shapes(palette_cache, manifest_frames)
+
+    jobs = max(1, args.jobs)
+    with concurrent.futures.ProcessPoolExecutor(
+            max_workers=jobs, initializer=_init_worker,
+            initargs=(palette_cache, taps_cache)) as executor:
+        # chunksize=1: task cost spans full-screen Lanczos backdrops down to
+        # tiny icon-sized xBRZ sprite frames, so a static chunk would strand
+        # most of the work on whichever worker's chunk happened to contain
+        # the big backdrops/title-logo frame while the rest of the pool
+        # idles (see tools/mkbundle.py's identical chunksize=1 fix). Dynamic
+        # per-task dispatch lets the pool self-balance instead. executor.map
+        # yields results in submission order (not completion order), so
+        # manifest_frames below ends up in the same order the old serial
+        # code produced it, for free.
+        for result in executor.map(_worker_dispatch, tasks, chunksize=1):
+            kind = result[0]
+            if kind == "pic":
+                _, n, ok, extra = result
+                if ok:
+                    if extra:  # wrote_title
+                        print("  also wrote legacy asset %s" % OUT_TITLE_ASSET_PATH)
+                else:
+                    print("error: failed to process image %d: %s" % (n, extra), file=sys.stderr)
+                    failed.append(n)
+            elif kind == "pcx":
+                _, filename, ok, err = result
+                if not ok:
+                    print("error: failed to process %s: %s" % (filename, err), file=sys.stderr)
+                    failed_pcx.append(filename)
+            else:  # "sprite" / "extra"
+                manifest_frames.append(result[1])
+
+    sprite_count = len(manifest_frames)
     if sprite_count:
         with open(SPRITE_MANIFEST_PATH, "w") as f:
             json.dump({"scale": SCALE, "frames": manifest_frames}, f, indent=2)

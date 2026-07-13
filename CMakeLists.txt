@@ -155,6 +155,34 @@ if(NOT WIN32)
     target_link_libraries(opentyrian PRIVATE m)
 endif()
 
+# --- HD pipeline kernel library ------------------------------------------------
+# tools/hdkernels.c: C ports of the HD pipeline's three hot per-pixel kernels
+# (Lanczos upscale, xBRZ upscale, QOI encode/decode), loaded from the Python
+# tools via ctypes (tools/hdkernels.py). The tools keep their pure-Python
+# implementations and fall back to them when this library is absent, so it is
+# purely a speedup -- but every HD-asset step below depends on it, because a
+# clean build is ~5x faster with it than without.
+#
+# The kernels must produce output byte-identical to the Python originals (the
+# built paks are hashed as the acceptance test). That is a floating-point
+# constraint: forbid fused multiply-add contraction, which would silently
+# change the low bit of the Lanczos accumulator and the xBRZ colour-distance
+# metric. See the header comment in tools/hdkernels.c.
+add_library(hdkernels SHARED ${CMAKE_CURRENT_SOURCE_DIR}/tools/hdkernels.c)
+set_target_properties(hdkernels PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+                                           C_EXTENSIONS OFF
+                                           C_VISIBILITY_PRESET hidden)
+target_compile_options(hdkernels PRIVATE
+    $<$<C_COMPILER_ID:MSVC>:/fp:precise>
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-pedantic>
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall>
+    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wextra>
+)
+if(NOT WIN32)
+    target_link_libraries(hdkernels PRIVATE m)
+endif()
+
 # --- HD-asset targets ---------------------------------------------------------
 # Drives tools/hd_build.py, the cross-platform orchestrator for the HD asset
 # extraction + bundling pipeline (writes tyrian.base / tyrian.hd). Owned by
@@ -186,6 +214,9 @@ if(Python3_Interpreter_FOUND)
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             COMMENT "HD assets: extracting ${step}"
         )
+        # The tools locate the kernel library by searching <repo>/build*, so it
+        # only has to exist before a step runs -- no path is plumbed through.
+        add_dependencies(hd-assets-${step} hdkernels)
         list(APPEND HD_EXTRACT_TARGETS hd-assets-${step})
     endforeach()
 
@@ -197,7 +228,7 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "HD assets: bundling tyrian.base + tyrian.hd"
     )
-    add_dependencies(hd-assets-bundle ${HD_EXTRACT_TARGETS})
+    add_dependencies(hd-assets-bundle hdkernels ${HD_EXTRACT_TARGETS})
 
     # User-facing entry point (`cmake --build build --target hd-assets`), and
     # the ALL hook when the assets are baked into the default build.

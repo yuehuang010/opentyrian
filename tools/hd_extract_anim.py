@@ -101,6 +101,13 @@ import struct
 import sys
 import zlib
 
+import hdkernels
+
+# The C Lanczos kernel (tools/hdkernels.c, built by CMake) when it's available,
+# else None and the pure-Python resampler below runs instead -- byte-identical
+# output either way, ~150x apart in speed. See tools/hdkernels.py.
+_KERNELS = hdkernels.load()
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -146,14 +153,17 @@ def write_hdpx_asset(path, pixels, width, height, channels=3):
         if channels == 4:
             f.write(bytes(pixels))
         else:
-            out = bytearray(width * height * 4)
-            for i in range(width * height):
-                so = i * 3
-                do = i * 4
-                out[do] = pixels[so]
-                out[do + 1] = pixels[so + 1]
-                out[do + 2] = pixels[so + 2]
-                out[do + 3] = 255
+            # Interleave RGB triplets with a constant alpha. Extended-slice
+            # assignment on a bytearray does this in C, which matters: a
+            # 1280x800 frame is a million pixels, and a per-pixel Python loop
+            # here cost more than the whole (C-accelerated) upscale.
+            px_count = width * height
+            src = bytes(pixels)
+            out = bytearray(px_count * 4)
+            out[0::4] = src[0::3]
+            out[1::4] = src[1::3]
+            out[2::4] = src[2::3]
+            out[3::4] = b"\xff" * px_count
             f.write(out)
 
 
@@ -302,8 +312,12 @@ def lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, a=3, channels=3, h_taps=Non
     src/dst dimensions, not on any per-frame pixel data) to skip the
     redundant build_taps() recomputation -- used by the parallel frame
     workers below, which compute the taps once per worker process instead
-    of once per frame.
+    of once per frame. Ignored on the C path, which rebuilds the taps per
+    call because doing so costs microseconds.
     """
+    if _KERNELS is not None and a == 3:
+        return _KERNELS.lanczos_upscale(rgb, src_w, src_h, dst_w, dst_h, channels)
+
     if h_taps is None:
         h_taps = build_taps(src_w, dst_w, a)
     if v_taps is None:
@@ -595,6 +609,8 @@ def main():
     parser.add_argument("--jobs", type=int, default=(os.cpu_count() or 1),
                          help="number of worker processes for the per-frame upscale (default: os.cpu_count())")
     args = parser.parse_args()
+
+    print(hdkernels.describe())
 
     if not os.path.isfile(ANM_PATH):
         print("tyrend.anm not found at %s -- nothing to do (is the data dir populated?)" % ANM_PATH)

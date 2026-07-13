@@ -9,6 +9,39 @@ Pure stdlib at the top level (no `numpy`/`PIL` imports at module scope), so
 present — deps are checked lazily via `importlib.util.find_spec` right
 before running, for only the steps actually selected.
 
+## C kernels (optional, but a ~7x speedup)
+
+The pipeline's three hot per-pixel kernels -- the separable Lanczos-3
+upscaler, the xBRZ 4x pixel-art upscaler, and the QOI encoder/decoder --
+have C ports in **`tools/hdkernels.c`**, built by CMake into a shared
+library:
+
+```sh
+cmake --build build --target hdkernels
+```
+
+`tools/hdkernels.py` finds that library (searching `$HD_KERNELS_LIB`,
+`$HD_KERNELS_DIR`, then `<repo>/build*` and its per-config subdirs) and
+loads it with **ctypes** -- stdlib-only, so the "no third-party deps"
+property above still holds. Each tool logs which path it took on its first
+line (`kernels: C (...)` or `kernels: pure Python (...)`).
+
+The pure-Python kernels remain in place as a **working fallback**: with no
+compiler and no library present, everything still runs, just slower. Full
+clean build on a 10-core Ryzen AI 9 365: **~18s with the C kernels, ~147s
+without.** Set `HD_KERNELS=0` to force the fallback (used to check it still
+produces byte-identical output).
+
+**Byte-identical output is a hard requirement** -- the paks are the
+acceptance test, and every generated asset feeds them. The C kernels mirror
+the Python arithmetic exactly, including Python's round-half-to-even
+`round()` and the exact float operation order; the CMake target forbids FMA
+contraction for the same reason. See the header comment in
+`tools/hdkernels.c` before touching either side.
+
+The `hd-assets-<step>` CMake targets all depend on `hdkernels`, so a
+`cmake --build build --target hd-assets` gets the fast path automatically.
+
 ## Prerequisites
 
 - Base Tyrian 2.1 data files unpacked into `tyrian21/` at the repo root (or
