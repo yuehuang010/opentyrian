@@ -298,7 +298,8 @@ resolution from logical space) was already done in Phases 0–1.
 
 ### Phase 6 — High-framerate retune (60 fps+)
 
-**Status: render interpolation live behind `[video] highfps` (default off).** We took
+**Status: render interpolation live behind `[video] highfps` (default ON since
+2026-07-12, after on-device validation).** We took
 recommended path (1) — *fixed-timestep simulation + rendered interpolation* — so the
 simulation is byte-identical and only presentation is decoupled. Because the flight
 loop fuses movement and drawing (and consumes RNG inside draw paths), a from-scratch
@@ -325,7 +326,9 @@ read-only re-render was rejected in favor of a **display-list capture/replay**
   One artifact found & fixed on-device: side-to-side scroll stuttered because the
   interpolator unwrapped only the *vertical* background tile wrap (28 px); added the
   symmetric *horizontal* unwrap (24 px = tile width, `mapXPos = mapXOfs % 24`) in
-  `interp_op_pos` (`src/interp.c`). Enable with `[video] highfps = true` or the menu.
+  `interp_op_pos` (`src/interp.c`). Now the compiled default (`config.c`,
+  `highfps_mode = true`); toggle off via Setup → Graphics → "Smooth FPS" or
+  `[video] highfps = false`.
 - **Not** the same as raising the *simulation* rate to 60/120 Hz (which retunes
   balance — option 2 below). That is a separate, opt-in follow-on now made far more
   tractable by this decoupling.

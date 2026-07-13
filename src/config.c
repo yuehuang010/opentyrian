@@ -269,7 +269,7 @@ bool load_opentyrian_config(void)
 	fullscreen_display = -1;
 	hd_mode = true;
 	crt_mode = false;
-	highfps_mode = false;
+	highfps_mode = true;
 	hd_tiles = false;  // HD level tilesets (Phase S3); opt-in until seam A/B signed off
 	hd_sfx = true;
 	hd_music = true;
