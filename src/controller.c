@@ -268,21 +268,61 @@ void push_controllers_as_keyboard(void)
 }
 
 // loads an optional user-supplied gamecontrollerdb.txt from the data dir, if present
+//
+// reads the file into memory ourselves rather than handing SDL a FILE* (via
+// SDL_RWFromFP): on Windows, SDL may be linked against a different CRT, and a
+// FILE* created by our runtime isn't valid to fread/fclose across that boundary.
 static void load_gamecontrollerdb(void)
 {
 	FILE *f = dir_fopen(data_dir(), "gamecontrollerdb.txt", "rb");
 	if (f == NULL)
 		return; // absent file: silent no-op
 
-	SDL_RWops *rw = SDL_RWFromFP(f, SDL_TRUE);
-	if (rw == NULL)
+	if (fseek(f, 0, SEEK_END) != 0)
 	{
 		fclose(f);
 		return;
 	}
 
+	long size = ftell(f);
+	if (size < 0 || fseek(f, 0, SEEK_SET) != 0)
+	{
+		fclose(f);
+		return;
+	}
+
+	char *buffer = malloc((size_t)size);
+	if (buffer == NULL)
+	{
+		fprintf(stderr, "warning: out of memory loading gamecontrollerdb.txt\n");
+		fclose(f);
+		return;
+	}
+
+	size_t read = fread(buffer, 1, (size_t)size, f);
+	fclose(f);
+
+	if (read != (size_t)size)
+	{
+		fprintf(stderr, "warning: failed to read gamecontrollerdb.txt\n");
+		free(buffer);
+		return;
+	}
+
+	SDL_RWops *rw = SDL_RWFromConstMem(buffer, (int)size);
+	if (rw == NULL)
+	{
+		fprintf(stderr, "warning: failed to load gamecontrollerdb.txt: %s\n", SDL_GetError());
+		free(buffer);
+		return;
+	}
+
+	// SDL_GameControllerAddMappingsFromRW(rw, 1) frees the RWops (the 1 means
+	// "close it for me"); it does not touch our buffer, so we still free that
 	if (SDL_GameControllerAddMappingsFromRW(rw, 1) < 0)
 		fprintf(stderr, "warning: failed to load gamecontrollerdb.txt: %s\n", SDL_GetError());
+
+	free(buffer);
 }
 
 // opens the controller at the given device index and appends it to controller[],
@@ -482,6 +522,42 @@ bool controller_is_connected(int c)
 	return controller[c].handle != NULL;
 }
 
+/* a remembered (disconnected) slot has no handle to query -- assume the control
+ * exists so Reset still restores a usable map for when the pad comes back */
+static bool controller_has_button(int c, SDL_GameControllerButton button)
+{
+	if (controller[c].handle == NULL)
+		return true;
+
+	return SDL_GameControllerHasButton(controller[c].handle, button);
+}
+
+static bool controller_has_axis(int c, SDL_GameControllerAxis axis)
+{
+	if (controller[c].handle == NULL)
+		return true;
+
+	return SDL_GameControllerHasAxis(controller[c].handle, axis);
+}
+
+// sets assignment[a][slot] to a button binding, but only if the pad has that button
+static void set_button(int c, uint a, uint slot, SDL_GameControllerButton button)
+{
+	if (!controller_has_button(c, button))
+		return;
+
+	controller[c].assignment[a][slot] = (Controller_binding){ CONTROLLER_BIND_BUTTON, button, false };
+}
+
+// sets assignment[a][slot] to an axis binding, but only if the pad has that axis
+static void set_axis(int c, uint a, uint slot, SDL_GameControllerAxis axis, bool negative)
+{
+	if (!controller_has_axis(c, axis))
+		return;
+
+	controller[c].assignment[a][slot] = (Controller_binding){ CONTROLLER_BIND_AXIS, axis, negative };
+}
+
 void reset_controller_assignments(int c)
 {
 	assert(c < controllers);
@@ -491,34 +567,34 @@ void reset_controller_assignments(int c)
 			controller[c].assignment[a][i].type = CONTROLLER_BIND_NONE;
 
 	// directions: left stick primary, D-pad secondary
-	controller[c].assignment[0][0] = (Controller_binding){ CONTROLLER_BIND_AXIS, SDL_CONTROLLER_AXIS_LEFTY, true };   // up
-	controller[c].assignment[0][1] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_DPAD_UP, false };
+	set_axis(c, 0, 0, SDL_CONTROLLER_AXIS_LEFTY, true);                    // up
+	set_button(c, 0, 1, SDL_CONTROLLER_BUTTON_DPAD_UP);
 
-	controller[c].assignment[1][0] = (Controller_binding){ CONTROLLER_BIND_AXIS, SDL_CONTROLLER_AXIS_LEFTX, false };  // right
-	controller[c].assignment[1][1] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_DPAD_RIGHT, false };
+	set_axis(c, 1, 0, SDL_CONTROLLER_AXIS_LEFTX, false);                   // right
+	set_button(c, 1, 1, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
 
-	controller[c].assignment[2][0] = (Controller_binding){ CONTROLLER_BIND_AXIS, SDL_CONTROLLER_AXIS_LEFTY, false };  // down
-	controller[c].assignment[2][1] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_DPAD_DOWN, false };
+	set_axis(c, 2, 0, SDL_CONTROLLER_AXIS_LEFTY, false);                   // down
+	set_button(c, 2, 1, SDL_CONTROLLER_BUTTON_DPAD_DOWN);
 
-	controller[c].assignment[3][0] = (Controller_binding){ CONTROLLER_BIND_AXIS, SDL_CONTROLLER_AXIS_LEFTX, true };   // left
-	controller[c].assignment[3][1] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_DPAD_LEFT, false };
+	set_axis(c, 3, 0, SDL_CONTROLLER_AXIS_LEFTX, true);                    // left
+	set_button(c, 3, 1, SDL_CONTROLLER_BUTTON_DPAD_LEFT);
 
 	// actions
-	controller[c].assignment[4][0] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_A, false }; // fire
-	controller[c].assignment[4][1] = (Controller_binding){ CONTROLLER_BIND_AXIS, SDL_CONTROLLER_AXIS_TRIGGERRIGHT, false };
+	set_button(c, 4, 0, SDL_CONTROLLER_BUTTON_A);                          // fire
+	set_axis(c, 4, 1, SDL_CONTROLLER_AXIS_TRIGGERRIGHT, false);
 
-	controller[c].assignment[5][0] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_B, false }; // change fire
-	controller[c].assignment[5][1] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_Y, false };
+	set_button(c, 5, 0, SDL_CONTROLLER_BUTTON_B);                          // change fire
+	set_button(c, 5, 1, SDL_CONTROLLER_BUTTON_Y);
 
-	controller[c].assignment[6][0] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_LEFTSHOULDER, false }; // left sidekick
-	controller[c].assignment[6][1] = (Controller_binding){ CONTROLLER_BIND_AXIS, SDL_CONTROLLER_AXIS_TRIGGERLEFT, false };
+	set_button(c, 6, 0, SDL_CONTROLLER_BUTTON_LEFTSHOULDER);               // left sidekick
+	set_axis(c, 6, 1, SDL_CONTROLLER_AXIS_TRIGGERLEFT, false);
 
-	controller[c].assignment[7][0] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, false }; // right sidekick
-	controller[c].assignment[7][1] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_X, false };
+	set_button(c, 7, 0, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);              // right sidekick
+	set_button(c, 7, 1, SDL_CONTROLLER_BUTTON_X);
 
-	controller[c].assignment[8][0] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_START, false }; // menu
+	set_button(c, 8, 0, SDL_CONTROLLER_BUTTON_START);                      // menu
 
-	controller[c].assignment[9][0] = (Controller_binding){ CONTROLLER_BIND_BUTTON, SDL_CONTROLLER_BUTTON_BACK, false }; // pause
+	set_button(c, 9, 0, SDL_CONTROLLER_BUTTON_BACK);                       // pause
 
 	controller[c].analog = true;
 	controller[c].sensitivity = 5;
@@ -775,7 +851,10 @@ const char *controller_binding_label(const Controller *c, const Controller_bindi
 // fills buffer with comma separated list of assigned controller functions (display labels)
 void controller_assignments_to_string(char *buffer, size_t buffer_len, const Controller *c, const Controller_binding *assignments)
 {
-	strncpy(buffer, "", buffer_len);
+	if (buffer_len == 0)
+		return;
+
+	buffer[0] = '\0';
 
 	bool comma = false;
 	for (uint i = 0; i < 2; ++i)
@@ -783,9 +862,15 @@ void controller_assignments_to_string(char *buffer, size_t buffer_len, const Con
 		if (assignments[i].type == CONTROLLER_BIND_NONE)
 			continue;
 
-		size_t len = snprintf(buffer, buffer_len, "%s%s",
-		                      comma ? ", " : "",
-		                      controller_binding_label(c, &assignments[i]));
+		int len = snprintf(buffer, buffer_len, "%s%s",
+		                   comma ? ", " : "",
+		                   controller_binding_label(c, &assignments[i]));
+
+		/* snprintf returns the length it WOULD have written; clamp so a truncated
+		 * label can't advance past the end or underflow buffer_len */
+		if (len < 0 || (size_t)len >= buffer_len)
+			return;
+
 		buffer += len;
 		buffer_len -= len;
 

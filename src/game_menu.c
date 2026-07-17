@@ -95,12 +95,57 @@ struct cube_struct
 };
 
 /*** Globals ***/
-static int controller_config = 0; // which controller is being configured in menu
+// which controller is being configured in menu; pinned to 0 since the multi-controller
+// selector was removed -- kept as a variable (rather than inlining 0 everywhere) so
+// re-introducing multi-pad config later only means restoring the selector UI
+static int controller_config = 0;
 
-/* row layout for MENU_CONTROLLER_CONFIG: curSel/select = 2 + row. -1 means the row
- * has no direct controller[].assignment[][] binding (analog toggle, sensitivity,
- * threshold, reset, done); a non-negative value is the assignment[] index. */
-static const int controller_config_row_assignment[] = { -1, -1, -1, 4, 5, 6, 7, -1, -1 };
+/* rows of MENU_CONTROLLER_CONFIG; curSel/select == 2 + row index.
+ * directions, menu and pause are deliberately absent: they are fixed
+ * (left stick + D-pad, START, BACK) and not user-adjustable. */
+typedef enum
+{
+	ROW_ANALOG,
+	ROW_SENSITIVITY,
+	ROW_THRESHOLD,
+	ROW_BINDING,
+	ROW_RESET,
+	ROW_DONE,
+}
+Controller_row_kind;
+
+typedef struct
+{
+	Controller_row_kind kind;
+	const char *label; // literal, or NULL to use menuInt[6][menu_int]
+	int menu_int;      // index into menuInt[6][], or -1
+	int assignment;    // index into controller[].assignment[], ROW_BINDING only, else -1
+}
+Controller_row;
+
+static const Controller_row controller_rows[] =
+{
+	{ ROW_ANALOG,      "ANALOG STICK", -1, -1 },
+	{ ROW_SENSITIVITY, " SENSITIVITY", -1, -1 },
+	{ ROW_THRESHOLD,   " THRESHOLD",   -1, -1 },
+	{ ROW_BINDING,     NULL,            5,  4 }, // fire
+	{ ROW_BINDING,     NULL,            6,  5 }, // change fire
+	{ ROW_BINDING,     NULL,            7,  6 }, // left sidekick
+	{ ROW_BINDING,     NULL,            8,  7 }, // right sidekick
+	{ ROW_RESET,       NULL,            9, -1 },
+	{ ROW_DONE,        NULL,           10, -1 },
+};
+
+// first row index whose kind matches, or -1 if none (used to jump the cursor
+// between the fixed rows when digital-skipping disabled analog rows)
+static int controller_row_of_kind(Controller_row_kind kind)
+{
+	for (uint i = 0; i < COUNTOF(controller_rows); i++)
+		if (controller_rows[i].kind == kind)
+			return (int)i;
+
+	return -1;
+}
 
 static JE_word yLoc;
 static JE_shortint yChg;
@@ -453,59 +498,47 @@ void JE_itemScreen(void)
 
 		if (curMenu == MENU_CONTROLLER_CONFIG)
 		{
-			// clamp: the pad being configured may have been unplugged since we last drew
-			if (controller_config >= controllers)
-				controller_config = controllers > 0 ? controllers - 1 : 0;
-
-			const char *const menu_item[] =
+			for (uint i = 0; i < COUNTOF(controller_rows); i++)
 			{
-				"ANALOG STICK",
-				" SENSITIVITY",
-				" THRESHOLD",
-				menuInt[6][5],  // fire
-				menuInt[6][6],  // change fire
-				menuInt[6][7],  // left sidekick
-				menuInt[6][8],  // right sidekick
-				menuInt[6][9],  // reset to defaults
-				menuInt[6][10]  // done
-			};
+				const Controller_row *row = &controller_rows[i];
+				const char *label = row->label ? row->label : menuInt[6][row->menu_int];
 
-			for (uint i = 0; i < COUNTOF(menu_item); i++)
-			{
 				int temp = (i == curSel[curMenu] - 2u) ? 15 : 28;
 
-				JE_textShade(VGAScreen, 166, 38 + i * 8, menu_item[i], temp / 16, temp % 16 - 8, DARKEN);
+				JE_textShade(VGAScreen, 166, 38 + i * 8, label, temp / 16, temp % 16 - 8, DARKEN);
 
 				temp = (i == curSel[curMenu] - 2u) ? 252 : 250;
 
 				char value[30] = "";
-				int assignment = controller_config_row_assignment[i];
 
-				// "-" only when no pad has connected this session at all; a disconnected
-				// but remembered slot keeps showing its mapping
-				if (controllers == 0 && i < 7)
+				// rows that show a value are everything except reset/done; "-" only when
+				// no pad has connected this session at all -- a disconnected but
+				// remembered slot keeps showing its mapping
+				bool shows_value = row->kind != ROW_RESET && row->kind != ROW_DONE;
+
+				if (shows_value && controllers == 0)
 				{
 					sprintf(value, "-");
 				}
-				else if (i == 0) // controller is analog
+				else if (row->kind == ROW_ANALOG)
 				{
 					sprintf(value, "%s", controller[controller_config].analog ? "TRUE" : "FALSE");
 				}
-				else if (i < 3)  // controller analog settings
+				else if (row->kind == ROW_SENSITIVITY || row->kind == ROW_THRESHOLD)
 				{
 					if (!controller[controller_config].analog)
 						temp -= 3;
-					sprintf(value, "%d", i == 1 ? controller[controller_config].sensitivity : controller[controller_config].threshold);
+					sprintf(value, "%d", row->kind == ROW_SENSITIVITY ? controller[controller_config].sensitivity : controller[controller_config].threshold);
 				}
-				else if (assignment >= 0) // assignments
+				else if (row->kind == ROW_BINDING)
 				{
-					controller_assignments_to_string(value, sizeof(value), &controller[controller_config], controller[controller_config].assignment[assignment]);
+					controller_assignments_to_string(value, sizeof(value), &controller[controller_config], controller[controller_config].assignment[row->assignment]);
 				}
 
 				JE_textShade(VGAScreen, 236, 38 + i * 8, value, temp / 16, temp % 16 - 8, DARKEN);
 			}
 
-			menuChoices[curMenu] = COUNTOF(menu_item) + 1;
+			menuChoices[curMenu] = COUNTOF(controller_rows) + 1;
 		}
 
 		if (curMenu == MENU_UPGRADE_SUB)
@@ -1356,9 +1389,9 @@ void JE_itemScreen(void)
 				if (curMenu == MENU_CONTROLLER_CONFIG &&
 				    controllers > 0 &&
 				    !controller[controller_config].analog &&
-				    curSel[curMenu] == 4)
+				    curSel[curMenu] - 2 == controller_row_of_kind(ROW_THRESHOLD))
 				{
-					curSel[curMenu] = 2;
+					curSel[curMenu] = 2 + controller_row_of_kind(ROW_ANALOG);
 				}
 
 				break;
@@ -1386,9 +1419,9 @@ void JE_itemScreen(void)
 				if (curMenu == MENU_CONTROLLER_CONFIG &&
 				    controllers > 0 &&
 				    !controller[controller_config].analog &&
-				    curSel[curMenu] == 3)
+				    curSel[curMenu] - 2 == controller_row_of_kind(ROW_SENSITIVITY))
 				{
-					curSel[curMenu] = 5;
+					curSel[curMenu] = 2 + controller_row_of_kind(ROW_BINDING);
 				}
 
 				break;
@@ -1408,12 +1441,16 @@ void JE_itemScreen(void)
 				{
 					if (controllers > 0)
 					{
-						switch (curSel[curMenu])
+						int row = curSel[curMenu] - 2;
+						Controller_row_kind kind = (row >= 0 && (uint)row < COUNTOF(controller_rows))
+							? controller_rows[row].kind : ROW_DONE;
+
+						switch (kind)
 						{
-							case 2:
+							case ROW_ANALOG:
 								controller[controller_config].analog = !controller[controller_config].analog;
 								break;
-							case 3:
+							case ROW_SENSITIVITY:
 								if (controller[controller_config].analog)
 								{
 									if (controller[controller_config].sensitivity == 0)
@@ -1422,7 +1459,7 @@ void JE_itemScreen(void)
 										controller[controller_config].sensitivity--;
 								}
 								break;
-							case 4:
+							case ROW_THRESHOLD:
 								if (controller[controller_config].analog)
 								{
 									if (controller[controller_config].threshold == 0)
@@ -1507,19 +1544,23 @@ void JE_itemScreen(void)
 				{
 					if (controllers > 0)
 					{
-						switch (curSel[curMenu])
+						int row = curSel[curMenu] - 2;
+						Controller_row_kind kind = (row >= 0 && (uint)row < COUNTOF(controller_rows))
+							? controller_rows[row].kind : ROW_DONE;
+
+						switch (kind)
 						{
-							case 2:
+							case ROW_ANALOG:
 								controller[controller_config].analog = !controller[controller_config].analog;
 								break;
-							case 3:
+							case ROW_SENSITIVITY:
 								if (controller[controller_config].analog)
 								{
 									controller[controller_config].sensitivity++;
 									controller[controller_config].sensitivity %= 11;
 								}
 								break;
-							case 4:
+							case ROW_THRESHOLD:
 								if (controller[controller_config].analog)
 								{
 									controller[controller_config].threshold++;
@@ -2421,7 +2462,7 @@ void JE_drawMainMenuHelpText(void)
 	temp = curSel[curMenu] - 2;
 	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
-		const int help[9] = { 15, 15, 15, 15, 15, 15, 15, 24, 11 };
+		const int help[COUNTOF(controller_rows)] = { 15, 15, 15, 15, 15, 15, 15, 24, 11 };
 		memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
 	}
 	else if (curMenu < MENU_PLAY_NEXT_LEVEL ||
@@ -2974,57 +3015,50 @@ void JE_menuFunction(JE_byte select)
 		break;
 
 	case MENU_CONTROLLER_CONFIG:
-		if (controllers == 0 && select != 10)
+	{
+		int row_index = select - 2;
+		bool valid_row = row_index >= 0 && (uint)row_index < COUNTOF(controller_rows);
+		Controller_row_kind kind = valid_row ? controller_rows[row_index].kind : ROW_DONE;
+
+		if (controllers == 0 && kind != ROW_DONE)
 			break;
 
-		// clamp: the pad being configured may have been unplugged since we last drew
-		if (controller_config >= controllers)
-			controller_config = controllers > 0 ? controllers - 1 : 0;
-
-		switch (select)
+		switch (kind)
 		{
-		case 2:
+		case ROW_ANALOG:
 			controller[controller_config].analog = !controller[controller_config].analog;
 			break;
-		case 3:
+		case ROW_SENSITIVITY:
 			if (controller[controller_config].analog)
 			{
 				controller[controller_config].sensitivity++;
 				controller[controller_config].sensitivity %= 11;
 			}
 			break;
-		case 4:
+		case ROW_THRESHOLD:
 			if (controller[controller_config].analog)
 			{
 				controller[controller_config].threshold++;
 				controller[controller_config].threshold %= 11;
 			}
 			break;
-		case 9:
+		case ROW_RESET:
 			reset_controller_assignments(controller_config);
 			break;
-		case 10:
+		case ROW_DONE:
 			curMenu = isNetworkGame
 				? MENU_LIMITED_OPTIONS
 				: MENU_OPTIONS;
 			break;
-		default:
-			if (controllers == 0)
-				break;
-
-			int row = select - 2;
-			int a = controller_config_row_assignment[row];
-			if (a < 0)
-				break;
+		case ROW_BINDING:
+		{
+			int a = controller_rows[row_index].assignment;
 
 			// a remembered slot still shows its mapping, but there's no pad to press
 			if (!controller_is_connected(controller_config))
 				break;
 
-			// int temp = 254;
-			// JE_textShade(VGAScreen, 236, 38 + i * 8, value, temp / 16, temp % 16 - 8, DARKEN);
-
-			JE_rectangle(VGAScreen, 235, 37 + row * 8, 310, 46 + row * 8, 248);
+			JE_rectangle(VGAScreen, 235, 37 + row_index * 8, 310, 46 + row_index * 8, 248);
 
 			Controller_binding temp;
 			if (detect_controller_assignment(controller_config, &temp))
@@ -3063,8 +3097,11 @@ controller_assign_done:
 
 				poll_controllers();
 			}
+			break;
+		}
 		}
 		break;
+	}
 
 	case MENU_SUPER_TYRIAN:
 		switch (curSel[curMenu])
