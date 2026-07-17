@@ -114,10 +114,37 @@ is a ~15% deadzone (`threshold * 1000` out of 32767), which is right for a moder
 
 ## Hotplug
 
-Keep `controller[]` **contiguous** and compact on removal, so every existing
-`for (j = 0; j < controllers; j++)` loop and the `inputDevice - 3` index arithmetic keep
-working unchanged. Index shift on unplug is acceptable: bindings are keyed by *name* in
-the config, so re-plugging restores the right map.
+**Revised 2026-07-16 (superseded the original "compact on removal" design).** A removed
+pad **keeps its slot**; only its handle is dropped. `controllers` is a count of *slots*
+(connected + remembered), and `handle != NULL` is the connected flag.
+
+Rationale: the user asked that the options screen keep showing the mapping after a
+disconnect, which is impossible if the slot is freed. Retention also removes the
+index-shift wart the original design accepted — `inputDevice`'s `- 3` pin now survives
+an unplug/replug, and re-plugging the same pad restores its slot *and* any edits made
+since, not just what was last written to the config.
+
+- **Remove:** save assignments, close the handle, `handle = NULL`, `instance_id = -1`,
+  and **zero the live input state** — `direction[]`, `direction_pressed[]`, `action[]`,
+  `action_pressed[]`, `analog_direction[]`, `x`, `y`, `confirm`, `cancel`,
+  `input_pressed`. A pad yanked mid-press otherwise leaves a direction latched true
+  forever and the ship drifts. Keep `name`/`type`/`assignment`/`analog`/`sensitivity`/
+  `threshold`. Do **not** shrink `controllers`, do not `realloc`/`free`.
+- **Add:** first look for a slot with `handle == NULL` and a matching `name` and adopt
+  it (restore handle/instance_id/type, **keep its existing bindings** — do not reload or
+  reset). Otherwise append.
+- The instance-id dedupe must **skip disconnected slots**: they all carry `-1` and would
+  false-match each other once two pads are unplugged.
+- `deinit_controllers()` must save **every** slot, not just connected ones.
+- `poll_controller()` already early-returns on `handle == NULL`; that plus the zeroed
+  state is what makes a disconnected slot inert.
+- `detect_controller_assignment()` returns false immediately if the slot is
+  disconnected — you cannot press a button on a pad that isn't there.
+
+Consumers stay correct: `mainint.c` no-ops on a disconnected slot (plus the `c_max`
+clamp below), and `game_menu.c:780-795`'s `inputDevice[i] > 2 + controllers` still holds
+— selecting a disconnected pad simply yields no input until it is plugged back in.
+Slot count grows with *distinct* pads seen in a session, which is bounded and fine.
 
 In `handleSdlEvents()` (`keyboard.c:187-384`), add two cases:
 
@@ -194,18 +221,39 @@ D-pad and stick directions need direction-suffixed labels within the same budget
 
 ## Options screen
 
-`MENU_JOYSTICK_CONFIG` (12) → **`MENU_CONTROLLER_CONFIG`**. Keep the row layout 1:1 —
-the screen is proven, only the vocabulary changes.
+`MENU_JOYSTICK_CONFIG` (12) → **`MENU_CONTROLLER_CONFIG`**.
 
-| Row | Content |
-|---|---|
-| 0 | which controller (index; name in the help line) |
-| 1 | `ANALOG STICK` (was `ANALOG AXES`) |
-| 2 | ` SENSITIVITY` |
-| 3 | ` THRESHOLD` |
-| 4-13 | the 10 action bindings (labels from `menuInt[6][…]`, keep as-is) |
-| 14 | reset to defaults |
-| 15 | done |
+**Revised 2026-07-16:** the screen shows only what is actually adjustable. Directions,
+menu and pause are **fixed** (left stick + D-pad, START, BACK) and their rows are gone,
+as is the multi-controller selector. The bindings themselves still exist, still load and
+save, and still work — they are simply not user-editable. Do **not** force them to the
+defaults on load; hand-editing the config stays the escape hatch.
+
+Rows are driven by a **table**, not the hardcoded `case 2..17` ladder the original
+screen used — that ladder is why removing a row means renumbering six separate blocks.
+
+| Row | curSel | Content | Binding |
+|---|---|---|---|
+| 0 | 2 | `ANALOG STICK` | — |
+| 1 | 3 | ` SENSITIVITY` | — |
+| 2 | 4 | ` THRESHOLD` | — |
+| 3 | 5 | `FIRE` (`menuInt[6][5]`) | `assignment[4]` |
+| 4 | 6 | `CHANGE FIRE` (`menuInt[6][6]`) | `assignment[5]` |
+| 5 | 7 | `LEFT SIDEKICK` (`menuInt[6][7]`) | `assignment[6]` |
+| 6 | 8 | `RIGHT SIDEKICK` (`menuInt[6][8]`) | `assignment[7]` |
+| 7 | 9 | `Reset to Defaults` (`menuInt[6][9]`) | — |
+| 8 | 10 | `Done` (`menuInt[6][10]`) | — |
+
+`curSel = 2 + row`; `menuChoices[curMenu] = COUNTOF(rows) + 1` (= 10).
+
+> `menuInt[6][1..4]` are `UP`/`DOWN`/`LEFT`/`RIGHT` in **keyboard** order — the old
+> screen deliberately reordered them (`[1],[4],[2],[3]`) to match the engine's
+> up/right/down/left slot order. Both are gone now, but that mismatch is why the old
+> label list looked scrambled; don't "fix" it if the rows ever come back.
+
+The mapping **stays visible while the pad is disconnected** (that's the point of slot
+retention). Only fall back to `"-"` when `controllers == 0`, i.e. no pad has connected
+at all this session.
 
 Blocks to change, all in `game_menu.c`:
 
