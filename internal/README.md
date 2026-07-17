@@ -8,6 +8,7 @@ shared.
 ## Notes
 
 - [data-dir-flag-is-t-not-d.md](data-dir-flag-is-t-not-d.md) — run with `--data ./tyrian21`; `-d` means network delay, not data dir
+- [sdl-dummy-video-hides-controllers.md](sdl-dummy-video-hides-controllers.md) — **`SDL_VIDEODRIVER=dummy` reports `no controllers detected` on macOS even with a pad connected** (GameController.framework discovery needs the Cocoa run loop); don't diagnose controller code from a headless run — use the real video driver, or `SDL_JoystickAttachVirtual` for a hardware-free test
 - [remaster-plan-doc.md](remaster-plan-doc.md) — pointer to `plan/REMASTER_PLAN.md`; "HD skin, plays identical", truecolor engine is the crux
 - [remaster-asset-tracker.md](remaster-asset-tracker.md) — pointer to `plan/REMASTER_ASSETS.md`; per-asset status/inventory
 - [standalone-plan-doc.md](standalone-plan-doc.md) — pointer to `plan/STANDALONE_PLAN.md`; zero-external-data phases S0–S5
