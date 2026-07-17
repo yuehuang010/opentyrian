@@ -62,7 +62,10 @@ ifneq ($(OPENTYRIAN_VERSION), )
     EXTRA_CPPFLAGS += -DOPENTYRIAN_VERSION='"$(OPENTYRIAN_VERSION)"'
 endif
 
-CPPFLAGS ?= -MMD
+# -MP emits a phony target for every header -MMD records. Without it, deleting or
+# renaming a header makes every stale obj/*.d that still lists it hard-stop the
+# build ("No rule to make target 'src/foo.h'") instead of just rebuilding the .o.
+CPPFLAGS ?= -MMD -MP
 CPPFLAGS += -DNDEBUG
 CFLAGS ?= -pedantic \
           -Wall \
