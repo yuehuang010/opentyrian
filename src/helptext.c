@@ -388,4 +388,11 @@ void JE_loadHelpText(void)
 		read_encrypted_pascal_string(menuInt[14][i], sizeof(menuInt[14][i]), f);
 
 	fclose(f);
+
+	/* The shipped 1995 text predates game controllers and calls this "Joystick",
+	 * but the screen it opens is the CONTROLLER config. Retitle both entry points
+	 * (menuInt[curMenu + 1] is what the menus draw: Options -> [3], Network -> [12]).
+	 */
+	strcpy(menuInt[3][5], "Controller");
+	strcpy(menuInt[12][1], "Controller");
 }
