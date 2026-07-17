@@ -280,22 +280,16 @@ static void hd_music_decode(Sint16 *out, int count)
 
 		if (got < want)
 		{
-			// Reached end of stream mid-request.
+			// Reached end of stream mid-request. The LOOPSTART/LOOPLENGTH tags
+			// are authoritative: the renderer (tools/render_music.c) emits them
+			// for exactly those tracks whose sequencer loops, and leaves every
+			// one-shot stinger (Level End, Game Over, ZANAC3, ...) untagged. So
+			// an untagged track hitting end-of-stream is the track being over --
+			// don't second-guess the tags.
 			if (hd_has_loop)
 			{
 				stb_vorbis_seek(hd_vorbis, hd_loop_start);
 				hd_pos = hd_loop_start;
-			}
-			else if (playing)
-			{
-				// No LOOPSTART/LOOPLENGTH tags, but the LDS master sequencer is
-				// still playing -- i.e. this is a looping track whose OGG just
-				// wasn't tagged (e.g. ZANAC3, The final edge). Mirror the synth
-				// and loop the whole OGG rather than falling silent mid-mission.
-				// Genuine one-shots (Level End, Game Over) let the LDS stop, so
-				// `playing` is false there and we fall through to hd_ended below.
-				stb_vorbis_seek(hd_vorbis, 0);
-				hd_pos = 0;
 			}
 			else
 			{
@@ -427,6 +421,53 @@ bool init_audio(void)
 	return true;
 }
 
+// Advances the LDS sequencer by `count` output frames' worth of ticks, keeping
+// the pacing accumulators, ldsTickCounter and ldsFrameCounter in step.
+//
+// `out` non-NULL synthesizes OPL audio into it (the classic path). NULL advances
+// the sequencer *only* -- the register writes still reach the OPL emulator, but
+// nothing is synthesized, the same trick synth_seek_locked() uses. The HD path
+// wants that: lds_update() is the only writer of `playing` (and `songlooped`),
+// so without ticking it those globals would stay frozen at their play_song()
+// values and callers like tyrian2.c's end-of-cue check would never fire. It also
+// keeps the sequencer aligned with hd_pos, which a later HD<->OPL toggle relies
+// on. Cheap either way -- lds_update() early-returns once !playing.
+static void lds_advance(Sint16 *out, int count)
+{
+	while (count > 0)
+	{
+		if (samplesUntilLdsUpdate == 0)
+		{
+			lds_update();
+			ldsTickCounter += 1;
+
+			// The number of samples that should be produced per Loudness
+			// update is not an integer, but we can only produce an integer
+			// number of samples, so we accumulate the fractional samples
+			// until it amounts to a whole sample.
+			samplesUntilLdsUpdate += samplesPerLdsUpdate;
+			samplesUntilLdsUpdateFrac += samplesPerLdsUpdateFrac;
+			if (samplesUntilLdsUpdateFrac >= ldsUpdate2Rate)
+			{
+				samplesUntilLdsUpdate += 1;
+				samplesUntilLdsUpdateFrac -= ldsUpdate2Rate;
+			}
+		}
+
+		int n = MIN(samplesUntilLdsUpdate, count);
+
+		if (out != NULL)
+		{
+			opl_update(out, n);
+			out += n;
+		}
+		ldsFrameCounter += n;
+
+		count -= n;
+		samplesUntilLdsUpdate -= n;
+	}
+}
+
 static void audioCallback(void *userdata, Uint8 *stream, int size)
 {
 	(void)userdata;
@@ -436,8 +477,11 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 
 	if (!music_disabled && !music_stopped && hd_active)
 	{
-		// HD streamed path: decode the OGG in place of the synth.
+		// HD streamed path: decode the OGG in place of the synth, but still tick
+		// the sequencer (without synthesizing) so `playing`/`songlooped` stay
+		// truthful and the synth stays positioned alongside hd_pos.
 		hd_music_decode(samples, samplesCount);
+		lds_advance(NULL, samplesCount);
 
 		if (hd_fade_active)
 		{
@@ -460,38 +504,7 @@ static void audioCallback(void *userdata, Uint8 *stream, int size)
 	}
 	else if (!music_disabled && !music_stopped)
 	{
-		Sint16 *remaining = samples;
-		int remainingCount = samplesCount;
-		while (remainingCount > 0)
-		{
-			if (samplesUntilLdsUpdate == 0)
-			{
-				lds_update();
-				ldsTickCounter += 1;
-
-				// The number of samples that should be produced per Loudness
-				// update is not an integer, but we can only produce an integer
-				// number of samples, so we accumulate the fractional samples
-				// until it amounts to a whole sample.
-				samplesUntilLdsUpdate += samplesPerLdsUpdate;
-				samplesUntilLdsUpdateFrac += samplesPerLdsUpdateFrac;
-				if (samplesUntilLdsUpdateFrac >= ldsUpdate2Rate)
-				{
-					samplesUntilLdsUpdate += 1;
-					samplesUntilLdsUpdateFrac -= ldsUpdate2Rate;
-				}
-			}
-
-			int count = MIN(samplesUntilLdsUpdate, remainingCount);
-
-			opl_update(remaining, count);
-			ldsFrameCounter += count;
-
-			remaining += count;
-			remainingCount -= count;
-
-			samplesUntilLdsUpdate -= count;
-		}
+		lds_advance(samples, samplesCount);
 	}
 	else
 	{
