@@ -287,7 +287,8 @@ static void load_gamecontrollerdb(void)
 
 // opens the controller at the given device index and appends it to controller[],
 // unless a controller with the same instance id is already tracked (SDL queues
-// CONTROLLERDEVICEADDED even for devices init_controllers() already enumerated)
+// CONTROLLERDEVICEADDED even for devices init_controllers() already enumerated),
+// or adopts a remembered (disconnected) slot for the same pad, keeping its bindings
 static void add_controller(int device_index)
 {
 	if (!SDL_IsGameController(device_index))
@@ -304,12 +305,36 @@ static void add_controller(int device_index)
 
 	for (int c = 0; c < controllers; c++)
 	{
+		if (controller[c].handle == NULL)
+			continue; // disconnected slots all carry instance_id == -1; skip to avoid false matches
+
 		if (controller[c].instance_id == instance_id)
 		{
 			// already tracked; this is the redundant ADDED event SDL queues at init
 			SDL_GameControllerClose(handle);
 			return;
 		}
+	}
+
+	const char *raw_name = SDL_GameControllerName(handle);
+	const char *name = raw_name != NULL ? raw_name : "Controller";
+
+	// adopt a remembered (disconnected) slot for the same pad rather than appending a
+	// new one, so the options screen keeps showing the same slot's edited bindings
+	for (int c = 0; c < controllers; c++)
+	{
+		if (controller[c].handle != NULL)
+			continue;
+
+		if (strncmp(controller[c].name, name, sizeof(controller[c].name) - 1) != 0)
+			continue;
+
+		controller[c].handle = handle;
+		controller[c].instance_id = instance_id;
+		controller[c].type = SDL_GameControllerGetType(handle);
+
+		printf("controller reconnected: %s\n", controller[c].name);
+		return;
 	}
 
 	Controller *grown = realloc(controller, (controllers + 1) * sizeof(*controller));
@@ -328,8 +353,7 @@ static void add_controller(int device_index)
 	controller[c].instance_id = instance_id;
 	controller[c].type = SDL_GameControllerGetType(handle);
 
-	const char *name = SDL_GameControllerName(handle);
-	strncpy(controller[c].name, name != NULL ? name : "Controller", sizeof(controller[c].name) - 1);
+	strncpy(controller[c].name, name, sizeof(controller[c].name) - 1);
 
 	printf("controller detected: %s\n", controller[c].name);
 
@@ -359,6 +383,10 @@ void controller_device_added(int device_index)
 }
 
 // handles SDL_CONTROLLERDEVICEREMOVED; `instance_id` (NOT a device index)
+//
+// the slot is kept (not compacted out of controller[]) so the options screen can
+// keep showing its mapping after a disconnect; only the handle is dropped and the
+// live input state is zeroed so a pad yanked mid-press doesn't leave input latched
 void controller_device_removed(SDL_JoystickID instance_id)
 {
 	if (ignore_controller)
@@ -374,22 +402,20 @@ void controller_device_removed(SDL_JoystickID instance_id)
 		if (controller[c].handle != NULL)
 			SDL_GameControllerClose(controller[c].handle);
 
-		// keep controller[] contiguous so `for (j = 0; j < controllers; j++)` loops
-		// and the `inputDevice - 3` index arithmetic elsewhere keep working unchanged
-		memmove(&controller[c], &controller[c + 1], (size_t)(controllers - c - 1) * sizeof(*controller));
-		controllers--;
+		controller[c].handle = NULL;
+		controller[c].instance_id = -1;
 
-		if (controllers == 0)
-		{
-			free(controller);
-			controller = NULL;
-		}
-		else
-		{
-			Controller *shrunk = realloc(controller, (size_t)controllers * sizeof(*controller));
-			if (shrunk != NULL)
-				controller = shrunk;
-		}
+		// zero live input state; name/type/assignment/analog/sensitivity/threshold survive
+		memset(controller[c].direction, 0, sizeof(controller[c].direction));
+		memset(controller[c].direction_pressed, 0, sizeof(controller[c].direction_pressed));
+		memset(controller[c].action, 0, sizeof(controller[c].action));
+		memset(controller[c].action_pressed, 0, sizeof(controller[c].action_pressed));
+		memset(controller[c].analog_direction, 0, sizeof(controller[c].analog_direction));
+		controller[c].x = 0;
+		controller[c].y = 0;
+		controller[c].confirm = false;
+		controller[c].cancel = false;
+		controller[c].input_pressed = false;
 
 		break;
 	}
@@ -435,11 +461,10 @@ void deinit_controllers(void)
 
 	for (int c = 0; c < controllers; c++)
 	{
+		save_controller_assignments(&opentyrian_config, c);
+
 		if (controller[c].handle != NULL)
-		{
-			save_controller_assignments(&opentyrian_config, c);
 			SDL_GameControllerClose(controller[c].handle);
-		}
 	}
 
 	free(controller);
@@ -447,6 +472,14 @@ void deinit_controllers(void)
 	controllers = 0;
 
 	SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
+}
+
+// true if the slot has a live handle (i.e. the pad is currently plugged in)
+bool controller_is_connected(int c)
+{
+	assert(c < controllers);
+
+	return controller[c].handle != NULL;
 }
 
 void reset_controller_assignments(int c)
@@ -836,9 +869,12 @@ bool detect_controller_assignment(int c, Controller_binding *assignment)
 {
 	assert(c < controllers);
 
+	if (controller[c].handle == NULL)
+		return false; // can't press a button on a pad that isn't there
+
 	/* the pad can vanish inside the capture loop below: handleSdlEvents() dispatches
-	 * CONTROLLERDEVICEREMOVED, which closes the handle and compacts controller[].
-	 * re-resolve by instance id every pass instead of trusting a cached pointer.
+	 * CONTROLLERDEVICEREMOVED, which closes the handle. re-resolve by instance id
+	 * every pass instead of trusting a cached pointer.
 	 */
 	const SDL_JoystickID instance_id = controller[c].instance_id;
 

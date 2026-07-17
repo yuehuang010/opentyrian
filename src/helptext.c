@@ -395,4 +395,7 @@ void JE_loadHelpText(void)
 	 */
 	strcpy(menuInt[3][5], "Controller");
 	strcpy(menuInt[12][1], "Controller");
+
+	/* likewise the 2-player input-device picker, which still offered "JOYSTICK" */
+	strcpy(inputDevices[2], "CONTROLLER");
 }

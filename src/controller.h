@@ -87,6 +87,8 @@ void deinit_controllers(void);
 void controller_device_added(int device_index);
 void controller_device_removed(SDL_JoystickID instance_id);
 
+bool controller_is_connected(int c);
+
 void reset_controller_assignments(int c);
 bool load_controller_assignments(Config* config, int c);
 bool save_controller_assignments(Config* config, int c);

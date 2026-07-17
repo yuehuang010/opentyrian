@@ -97,6 +97,11 @@ struct cube_struct
 /*** Globals ***/
 static int controller_config = 0; // which controller is being configured in menu
 
+/* row layout for MENU_CONTROLLER_CONFIG: curSel/select = 2 + row. -1 means the row
+ * has no direct controller[].assignment[][] binding (analog toggle, sensitivity,
+ * threshold, reset, done); a non-negative value is the assignment[] index. */
+static const int controller_config_row_assignment[] = { -1, -1, -1, 4, 5, 6, 7, -1, -1 };
+
 static JE_word yLoc;
 static JE_shortint yChg;
 static int newPal, curPal, oldPal;
@@ -454,22 +459,15 @@ void JE_itemScreen(void)
 
 			const char *const menu_item[] =
 			{
-				"CONTROLLER",
 				"ANALOG STICK",
 				" SENSITIVITY",
 				" THRESHOLD",
-				menuInt[6][1],
-				menuInt[6][4],
-				menuInt[6][2],
-				menuInt[6][3],
-				menuInt[6][5],
-				menuInt[6][6],
-				menuInt[6][7],
-				menuInt[6][8],
-				"MENU",
-				"PAUSE",
-				menuInt[6][9],
-				menuInt[6][10]
+				menuInt[6][5],  // fire
+				menuInt[6][6],  // change fire
+				menuInt[6][7],  // left sidekick
+				menuInt[6][8],  // right sidekick
+				menuInt[6][9],  // reset to defaults
+				menuInt[6][10]  // done
 			};
 
 			for (uint i = 0; i < COUNTOF(menu_item); i++)
@@ -481,27 +479,27 @@ void JE_itemScreen(void)
 				temp = (i == curSel[curMenu] - 2u) ? 252 : 250;
 
 				char value[30] = "";
-				if (controllers == 0 && i < 14) // no controllers, everything disabled
+				int assignment = controller_config_row_assignment[i];
+
+				// "-" only when no pad has connected this session at all; a disconnected
+				// but remembered slot keeps showing its mapping
+				if (controllers == 0 && i < 7)
 				{
 					sprintf(value, "-");
 				}
-				else if (i == 0) // controller number
-				{
-					sprintf(value, "%d", controller_config + 1);
-				}
-				else if (i == 1) // controller is analog
+				else if (i == 0) // controller is analog
 				{
 					sprintf(value, "%s", controller[controller_config].analog ? "TRUE" : "FALSE");
 				}
-				else if (i < 4)  // controller analog settings
+				else if (i < 3)  // controller analog settings
 				{
 					if (!controller[controller_config].analog)
 						temp -= 3;
-					sprintf(value, "%d", i == 2 ? controller[controller_config].sensitivity : controller[controller_config].threshold);
+					sprintf(value, "%d", i == 1 ? controller[controller_config].sensitivity : controller[controller_config].threshold);
 				}
-				else if (i < 14) // assignments
+				else if (assignment >= 0) // assignments
 				{
-					controller_assignments_to_string(value, sizeof(value), &controller[controller_config], controller[controller_config].assignment[i - 4]);
+					controller_assignments_to_string(value, sizeof(value), &controller[controller_config], controller[controller_config].assignment[assignment]);
 				}
 
 				JE_textShade(VGAScreen, 236, 38 + i * 8, value, temp / 16, temp % 16 - 8, DARKEN);
@@ -1358,9 +1356,9 @@ void JE_itemScreen(void)
 				if (curMenu == MENU_CONTROLLER_CONFIG &&
 				    controllers > 0 &&
 				    !controller[controller_config].analog &&
-				    curSel[curMenu] == 5)
+				    curSel[curMenu] == 4)
 				{
-					curSel[curMenu] = 3;
+					curSel[curMenu] = 2;
 				}
 
 				break;
@@ -1388,9 +1386,9 @@ void JE_itemScreen(void)
 				if (curMenu == MENU_CONTROLLER_CONFIG &&
 				    controllers > 0 &&
 				    !controller[controller_config].analog &&
-				    curSel[curMenu] == 4)
+				    curSel[curMenu] == 3)
 				{
-					curSel[curMenu] = 6;
+					curSel[curMenu] = 5;
 				}
 
 				break;
@@ -1413,24 +1411,25 @@ void JE_itemScreen(void)
 						switch (curSel[curMenu])
 						{
 							case 2:
-								if (controller_config == 0)
-									controller_config = controllers;
-								controller_config--;
-								break;
-							case 3:
 								controller[controller_config].analog = !controller[controller_config].analog;
 								break;
-							case 4:
-								if (controller[controller_config].sensitivity == 0)
-									controller[controller_config].sensitivity = 10;
-								else
-									controller[controller_config].sensitivity--;
+							case 3:
+								if (controller[controller_config].analog)
+								{
+									if (controller[controller_config].sensitivity == 0)
+										controller[controller_config].sensitivity = 10;
+									else
+										controller[controller_config].sensitivity--;
+								}
 								break;
-							case 5:
-								if (controller[controller_config].threshold == 0)
-									controller[controller_config].threshold = 10;
-								else
-									controller[controller_config].threshold--;
+							case 4:
+								if (controller[controller_config].analog)
+								{
+									if (controller[controller_config].threshold == 0)
+										controller[controller_config].threshold = 10;
+									else
+										controller[controller_config].threshold--;
+								}
 								break;
 							default:
 								break;
@@ -1511,19 +1510,21 @@ void JE_itemScreen(void)
 						switch (curSel[curMenu])
 						{
 							case 2:
-								controller_config++;
-								controller_config %= controllers;
-								break;
-							case 3:
 								controller[controller_config].analog = !controller[controller_config].analog;
 								break;
-							case 4:
-								controller[controller_config].sensitivity++;
-								controller[controller_config].sensitivity %= 11;
+							case 3:
+								if (controller[controller_config].analog)
+								{
+									controller[controller_config].sensitivity++;
+									controller[controller_config].sensitivity %= 11;
+								}
 								break;
-							case 5:
-								controller[controller_config].threshold++;
-								controller[controller_config].threshold %= 11;
+							case 4:
+								if (controller[controller_config].analog)
+								{
+									controller[controller_config].threshold++;
+									controller[controller_config].threshold %= 11;
+								}
 								break;
 							default:
 								break;
@@ -2420,7 +2421,7 @@ void JE_drawMainMenuHelpText(void)
 	temp = curSel[curMenu] - 2;
 	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
-		const int help[16] = { 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
+		const int help[9] = { 15, 15, 15, 15, 15, 15, 15, 24, 11 };
 		memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
 	}
 	else if (curMenu < MENU_PLAY_NEXT_LEVEL ||
@@ -2973,7 +2974,7 @@ void JE_menuFunction(JE_byte select)
 		break;
 
 	case MENU_CONTROLLER_CONFIG:
-		if (controllers == 0 && select != 17)
+		if (controllers == 0 && select != 10)
 			break;
 
 		// clamp: the pad being configured may have been unplugged since we last drew
@@ -2983,30 +2984,26 @@ void JE_menuFunction(JE_byte select)
 		switch (select)
 		{
 		case 2:
-			controller_config++;
-			controller_config %= controllers;
-			break;
-		case 3:
 			controller[controller_config].analog = !controller[controller_config].analog;
 			break;
-		case 4:
+		case 3:
 			if (controller[controller_config].analog)
 			{
 				controller[controller_config].sensitivity++;
 				controller[controller_config].sensitivity %= 11;
 			}
 			break;
-		case 5:
+		case 4:
 			if (controller[controller_config].analog)
 			{
 				controller[controller_config].threshold++;
 				controller[controller_config].threshold %= 11;
 			}
 			break;
-		case 16:
+		case 9:
 			reset_controller_assignments(controller_config);
 			break;
-		case 17:
+		case 10:
 			curMenu = isNetworkGame
 				? MENU_LIMITED_OPTIONS
 				: MENU_OPTIONS;
@@ -3015,10 +3012,19 @@ void JE_menuFunction(JE_byte select)
 			if (controllers == 0)
 				break;
 
+			int row = select - 2;
+			int a = controller_config_row_assignment[row];
+			if (a < 0)
+				break;
+
+			// a remembered slot still shows its mapping, but there's no pad to press
+			if (!controller_is_connected(controller_config))
+				break;
+
 			// int temp = 254;
 			// JE_textShade(VGAScreen, 236, 38 + i * 8, value, temp / 16, temp % 16 - 8, DARKEN);
 
-			JE_rectangle(VGAScreen, 235, 21 + select * 8, 310, 30 + select * 8, 248);
+			JE_rectangle(VGAScreen, 235, 37 + row * 8, 310, 46 + row * 8, 248);
 
 			Controller_binding temp;
 			if (detect_controller_assignment(controller_config, &temp))
@@ -3026,9 +3032,9 @@ void JE_menuFunction(JE_byte select)
 				// if the detected assignment was already set, unset it
 				for (uint i = 0; i < COUNTOF(*controller->assignment); i++)
 				{
-					if (controller_assignment_cmp(&temp, &controller[controller_config].assignment[select - 6][i]))
+					if (controller_assignment_cmp(&temp, &controller[controller_config].assignment[a][i]))
 					{
-						controller[controller_config].assignment[select - 6][i].type = CONTROLLER_BIND_NONE;
+						controller[controller_config].assignment[a][i].type = CONTROLLER_BIND_NONE;
 						goto controller_assign_done;
 					}
 				}
@@ -3036,9 +3042,9 @@ void JE_menuFunction(JE_byte select)
 				// if there is an empty assignment, set it
 				for (uint i = 0; i < COUNTOF(*controller->assignment); i++)
 				{
-					if (controller[controller_config].assignment[select - 6][i].type == CONTROLLER_BIND_NONE)
+					if (controller[controller_config].assignment[a][i].type == CONTROLLER_BIND_NONE)
 					{
-						controller[controller_config].assignment[select - 6][i] = temp;
+						controller[controller_config].assignment[a][i] = temp;
 						goto controller_assign_done;
 					}
 				}
@@ -3047,9 +3053,9 @@ void JE_menuFunction(JE_byte select)
 				for (uint i = 0; i < COUNTOF(*controller->assignment); i++)
 				{
 					if (i == COUNTOF(*controller->assignment) - 1)
-						controller[controller_config].assignment[select - 6][i] = temp;
+						controller[controller_config].assignment[a][i] = temp;
 					else
-						controller[controller_config].assignment[select - 6][i] = controller[controller_config].assignment[select - 6][i + 1];
+						controller[controller_config].assignment[a][i] = controller[controller_config].assignment[a][i + 1];
 				}
 
 controller_assign_done:
