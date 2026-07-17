@@ -1,14 +1,14 @@
 ---
 title: Secret-level music (ZANAC3) repeats forever in HD mode; level music never returns
 status: Fixed
-fixed-in: working tree (pending commit)
+fixed-in: 7ecc398
 component: HD remaster / audio (loudness.c audio callback + HD music path)
 affects: hd_music only (classic OPL/LDS playback unaffected)
 ---
 
 # Secret cue loops forever in HD mode
 
-**Status: fixed in the working tree.** Regression introduced by `4924808`
+**Status: fixed in `7ecc398`** (confirmed by ear in-game). Regression introduced by `4924808`
 ("audio: loop untagged HD music tracks instead of falling silent"), which was
 built on a premise that measurement has since refuted — see
 [hd-music-untagged-loop-silence.md](hd-music-untagged-loop-silence.md).
