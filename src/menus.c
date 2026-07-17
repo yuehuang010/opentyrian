@@ -25,10 +25,10 @@
 #include "menus.h"
 
 #include "config.h"
+#include "controller.h"
 #include "episodes.h"
 #include "font.h"
 #include "fonthand.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "network.h"

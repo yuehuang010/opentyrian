@@ -26,10 +26,10 @@
 
 #include "network.h"
 
+#include "controller.h"
 #include "episodes.h"
 #include "fonthand.h"
 #include "helptext.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "mainint.h"
 #include "nortsong.h"

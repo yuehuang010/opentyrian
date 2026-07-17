@@ -44,13 +44,13 @@
 
 #include "backgrnd.h"
 #include "config.h"
+#include "controller.h"
 #include "editship.h"
 #include "episodes.h"
 #include "file.h"
 #include "font.h"
 #include "fonthand.h"
 #include "helptext.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "lds_play.h"
 #include "loudness.h"
@@ -3781,35 +3781,43 @@ redo:
 					}
 				}
 
-				/* joystick input */
-				if ((inputDevice == 0 || inputDevice >= 3) && joysticks > 0)
+				/* controller input */
+				if ((inputDevice == 0 || inputDevice >= 3) && controllers > 0)
 				{
-					int j = inputDevice  == 0 ? 0 : inputDevice - 3;
-					int j_max = inputDevice == 0 ? joysticks : inputDevice - 3 + 1;
-					for (; j < j_max; j++)
+					int c = inputDevice  == 0 ? 0 : inputDevice - 3;
+					int c_max = inputDevice == 0 ? controllers : inputDevice - 3 + 1;
+
+					/* inputDevice pins a pad by index, but hotplug can shrink
+					 * controllers under us mid-game; the menu's clamp only runs while
+					 * the menu is drawn, so clamp here too rather than index past the end
+					 */
+					if (c_max > controllers)
+						c_max = controllers;
+
+					for (; c < c_max; c++)
 					{
-						poll_joystick(j);
+						poll_controller(c);
 
-						if (joystick[j].analog)
+						if (controller[c].analog)
 						{
-							mouseXC += joystick_axis_reduce(j, joystick[j].x);
-							mouseYC += joystick_axis_reduce(j, joystick[j].y);
+							mouseXC += controller_axis_reduce(c, controller[c].x);
+							mouseYC += controller_axis_reduce(c, controller[c].y);
 
-							link_gun_analog = joystick_analog_angle(j, &link_gun_angle);
+							link_gun_analog = controller_analog_angle(c, &link_gun_angle);
 						}
 						else
 						{
-							this_player->x += (joystick[j].direction[3] ? -CURRENT_KEY_SPEED : 0) + (joystick[j].direction[1] ? CURRENT_KEY_SPEED : 0);
-							this_player->y += (joystick[j].direction[0] ? -CURRENT_KEY_SPEED : 0) + (joystick[j].direction[2] ? CURRENT_KEY_SPEED : 0);
+							this_player->x += (controller[c].direction[3] ? -CURRENT_KEY_SPEED : 0) + (controller[c].direction[1] ? CURRENT_KEY_SPEED : 0);
+							this_player->y += (controller[c].direction[0] ? -CURRENT_KEY_SPEED : 0) + (controller[c].direction[2] ? CURRENT_KEY_SPEED : 0);
 						}
 
-						button[0] |= joystick[j].action[0];
-						button[1] |= joystick[j].action[2];
-						button[2] |= joystick[j].action[3];
-						button[3] |= joystick[j].action_pressed[1];
+						button[0] |= controller[c].action[0];
+						button[1] |= controller[c].action[2];
+						button[2] |= controller[c].action[3];
+						button[3] |= controller[c].action_pressed[1];
 
-						ingamemenu_pressed |= joystick[j].action_pressed[4];
-						pause_pressed |= joystick[j].action_pressed[5];
+						ingamemenu_pressed |= controller[c].action_pressed[4];
+						pause_pressed |= controller[c].action_pressed[5];
 					}
 				}
 

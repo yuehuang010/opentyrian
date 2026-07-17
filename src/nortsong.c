@@ -25,8 +25,8 @@
 
 #include "nortsong.h"
 
+#include "controller.h"
 #include "file.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "loudness.h"
 #include "musmast.h"

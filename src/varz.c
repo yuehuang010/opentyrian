@@ -26,9 +26,9 @@
 #include "varz.h"
 
 #include "config.h"
+#include "controller.h"
 #include "editship.h"
 #include "episodes.h"
-#include "joystick.h"
 #include "lds_play.h"
 #include "loudness.h"
 #include "mainint.h"
@@ -447,7 +447,7 @@ void JE_tyrianHalt(JE_byte code)
 {
 	deinit_audio();
 	deinit_video();
-	deinit_joysticks();
+	deinit_controllers();
 
 	/* TODO: NETWORK */
 

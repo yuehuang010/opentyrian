@@ -230,6 +230,26 @@ At init, if `gamecontrollerdb.txt` exists in `data_dir()`, feed it to
 `SDL_GameControllerAddMappingsFromRW()`. Go through `dir_fopen()` per the repo's IO rule
 (`SDL_RWFromFP(fp, SDL_TRUE)`), not a bare path. Absent file = silent no-op, not a warning.
 
+## Two bugs hotplug introduces — fixed, keep them fixed
+
+Adding hotplug makes `controller[]` mutate at runtime, which turns two previously
+**unreachable** code paths into live bugs. Both were caught in review, not by the
+compiler or the smoke test. If this subsystem is ever refactored again, re-check them.
+
+1. **Use-after-free in `detect_controller_assignment()`.** It caches
+   `SDL_GameController *handle` and then calls `handleSdlEvents()` inside its blocking
+   capture loop — which now dispatches `CONTROLLERDEVICEREMOVED`, closing that handle
+   and `realloc`ing the array. A wireless pad sleeping or dying on the "press a button"
+   screen is enough to hit it. **Fix:** re-resolve the handle by `instance_id` every
+   pass (`handle_for_instance()`) and bail out if it's gone. Never cache a handle or a
+   `Controller *` across a `handleSdlEvents()` call.
+2. **Out-of-bounds read in `JE_playerMovement()`.** `inputDevice` pins a pad by index
+   (`inputDevice - 3`), but `c_max` was only derived from `inputDevice`, never clamped
+   to `controllers`. The existing clamp (`game_menu.c:780-795`) only runs while the
+   2-player menu is *drawn*, so unplugging a pinned pad mid-game indexes past the end
+   (assert in debug, OOB read in release). **Fix:** clamp `c_max` to `controllers` at
+   the call site.
+
 ## Verification
 
 No test suite. "Passing" = compiles clean under **both** `make` and `make debug`
@@ -240,3 +260,32 @@ No test suite. "Passing" = compiles clean under **both** `make` and `make debug`
   the main regression risk: **all the `controllers == 0` paths.**
 - Grep for stragglers: no `SDL_Joystick`, `joydown`, `joysticks`, `ignore_joystick`
   should remain outside of comments.
+
+### Testing controller paths with no hardware
+
+`SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX,
+SDL_CONTROLLER_BUTTON_MAX, 0)` conjures a virtual pad that SDL treats as a real game
+controller, so the whole add → defaults → save → load → remove path is testable
+headlessly. `src/controller.c` links standalone against `config_file.c` plus ~7 stubs
+(`opentyrian_config`, `data_dir`, `dir_fopen`, `setFrameCount`, `delayUntilElapsed`,
+`handleSdlEvents`, `hasInput`). This is how the config round-trip (all 20 binding slots
+byte-identical), the ADDED-vs-REMOVED namespaces, and the dedupe were verified.
+
+Verified this way, worth not re-litigating:
+- Every `SDL_GameController` button/axis string round-trips through
+  `GetStringFor*`/`Get*FromString`, and `BUTTON_A == 0` really is a valid value — the
+  old codec's `if (num == 0) type = NONE` 1-based quirk **must not** be carried over.
+- `SDL_GameControllerEventState(SDL_IGNORE)` + explicit
+  `SDL_EventState(CONTROLLERDEVICE{ADDED,REMOVED}, SDL_ENABLE)` does deliver hotplug
+  events. (For the *first* pad `device_index` and `instance_id` are both 0, which is
+  exactly why confusing them survives casual testing.)
+
+### Menu label width — settled, measured
+
+The value column is `TINY_FONT` drawn at x=237 → **83px available**, and the font is
+**proportional**, so character count is the wrong metric (the ~6px/char rule of thumb
+overestimates badly). Measured with `JE_textWidth(s, TINY_FONT)`:
+worst case **`"CIRCLE, SQUARE"` = 67px** (PlayStation labels are the long ones).
+For reference the *old* joystick screen already drew `"AX 10-, AX 10-"` at 68px — the
+new labels are narrower than what already shipped. **There is no width problem;** don't
+shorten the PlayStation labels on suspicion.

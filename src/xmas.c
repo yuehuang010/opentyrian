@@ -24,8 +24,8 @@
 
 #include "xmas.h"
 
+#include "controller.h"
 #include "font.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "nortsong.h"

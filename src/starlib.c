@@ -24,7 +24,7 @@
 
 #include "starlib.h"
 
-#include "joystick.h"
+#include "controller.h"
 #include "mtrand.h"
 #include "nortsong.h"
 #include "opentyr.h"
@@ -154,7 +154,7 @@ bool starLibMain(KeyboardInput *const keyboardInput)  // FKA StarLib.Main
 		}
 	}
 
-	push_joysticks_as_keyboard();
+	push_controllers_as_keyboard();
 	handleSdlEvents();
 
 	bool gotKeyboardInput = keyboardGetInput(keyboardInput);

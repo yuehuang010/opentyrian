@@ -25,8 +25,8 @@
 #include "params.h"
 
 #include "arg_parse.h"
+#include "controller.h"
 #include "file.h"
-#include "joystick.h"
 #include "loudness.h"
 #include "network.h"
 #include "opentyr.h"
@@ -114,8 +114,8 @@ void JE_paramCheck(int argc, char *argv[])
 			break;
 			
 		case 'j':
-			// Disables joystick detection
-			ignore_joystick = true;
+			// Disables controller detection
+			ignore_controller = true;
 			break;
 			
 		case 'x':
@@ -244,7 +244,7 @@ void JE_paramCheck(int argc, char *argv[])
 					record_demo = true;
 					break;
 				case 2:
-					ignore_joystick = true;
+					ignore_controller = true;
 					break;
 				case 3:
 					constantPlay = true;

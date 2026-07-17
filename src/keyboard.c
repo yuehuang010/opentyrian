@@ -26,7 +26,7 @@
 
 #include "keyboard.h"
 
-#include "joystick.h"
+#include "controller.h"
 #include "mouse.h"
 #include "network.h"
 #include "nortsong.h"
@@ -376,6 +376,16 @@ void handleSdlEvents(void)
 				mouseButtonsDown &= ~SDL_BUTTON(ev.button.button);
 				break;
 
+			case SDL_CONTROLLERDEVICEADDED:
+				// ev.cdevice.which is a device index here, NOT an instance id
+				controller_device_added(ev.cdevice.which);
+				break;
+
+			case SDL_CONTROLLERDEVICEREMOVED:
+				// ev.cdevice.which is an instance id here, NOT a device index
+				controller_device_removed(ev.cdevice.which);
+				break;
+
 			case SDL_QUIT:
 				exit(0);
 				break;
@@ -399,7 +409,7 @@ void waitUntilHasInput(InputFlags flags)
 	{
 		NETWORK_KEEP_ALIVE();
 
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		if (hasInput(flags))
@@ -415,7 +425,7 @@ void waitUntilGetInput(void)
 	{
 		NETWORK_KEEP_ALIVE();
 
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		if (getInput())
@@ -431,7 +441,7 @@ void waitUntilElapsed(void)
 	{
 		NETWORK_KEEP_ALIVE();
 
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		Uint32 delay = getFrameCountTicks();
@@ -448,7 +458,7 @@ bool waitUntilHasInputOrElapsed(void)
 	{
 		NETWORK_KEEP_ALIVE();
 
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		if (hasInput(INPUT_NO_MOTION))
@@ -468,7 +478,7 @@ bool waitUntilGetInputOrElapsed(void)
 	{
 		NETWORK_KEEP_ALIVE();
 
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		if (getInput())

@@ -42,13 +42,13 @@
 
 #include "animlib.h"
 #include "backgrnd.h"
+#include "controller.h"
 #include "episodes.h"
 #include "file.h"
 #include "font.h"
 #include "fonthand.h"
 #include "game_menu.h"
 #include "interp.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "lds_play.h"
 #include "loudness.h"
@@ -2233,7 +2233,7 @@ draw_player_shot_loop_end:
 
 				if (!play_demo)
 				{
-					push_joysticks_as_keyboard();
+					push_controllers_as_keyboard();
 					handleSdlEvents();
 
 					if (hasInput(INPUT_NO_MOTION))
@@ -2248,7 +2248,7 @@ draw_player_shot_loop_end:
 
 	if (play_demo) // input kills demo
 	{
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		if (hasInput(INPUT_NO_MOTION))

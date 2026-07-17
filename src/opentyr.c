@@ -25,6 +25,7 @@
 #include "opentyr.h"
 
 #include "config.h"
+#include "controller.h"
 #include "destruct.h"
 #include "editship.h"
 #include "episodes.h"
@@ -33,7 +34,6 @@
 #include "fonthand.h"
 #include "helptext.h"
 #include "interp.h"
-#include "joystick.h"
 #include "jukebox.h"
 #include "keyboard.h"
 #include "loudness.h"
@@ -933,7 +933,7 @@ int main(int argc, char *argv[])
 
 	init_video();
 	init_keyboard();
-	init_joysticks();
+	init_controllers();
 	printf("assuming mouse detected\n"); // SDL can't tell us if there isn't one
 
 	if (xmas && (!dir_file_exists(data_dir(), "tyrianc.shp") || !dir_file_exists(data_dir(), "voicesc.snd")))

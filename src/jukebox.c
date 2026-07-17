@@ -24,8 +24,8 @@
 
 #include "jukebox.h"
 
+#include "controller.h"
 #include "font.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "lds_play.h"
 #include "loudness.h"

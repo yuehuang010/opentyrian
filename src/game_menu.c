@@ -42,9 +42,9 @@
 
 #include "backgrnd.h"
 #include "config.h"
+#include "controller.h"
 #include "file.h"
 #include "fonthand.h"
-#include "joystick.h"
 #include "keyboard.h"
 #include "loudness.h"
 #include "mainint.h"
@@ -80,7 +80,7 @@ enum
 	MENU_2_PLAYER_ARCADE =  9,
 	MENU_1_PLAYER_ARCADE = 10,  // Also networked games.
 	MENU_LIMITED_OPTIONS = 11,  // Hides save/load menus.
-	MENU_JOYSTICK_CONFIG = 12,
+	MENU_CONTROLLER_CONFIG = 12,
 	MENU_SUPER_TYRIAN    = 13,
 };
 
@@ -95,7 +95,7 @@ struct cube_struct
 };
 
 /*** Globals ***/
-static int joystick_config = 0; // which joystick is being configured in menu
+static int controller_config = 0; // which controller is being configured in menu
 
 static JE_word yLoc;
 static JE_shortint yChg;
@@ -446,12 +446,16 @@ void JE_itemScreen(void)
 			menuChoices[MENU_KEYBOARD_CONFIG] = 11;
 		}
 
-		if (curMenu == MENU_JOYSTICK_CONFIG)
+		if (curMenu == MENU_CONTROLLER_CONFIG)
 		{
+			// clamp: the pad being configured may have been unplugged since we last drew
+			if (controller_config >= controllers)
+				controller_config = controllers > 0 ? controllers - 1 : 0;
+
 			const char *const menu_item[] =
 			{
-				"JOYSTICK",
-				"ANALOG AXES",
+				"CONTROLLER",
+				"ANALOG STICK",
 				" SENSITIVITY",
 				" THRESHOLD",
 				menuInt[6][1],
@@ -477,27 +481,27 @@ void JE_itemScreen(void)
 				temp = (i == curSel[curMenu] - 2u) ? 252 : 250;
 
 				char value[30] = "";
-				if (joysticks == 0 && i < 14) // no joysticks, everything disabled
+				if (controllers == 0 && i < 14) // no controllers, everything disabled
 				{
 					sprintf(value, "-");
 				}
-				else if (i == 0) // joystick number
+				else if (i == 0) // controller number
 				{
-					sprintf(value, "%d", joystick_config + 1);
+					sprintf(value, "%d", controller_config + 1);
 				}
-				else if (i == 1) // joystick is analog
+				else if (i == 1) // controller is analog
 				{
-					sprintf(value, "%s", joystick[joystick_config].analog ? "TRUE" : "FALSE");
+					sprintf(value, "%s", controller[controller_config].analog ? "TRUE" : "FALSE");
 				}
-				else if (i < 4)  // joystick analog settings
+				else if (i < 4)  // controller analog settings
 				{
-					if (!joystick[joystick_config].analog)
+					if (!controller[controller_config].analog)
 						temp -= 3;
-					sprintf(value, "%d", i == 2 ? joystick[joystick_config].sensitivity : joystick[joystick_config].threshold);
+					sprintf(value, "%d", i == 2 ? controller[controller_config].sensitivity : controller[controller_config].threshold);
 				}
 				else if (i < 14) // assignments
 				{
-					joystick_assignments_to_string(value, sizeof(value), joystick[joystick_config].assignment[i - 4]);
+					controller_assignments_to_string(value, sizeof(value), &controller[controller_config], controller[controller_config].assignment[i - 4]);
 				}
 
 				JE_textShade(VGAScreen, 236, 38 + i * 8, value, temp / 16, temp % 16 - 8, DARKEN);
@@ -782,11 +786,11 @@ void JE_itemScreen(void)
 		{
 			for (uint i = 0; i < COUNTOF(inputDevice); i++)
 			{
-				if (inputDevice[i] > 2 + joysticks)
+				if (inputDevice[i] > 2 + controllers)
 					inputDevice[i] = inputDevice[i == 0 ? 1 : 0] == 1 ? 2 : 1;
 
 				char temp[64];
-				if (joysticks > 1 && inputDevice[i] > 2)
+				if (controllers > 1 && inputDevice[i] > 2)
 					sprintf(temp, "%s %d", inputDevices[2], inputDevice[i] - 2);
 				else
 					sprintf(temp, "%s", inputDevices[inputDevice[i] - 1]);
@@ -1034,19 +1038,19 @@ void JE_itemScreen(void)
 						yChg = 2;
 					}
 
-					bool joystick_up = false, joystick_down = false;
-					for (int j = 0; j < joysticks; j++)
+					bool controller_up = false, controller_down = false;
+					for (int j = 0; j < controllers; j++)
 					{
-						joystick_up |= joystick[j].direction[0];
-						joystick_down |= joystick[j].direction[2];
+						controller_up |= controller[j].direction[0];
+						controller_down |= controller[j].direction[2];
 					}
 
-					if (keysactive[SDL_SCANCODE_UP] || joystick_up)
+					if (keysactive[SDL_SCANCODE_UP] || controller_up)
 					{
 						yChg = -1;
 					}
 
-					if (keysactive[SDL_SCANCODE_DOWN] || joystick_down)
+					if (keysactive[SDL_SCANCODE_DOWN] || controller_down)
 					{
 						yChg = 1;
 					}
@@ -1350,10 +1354,10 @@ void JE_itemScreen(void)
 						player[0].weapon_mode = 1;
 				}
 
-				// if joystick config, skip disabled items when digital
-				if (curMenu == MENU_JOYSTICK_CONFIG &&
-				    joysticks > 0 &&
-				    !joystick[joystick_config].analog &&
+				// if controller config, skip disabled items when digital
+				if (curMenu == MENU_CONTROLLER_CONFIG &&
+				    controllers > 0 &&
+				    !controller[controller_config].analog &&
 				    curSel[curMenu] == 5)
 				{
 					curSel[curMenu] = 3;
@@ -1380,10 +1384,10 @@ void JE_itemScreen(void)
 						player[0].weapon_mode = 1;
 				}
 
-				// if in joystick config, skip disabled items when digital
-				if (curMenu == MENU_JOYSTICK_CONFIG &&
-				    joysticks > 0 &&
-				    !joystick[joystick_config].analog &&
+				// if in controller config, skip disabled items when digital
+				if (curMenu == MENU_CONTROLLER_CONFIG &&
+				    controllers > 0 &&
+				    !controller[controller_config].analog &&
 				    curSel[curMenu] == 4)
 				{
 					curSel[curMenu] = 6;
@@ -1402,31 +1406,31 @@ void JE_itemScreen(void)
 				break;
 
 			case SDL_SCANCODE_LEFT:
-				if (curMenu == MENU_JOYSTICK_CONFIG)
+				if (curMenu == MENU_CONTROLLER_CONFIG)
 				{
-					if (joysticks > 0)
+					if (controllers > 0)
 					{
 						switch (curSel[curMenu])
 						{
 							case 2:
-								if (joystick_config == 0)
-									joystick_config = joysticks;
-								joystick_config--;
+								if (controller_config == 0)
+									controller_config = controllers;
+								controller_config--;
 								break;
 							case 3:
-								joystick[joystick_config].analog = !joystick[joystick_config].analog;
+								controller[controller_config].analog = !controller[controller_config].analog;
 								break;
 							case 4:
-								if (joystick[joystick_config].sensitivity == 0)
-									joystick[joystick_config].sensitivity = 10;
+								if (controller[controller_config].sensitivity == 0)
+									controller[controller_config].sensitivity = 10;
 								else
-									joystick[joystick_config].sensitivity--;
+									controller[controller_config].sensitivity--;
 								break;
 							case 5:
-								if (joystick[joystick_config].threshold == 0)
-									joystick[joystick_config].threshold = 10;
+								if (controller[controller_config].threshold == 0)
+									controller[controller_config].threshold = 10;
 								else
-									joystick[joystick_config].threshold--;
+									controller[controller_config].threshold--;
 								break;
 							default:
 								break;
@@ -1445,10 +1449,10 @@ void JE_itemScreen(void)
 						int temp = curSel[curMenu] - 3;
 						do
 						{
-							if (joysticks == 0)
+							if (controllers == 0)
 								inputDevice[temp == 0 ? 1 : 0] = inputDevice[temp]; // swap controllers
 							if (inputDevice[temp] <= 1)
-								inputDevice[temp] = 2 + joysticks;
+								inputDevice[temp] = 2 + controllers;
 							else
 								inputDevice[temp]--;
 						} while (inputDevice[temp] == inputDevice[temp == 0 ? 1 : 0]);
@@ -1500,26 +1504,26 @@ void JE_itemScreen(void)
 				break;
 
 			case SDL_SCANCODE_RIGHT:
-				if (curMenu == MENU_JOYSTICK_CONFIG)
+				if (curMenu == MENU_CONTROLLER_CONFIG)
 				{
-					if (joysticks > 0)
+					if (controllers > 0)
 					{
 						switch (curSel[curMenu])
 						{
 							case 2:
-								joystick_config++;
-								joystick_config %= joysticks;
+								controller_config++;
+								controller_config %= controllers;
 								break;
 							case 3:
-								joystick[joystick_config].analog = !joystick[joystick_config].analog;
+								controller[controller_config].analog = !controller[controller_config].analog;
 								break;
 							case 4:
-								joystick[joystick_config].sensitivity++;
-								joystick[joystick_config].sensitivity %= 11;
+								controller[controller_config].sensitivity++;
+								controller[controller_config].sensitivity %= 11;
 								break;
 							case 5:
-								joystick[joystick_config].threshold++;
-								joystick[joystick_config].threshold %= 11;
+								controller[controller_config].threshold++;
+								controller[controller_config].threshold %= 11;
 								break;
 							default:
 								break;
@@ -1538,9 +1542,9 @@ void JE_itemScreen(void)
 						int temp = curSel[curMenu] - 3;
 						do
 						{
-							if (joysticks == 0)
+							if (controllers == 0)
 								inputDevice[temp == 0 ? 1 : 0] = inputDevice[temp]; // swap controllers
-							if (inputDevice[temp] >= 2 + joysticks)
+							if (inputDevice[temp] >= 2 + controllers)
 								inputDevice[temp] = 1;
 							else
 								inputDevice[temp]++;
@@ -2414,7 +2418,7 @@ void JE_drawMainMenuHelpText(void)
 	JE_byte temp;
 
 	temp = curSel[curMenu] - 2;
-	if (curMenu == MENU_JOYSTICK_CONFIG) // joystick settings menu help
+	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
 		const int help[16] = { 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
 		memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
@@ -2611,7 +2615,7 @@ void JE_scaleInPicture(SDL_Surface *dst, SDL_Surface *src)
 
 		SDL_Delay(1);
 
-		push_joysticks_as_keyboard();
+		push_controllers_as_keyboard();
 		handleSdlEvents();
 
 		if (getInput())
@@ -2723,7 +2727,7 @@ void JE_menuFunction(JE_byte select)
 			quikSave = false;
 			break;
 		case 6:
-			curMenu = MENU_JOYSTICK_CONFIG;
+			curMenu = MENU_CONTROLLER_CONFIG;
 			break;
 		case 7:
 			curMenu = MENU_KEYBOARD_CONFIG;
@@ -2783,10 +2787,10 @@ void JE_menuFunction(JE_byte select)
 			col = 248;
 			colC = 1;
 
-			bool joyHeld = joydown;
+			bool controllerHeld = controllerdown;
 			while (true)
 			{
-				joyHeld &= joydown;
+				controllerHeld &= controllerdown;
 
 				setFrameCount(1);
 
@@ -2803,10 +2807,10 @@ void JE_menuFunction(JE_byte select)
 
 				delayUntilElapsed();
 
-				poll_joysticks();  // Notably, not push_joystick_as_keyboard.
+				poll_controllers();  // Notably, not push_controllers_as_keyboard.
 				handleSdlEvents();
 
-				if (hasInput(INPUT_NO_MOTION) || (joydown && !joyHeld))
+				if (hasInput(INPUT_NO_MOTION) || (controllerdown && !controllerHeld))
 					break;
 			}
 
@@ -2910,9 +2914,9 @@ void JE_menuFunction(JE_byte select)
 			int temp = curSel[curMenu] - 3;
 			do
 			{
-				if (joysticks == 0)
+				if (controllers == 0)
 					inputDevice[temp == 0 ? 1 : 0] = inputDevice[temp]; // swap controllers
-				if (inputDevice[temp] >= 2 + joysticks)
+				if (inputDevice[temp] >= 2 + controllers)
 					inputDevice[temp] = 1;
 				else
 					inputDevice[temp]++;
@@ -2957,7 +2961,7 @@ void JE_menuFunction(JE_byte select)
 		switch (select)
 		{
 		case 2:
-			curMenu = MENU_JOYSTICK_CONFIG;
+			curMenu = MENU_CONTROLLER_CONFIG;
 			break;
 		case 3:
 			curMenu = MENU_KEYBOARD_CONFIG;
@@ -2968,35 +2972,39 @@ void JE_menuFunction(JE_byte select)
 		}
 		break;
 
-	case MENU_JOYSTICK_CONFIG:
-		if (joysticks == 0 && select != 17)
+	case MENU_CONTROLLER_CONFIG:
+		if (controllers == 0 && select != 17)
 			break;
+
+		// clamp: the pad being configured may have been unplugged since we last drew
+		if (controller_config >= controllers)
+			controller_config = controllers > 0 ? controllers - 1 : 0;
 
 		switch (select)
 		{
 		case 2:
-			joystick_config++;
-			joystick_config %= joysticks;
+			controller_config++;
+			controller_config %= controllers;
 			break;
 		case 3:
-			joystick[joystick_config].analog = !joystick[joystick_config].analog;
+			controller[controller_config].analog = !controller[controller_config].analog;
 			break;
 		case 4:
-			if (joystick[joystick_config].analog)
+			if (controller[controller_config].analog)
 			{
-				joystick[joystick_config].sensitivity++;
-				joystick[joystick_config].sensitivity %= 11;
+				controller[controller_config].sensitivity++;
+				controller[controller_config].sensitivity %= 11;
 			}
 			break;
 		case 5:
-			if (joystick[joystick_config].analog)
+			if (controller[controller_config].analog)
 			{
-				joystick[joystick_config].threshold++;
-				joystick[joystick_config].threshold %= 11;
+				controller[controller_config].threshold++;
+				controller[controller_config].threshold %= 11;
 			}
 			break;
 		case 16:
-			reset_joystick_assignments(joystick_config);
+			reset_controller_assignments(controller_config);
 			break;
 		case 17:
 			curMenu = isNetworkGame
@@ -3004,7 +3012,7 @@ void JE_menuFunction(JE_byte select)
 				: MENU_OPTIONS;
 			break;
 		default:
-			if (joysticks == 0)
+			if (controllers == 0)
 				break;
 
 			// int temp = 254;
@@ -3012,42 +3020,42 @@ void JE_menuFunction(JE_byte select)
 
 			JE_rectangle(VGAScreen, 235, 21 + select * 8, 310, 30 + select * 8, 248);
 
-			Joystick_assignment temp;
-			if (detect_joystick_assignment(joystick_config, &temp))
+			Controller_binding temp;
+			if (detect_controller_assignment(controller_config, &temp))
 			{
 				// if the detected assignment was already set, unset it
-				for (uint i = 0; i < COUNTOF(*joystick->assignment); i++)
+				for (uint i = 0; i < COUNTOF(*controller->assignment); i++)
 				{
-					if (joystick_assignment_cmp(&temp, &joystick[joystick_config].assignment[select - 6][i]))
+					if (controller_assignment_cmp(&temp, &controller[controller_config].assignment[select - 6][i]))
 					{
-						joystick[joystick_config].assignment[select - 6][i].type = NONE;
-						goto joystick_assign_done;
+						controller[controller_config].assignment[select - 6][i].type = CONTROLLER_BIND_NONE;
+						goto controller_assign_done;
 					}
 				}
 
 				// if there is an empty assignment, set it
-				for (uint i = 0; i < COUNTOF(*joystick->assignment); i++)
+				for (uint i = 0; i < COUNTOF(*controller->assignment); i++)
 				{
-					if (joystick[joystick_config].assignment[select - 6][i].type == NONE)
+					if (controller[controller_config].assignment[select - 6][i].type == CONTROLLER_BIND_NONE)
 					{
-						joystick[joystick_config].assignment[select - 6][i] = temp;
-						goto joystick_assign_done;
+						controller[controller_config].assignment[select - 6][i] = temp;
+						goto controller_assign_done;
 					}
 				}
 
 				// if no assignments are empty, shift them all forward and set the last one
-				for (uint i = 0; i < COUNTOF(*joystick->assignment); i++)
+				for (uint i = 0; i < COUNTOF(*controller->assignment); i++)
 				{
-					if (i == COUNTOF(*joystick->assignment) - 1)
-						joystick[joystick_config].assignment[select - 6][i] = temp;
+					if (i == COUNTOF(*controller->assignment) - 1)
+						controller[controller_config].assignment[select - 6][i] = temp;
 					else
-						joystick[joystick_config].assignment[select - 6][i] = joystick[joystick_config].assignment[select - 6][i + 1];
+						controller[controller_config].assignment[select - 6][i] = controller[controller_config].assignment[select - 6][i + 1];
 				}
 
-joystick_assign_done:
+controller_assign_done:
 				curSelect++;
 
-				poll_joysticks();
+				poll_controllers();
 			}
 		}
 		break;

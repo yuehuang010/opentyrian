@@ -26,9 +26,9 @@
 
 #include "config.h"
 
+#include "controller.h"
 #include "episodes.h"
 #include "file.h"
-#include "joystick.h"
 #include "loudness.h"
 #include "memreader.h"
 #include "memwriter.h"
