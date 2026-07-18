@@ -1,7 +1,10 @@
 # REMASTER_HUD — HD vectorized in-flight HUD
 
-Status: **H0–H2 (`94bddf9`), H2.5 (`955bfeb`), H2.6 (`d359ee9`) done,
-2026-07-17.** Settled art direction after two user verdicts: AI-upscale = too
+Status: **ALL PHASES DONE 2026-07-17** — H0–H2 (`94bddf9`), H2.5 (`955bfeb`),
+H2.6 (`d359ee9`) + border-rim fix (`16aa334`), H3 (`1cc4f72`), H4 (`121ec88`).
+Remaining known gaps: galagaMode falls back to classic by design; real 2P was
+verified by line-by-line source mapping + a forced-state render, not an
+end-to-end 2P session — eyeball it when one happens. Settled art direction after two user verdicts: AI-upscale = too
 fuzzy, fully procedural = too far from the original — the shipped look is the
 **original PIC #3 art through hq4x** (crisp pixel-art vectorization), with
 vector bars/gauges, the HD-glyph level name (fade-stepped brightness), and
