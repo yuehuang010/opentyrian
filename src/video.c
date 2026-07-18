@@ -62,7 +62,6 @@ bool crt_mode = false;
 
 bool hd_flight_active = false;
 bool hd_font_flight_hud = false;
-bool hd_tiles = false;
 
 static SDL_Texture *crt_scanline_tex = NULL;
 static SDL_Texture *crt_vignette_tex = NULL;

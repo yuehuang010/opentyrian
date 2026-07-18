@@ -270,7 +270,6 @@ bool load_opentyrian_config(void)
 	hd_mode = true;
 	crt_mode = false;
 	highfps_mode = true;
-	hd_tiles = false;  // HD level tilesets (Phase S3); opt-in until seam A/B signed off
 	hd_sfx = true;
 	hd_music = true;
 	window_width = 0;
@@ -310,8 +309,6 @@ bool load_opentyrian_config(void)
 		config_get_bool_option(section, "crt", &crt_mode);
 
 		config_get_bool_option(section, "highfps", &highfps_mode);
-
-		config_get_bool_option(section, "hd_tiles", &hd_tiles);
 
 		const char *scaler;
 		if (config_get_string_option(section, "scaler", &scaler))
@@ -369,8 +366,6 @@ bool save_opentyrian_config(void)
 	config_set_bool_option(section, "crt", crt_mode, FALSE_TRUE);
 
 	config_set_bool_option(section, "highfps", highfps_mode, FALSE_TRUE);
-
-	config_set_bool_option(section, "hd_tiles", hd_tiles, FALSE_TRUE);
 
 	config_set_string_option(section, "scaler", scalers[scaler].name);
 	

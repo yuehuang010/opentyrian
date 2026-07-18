@@ -50,7 +50,6 @@ extern bool crt_mode;            // optional CRT scanline + vignette post-proces
 
 extern bool hd_flight_active;    // set while the in-flight HD sprite compositor should overlay
 extern bool hd_font_flight_hud;  // opt-in: set around per-frame in-flight HUD text draws so hd_font_active() claims them even while hd_flight_active (they re-emit every frame, so the immediate-mode queue holds them)
-extern bool hd_tiles;            // HD level tilesets (Phase S3); overlay upscaled truecolor tiles
 
 bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if its HD asset loads; returns success
 bool hd_set_backdrop_asset(const char *name); // begin HD compositing for a filename-keyed full-screen asset ("hdpcx_<name>.dat"); returns success

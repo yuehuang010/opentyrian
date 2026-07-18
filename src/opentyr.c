@@ -134,7 +134,7 @@ void setupMenu(void)
 		MENU_ITEM_SOUND_VOLUME,
 		MENU_ITEM_HD_MUSIC,
 		MENU_ITEM_HD_SFX,
-		MENU_ITEM_HD_TILES,
+		MENU_ITEM_HD_GRAPHICS,
 		MENU_ITEM_HIGHFPS,
 	} MenuItemId;
 
@@ -179,7 +179,7 @@ void setupMenu(void)
 				{ MENU_ITEM_DISPLAY, "Display:", "Change the display mode.", getDisplayPickerItemsCount, getDisplayPickerItem },
 				{ MENU_ITEM_SCALER, "Scaler:", "Change the pixel art scaling algorithm.", getScalerPickerItemsCount, getScalerPickerItem },
 				{ MENU_ITEM_SCALING_MODE, "Scaling Mode:", "Change the scaling mode.", getScalingModePickerItemsCount, getScalingModePickerItem },
-				{ MENU_ITEM_HD_TILES, "HD Tiles:", "Upscale in-flight level backgrounds (Off = classic).", getOnOffPickerItemsCount, getOnOffPickerItem },
+				{ MENU_ITEM_HD_GRAPHICS, "HD Graphics:", "All HD remaster graphics (Off = classic pixels).", getOnOffPickerItemsCount, getOnOffPickerItem },
 				{ MENU_ITEM_HIGHFPS, "Smooth FPS:", "Interpolate extra frames for smoother motion (Off = classic).", getOnOffPickerItemsCount, getOnOffPickerItem },
 				{ MENU_ITEM_DONE, "Done", "Return to the previous menu." },
 				{ -1 }
@@ -354,9 +354,9 @@ void setupMenu(void)
 					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_sfx ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
-			case MENU_ITEM_HD_TILES:
+			case MENU_ITEM_HD_GRAPHICS:
 				if (!valueHiddenByPicker)
-					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_tiles ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+					drawFontHvShadow(VGAScreen, xMenuItemValue, y, hd_mode ? "On" : "Off", FONT_NORMAL, 15, -3 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
 				break;
 
 			case MENU_ITEM_HIGHFPS:
@@ -691,12 +691,12 @@ void setupMenu(void)
 					pickerSelectedIndex = hd_sfx ? 1 : 0;
 					break;
 				}
-				case MENU_ITEM_HD_TILES:
+				case MENU_ITEM_HD_GRAPHICS:
 				{
 					JE_playSampleNum(S_CLICK);
 
 					currentPicker = selectedMenuItemId;
-					pickerSelectedIndex = hd_tiles ? 1 : 0;
+					pickerSelectedIndex = hd_mode ? 1 : 0;
 					break;
 				}
 				case MENU_ITEM_HIGHFPS:
@@ -879,12 +879,17 @@ void setupMenu(void)
 					}
 					break;
 				}
-				case MENU_ITEM_HD_TILES:
+				case MENU_ITEM_HD_GRAPHICS:
 				{
-					// Applies live: interp_flight_emit reads hd_tiles each present, so
-					// no reload is needed -- the next flight frame composites (or stops
-					// compositing) HD tiles.
-					hd_tiles = pickerSelectedIndex == 1;
+					// Applies live: hd_mode is read per present by scale_and_flip
+					// (backdrops, sprites, fonts, flight compositor, HUD overlay) and
+					// by interp_flight_emit for tiles, so the toggle applies live --
+					// no reload is needed. One caveat: a screen's HD *backdrop* is
+					// armed on screen entry (hd_set_backdrop), so turning HD on
+					// mid-screen shows HD text/sprites immediately but the backdrop
+					// may only appear on the next screen change; this matches how
+					// the flag already behaved.
+					hd_mode = pickerSelectedIndex == 1;
 					break;
 				}
 				case MENU_ITEM_HIGHFPS:

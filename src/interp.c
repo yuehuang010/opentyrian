@@ -606,7 +606,7 @@ void interp_flight_emit(float alpha)
 	// list order*, so the whole playfield (backgrounds + sprites) reconstructs at
 	// full res with faithful z-order. A -1 palette (filter tint / fade / custom)
 	// or an unresolved bank leaves backgrounds classic for the frame.
-	int tile_bank = hd_tiles ? hd_tile_current_bank() : -1;
+	int tile_bank = hd_mode ? hd_tile_current_bank() : -1;
 	int tile_pal = tile_bank >= 0 ? current_palette_index() : -1;
 	bool hd_bg = (tile_bank >= 0 && tile_pal >= 0 && load_hd_tile_atlas(tile_bank, tile_pal) != NULL);
 
