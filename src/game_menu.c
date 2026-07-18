@@ -228,6 +228,45 @@ JE_longint JE_cashLeft(void)
 	return tempL;
 }
 
+// Draws the MENU_KEYBOARD_CONFIG rows (labels + bound key names). Factored out
+// of JE_itemScreen's per-frame draw so the rebind wait loop below can re-invoke
+// it under hd_font_force_classic (see internal/issue/hd-keybind-menu-vanish.md).
+static void JE_drawKeyboardConfigRows(void)
+{
+	for (int x = 2; x <= 12; x++)
+	{
+		int row = x - 2;
+
+		int temp2;
+		if (x == curSel[MENU_KEYBOARD_CONFIG])
+		{
+			temp2 = 15;
+		}
+		else
+		{
+			temp2 = 28;
+		}
+
+		const char *label;
+		if (row < 8)
+			label = menuInt[MENU_KEYBOARD_CONFIG + 1][row + 1];
+		else if (row == 8)
+			label = "SHIP MORPH";
+		else /* row == 9: reset to defaults, row == 10: done */
+			label = menuInt[MENU_KEYBOARD_CONFIG + 1][row];
+
+		JE_textShade(VGAScreen, 166, 38 + row*12, label, temp2 / 16, temp2 % 16 - 8, DARKEN);
+
+		if (row < 9) /* 9 = reset to defaults, 10 = done */
+		{
+			temp2 = (x == curSel[MENU_KEYBOARD_CONFIG]) ? 252 : 250;
+			JE_textShade(VGAScreen, 236, 38 + row*12, SDL_GetScancodeName(keySettings[row]), temp2 / 16, temp2 % 16 - 8, DARKEN);
+		}
+	}
+
+	menuChoices[MENU_KEYBOARD_CONFIG] = 12;
+}
+
 /* ===================== Item shop screen ===================== */
 
 void JE_itemScreen(void)
@@ -480,37 +519,7 @@ void JE_itemScreen(void)
 			// "key names" text; row 8, ship morph, is a literal -- the data file
 			// only ships 11 menuInt[6][] strings total and we can't add a 12th
 			// without game data to edit), 9 = reset to defaults, 10 = done.
-			for (int x = 2; x <= 12; x++)
-			{
-				int row = x - 2;
-
-				if (x == curSel[curMenu])
-				{
-					temp2 = 15;
-				}
-				else
-				{
-					temp2 = 28;
-				}
-
-				const char *label;
-				if (row < 8)
-					label = menuInt[curMenu + 1][row + 1];
-				else if (row == 8)
-					label = "SHIP MORPH";
-				else /* row == 9: reset to defaults, row == 10: done */
-					label = menuInt[curMenu + 1][row];
-
-				JE_textShade(VGAScreen, 166, 38 + row*12, label, temp2 / 16, temp2 % 16 - 8, DARKEN);
-
-				if (row < 9) /* 9 = reset to defaults, 10 = done */
-				{
-					temp2 = (x == curSel[curMenu]) ? 252 : 250;
-					JE_textShade(VGAScreen, 236, 38 + row*12, SDL_GetScancodeName(keySettings[row]), temp2 / 16, temp2 % 16 - 8, DARKEN);
-				}
-			}
-
-			menuChoices[MENU_KEYBOARD_CONFIG] = 12;
+			JE_drawKeyboardConfigRows();
 		}
 
 		if (curMenu == MENU_CONTROLLER_CONFIG)
@@ -2840,7 +2849,29 @@ void JE_menuFunction(JE_byte select)
 		{
 			temp2 = 254;
 			int tempY = 38 + (curSelect - 2) * 12;
+
+			// The wait loop below only re-presents a pulsing rectangle every
+			// frame; it never re-emits this screen's text. In HD mode the
+			// glyph queue is rebuilt/drained per present (src/video.c), so
+			// without this the whole keyboard-config panel (labels, bound
+			// keys, help text) -- including the "waiting for key" blank this
+			// call draws -- would vanish after the loop's first present.
+			// Bake it all as persistent classic pixels instead, same idiom
+			// as JE_drawShipModeIndicator (mainint.c). Gated on hd_mode so
+			// classic rendering is untouched. See
+			// internal/issue/hd-keybind-menu-vanish.md.
+			bool old_force_classic = hd_font_force_classic;
+			if (hd_mode)
+			{
+				hd_font_force_classic = true;
+				JE_drawKeyboardConfigRows();
+				JE_drawMainMenuHelpText();
+			}
+
 			JE_textShade(VGAScreen, 236, tempY, SDL_GetScancodeName(keySettings[curSelect-2]), (temp2 / 16), (temp2 % 16) - 8, DARKEN);
+
+			hd_font_force_classic = old_force_classic;
+
 			JE_showVGA();
 
 			col = 248;
