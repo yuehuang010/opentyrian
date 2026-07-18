@@ -22,20 +22,23 @@
 #include "SDL.h"
 
 /**
- * HD in-flight HUD overlay (REMASTER_HUD.md phases H0-H2). Draws the HD panel
- * art for the sidebar (VGA x in [264,320), y in [0,200)) and bottom bar (VGA
- * y in [184,200), x in [0,264)) strips, plus vectorized shield/armor/power
- * bars, weapon-power dots, and sidekick ammo gauges, at output resolution.
+ * HD in-flight HUD overlay (REMASTER_HUD.md phase H2.5). Draws a fully
+ * PROCEDURAL vector panel for the sidebar (VGA x in [264,320), y in [0,200))
+ * and bottom bar (VGA y in [184,200), x in [0,264)) strips -- flat dark fills,
+ * hairline steel frames, inset wells, and crisp HD-font labels -- plus
+ * vectorized shield/armor/power bars, weapon-power dots, and sidekick ammo
+ * gauges, at output resolution. No bitmap panel art is used.
  *
  * Called from the hd_mode && hd_flight_active branch of scale_and_flip()
  * (src/video.c), after the flight-sprite clip rect is released and before
- * draw_hd_font_queue(). `dst_rect` is the same output rect the flight-sprite
- * queue scales against (src/video.c's classic_scale_base() output).
+ * draw_hd_font_queue() (so the labels queued here render this same present).
+ * `dst_rect` is the same output rect the flight-sprite queue scales against
+ * (src/video.c's classic_scale_base() output).
  *
- * Gated internally to 1P only and to hdpic03.dat actually being available
- * (fail-once cache, shared with hd_set_backdrop() via
- * hd_hud_get_panel_texture()); any failure draws nothing, leaving the
- * classic 8-bit panel (already present in the base image) showing through.
+ * Gated internally to 1P only; 2P falls through, leaving the classic 8-bit
+ * panel (already present in the base image) showing through. Elements not yet
+ * vectorized (sidekick icons, rear-config buttons, the message-bar interior)
+ * stay as punch-outs: the procedural fills skip them so the classic pixels show.
  */
 void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect);
 

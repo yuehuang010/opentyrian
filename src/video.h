@@ -55,11 +55,16 @@ bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if it
 bool hd_set_backdrop_asset(const char *name); // begin HD compositing for a filename-keyed full-screen asset ("hdpcx_<name>.dat"); returns success
 void hd_clear_backdrop(void);       // stop HD compositing (revert to classic); covers both hd_set_backdrop and hd_set_backdrop_asset
 
-// Shared fail-once cache lookup for the in-flight HD HUD overlay (src/hd_hud.c):
-// looks up (and lazily loads) the same "hdpicNN.dat" PIC texture hd_set_backdrop()
-// uses, without touching hd_backdrop_active/hd_backdrop_cur_tex/hd_backdrop_fade.
-// Returns NULL if the asset is unavailable/malformed (fail-once, never retried).
-SDL_Texture *hd_hud_get_panel_texture(int pic_num);
+// Present-time HD glyph hook for the procedural in-flight HD HUD panel
+// (src/hd_hud.c). Queues one HD glyph (opaque HV recolor, no shadow) into the
+// same per-present font queue draw_hd_font_queue() drains -- but WITHOUT the
+// hd_font_active() gate, because the HUD panel is drawn from scale_and_flip()
+// at present time (a deliberate, separate entry point from the classic draw
+// choke points that hd_font_emit* guards). Returns false if the glyph is out of
+// range, its HD asset is missing, or the queue is full (caller then draws
+// nothing for that glyph -- the classic panel underneath still shows). Colors
+// track the same live palette the glyph synthesizer samples.
+bool hd_hud_queue_glyph(unsigned int table, unsigned int index, int lx, int ly, Uint8 hue, Sint8 value);
 
 // HD ending-cutscene streaming compositor (tyrend.anm). Separate from the fail-once
 // PIC/asset backdrop cache: one persistent STREAMING texture, created lazily on the

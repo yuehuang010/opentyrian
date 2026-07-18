@@ -662,21 +662,6 @@ bool hd_set_backdrop(int pic_num)
 }
 
 /**
- * Shared HDPX PIC lookup for the in-flight HD HUD overlay (src/hd_hud.c):
- * reuses load_hd_backdrop's fail-once cache so the HUD panel art doesn't
- * duplicate the HDPX parsing or maintain a second cache. Unlike
- * hd_set_backdrop(), this has no side effects on hd_backdrop_active /
- * hd_backdrop_cur_tex / hd_backdrop_fade -- those belong to the separate
- * full-screen backdrop compositor and must stay untouched by the HUD path.
- */
-SDL_Texture *hd_hud_get_panel_texture(int pic_num)
-{
-	if (!load_hd_backdrop(pic_num))
-		return NULL;
-	return hd_backdrop_tex[pic_num];
-}
-
-/**
  * Lazily loads and caches the full-screen HD backdrop asset ("hdpcx_<name>.dat")
  * for the given short asset name (e.g. "tyrset" -> "hdpcx_tyrset.dat"). Returns
  * the cached texture, or NULL if the asset is missing/malformed; a load failure
@@ -1902,6 +1887,22 @@ bool hd_font_emit_shadowed(SDL_Surface *screen, unsigned int table, unsigned int
 		return false;
 
 	return hd_font_queue_glyph(table, index, lx, ly, glyph_mode, hue, value, (int)shadow_mode, sdx, sdy, full);
+}
+
+// Present-time HD glyph hook for the procedural HD HUD panel (src/hd_hud.c). The
+// panel is drawn from scale_and_flip() at present time, above the flight sprites
+// and below draw_hd_font_queue(), so glyphs queued here render this same present.
+// This deliberately bypasses hd_font_active() (which would decline in-flight
+// unless hd_font_flight_hud is set): the HUD panel is its own present-time
+// producer, re-emitted every present just like the flight-HUD text, so the
+// immediate-mode queue holds it correctly. It stays a NARROW hook (opaque HV
+// recolor, no shadow) and never weakens the classic-path guards.
+bool hd_hud_queue_glyph(unsigned int table, unsigned int index, int lx, int ly, Uint8 hue, Sint8 value)
+{
+	if (!hd_mode)
+		return false;
+
+	return hd_font_queue_glyph(table, index, lx, ly, HD_FONT_MODE_HV, hue, value, -1, 0, 0, false);
 }
 
 // Draws (and drains) the HD font queue as the topmost UI layer, mapping each
