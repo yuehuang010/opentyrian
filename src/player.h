@@ -63,7 +63,7 @@ typedef struct
 	
 	PlayerItems items, last_items;
 	
-	bool is_dragonwing;  // i.e., is player 2
+	bool is_dragonwing;  // behavioral dragonwing-mode flag (charge cannon, twin-hull sprite, dragonwing sidekick positioning); today set true only for player[1] (== is player 2), see JE_initPlayerData in mainint.c
 	Uint8 *lives;
 	
 	// calculatable

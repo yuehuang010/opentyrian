@@ -3617,7 +3617,7 @@ void JE_playerMovement(Player *this_player,
 	// call this with distinct playerNum_, so their draws get distinct tags.
 	interp_tag(INTERP_TAG(INTERP_TAG_PLAYER, playerNum_));
 
-	if (playerNum_ == 2 || !twoPlayerMode)
+	if (this_player->is_dragonwing || !twoPlayerMode)
 	{
 		tempW = weaponPort[this_player->items.weapon[REAR_WEAPON].id].opnum;
 
@@ -4377,7 +4377,7 @@ redo:
 		}
 
 		/*Options Location*/
-		if (playerNum_ == 2 && shipGr_ == 0)  // if dragonwing
+		if (this_player->is_dragonwing && shipGr_ == 0)  // if dragonwing
 		{
 			if (this_player->sidekick[LEFT_SIDEKICK].style == 0)
 			{
@@ -4440,14 +4440,16 @@ redo:
 					JE_doSpecialShot(playerNum_, &this_player->armor, &this_player->shield);
 
 				/*Normal Main Weapons*/
-				if (!(twoPlayerLinked && playerNum_ == 2))
+				if (!(twoPlayerLinked && this_player->is_dragonwing))
 				{
 					int min, max;
 
 					if (!twoPlayerMode)
 						min = 1, max = 2;
+					else if (this_player->is_dragonwing)
+						min = max = REAR_WEAPON + 1;
 					else
-						min = max = playerNum_;
+						min = max = FRONT_WEAPON + 1;
 
 					for (temp = min - 1; temp < max; temp++)
 					{
@@ -4471,7 +4473,7 @@ redo:
 				}
 
 				/*Super Charge Weapons*/
-				if (playerNum_ == 2)
+				if (this_player->is_dragonwing)
 				{
 
 					if (!twoPlayerLinked)
@@ -4518,7 +4520,7 @@ redo:
 					else if (button[1-1] && (!twoPlayerLinked || chargeLevel > 0))
 					{
 						shotMultiPos[SHOT_P2_CHARGE] = 0;
-						b = player_shot_create(16, SHOT_P2_CHARGE, this_player->x, this_player->y, *mouseX_, *mouseY_, chargeGunWeapons[player[1].items.weapon[REAR_WEAPON].id-1] + chargeLevel, playerNum_);
+						b = player_shot_create(16, SHOT_P2_CHARGE, this_player->x, this_player->y, *mouseX_, *mouseY_, chargeGunWeapons[this_player->items.weapon[REAR_WEAPON].id-1] + chargeLevel, playerNum_);
 
 						if (chargeLevel > 0)
 							fill_rectangle_xy(VGAScreenSeg, 269, 107 + (chargeLevel - 1) * 3, 275, 108 + (chargeLevel - 1) * 3, 193);
@@ -4659,7 +4661,7 @@ redo:
 					break;
 				}
 
-				if (playerNum_ == 2 || !twoPlayerMode)  // if player has sidekicks
+				if (this_player->is_dragonwing || !twoPlayerMode)  // if player has sidekicks
 				{
 					for (uint i = 0; i < COUNTOF(player->items.sidekick); ++i)
 					{
@@ -4739,7 +4741,7 @@ redo:
 	} // moveOK
 
 	// draw sidekicks
-	if ((playerNum_ == 2 || !twoPlayerMode) && !endLevel)
+	if ((this_player->is_dragonwing || !twoPlayerMode) && !endLevel)
 	{
 		for (uint i = 0; i < COUNTOF(this_player->sidekick); ++i)
 		{
