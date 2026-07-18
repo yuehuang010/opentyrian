@@ -1,7 +1,7 @@
 ---
 title: HD-mode keyboard-config menu text vanishes while rebinding a key
 status: Fixed
-fixed-in: pending-commit
+fixed-in: 1b3b37b
 component: HD remaster / video compositor (game_menu.c keyboard-config rebind)
 affects: hd_mode only (classic rendering unaffected)
 ---
