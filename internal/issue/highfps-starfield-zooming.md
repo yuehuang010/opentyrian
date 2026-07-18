@@ -1,7 +1,7 @@
 ---
 title: Smooth FPS made the in-flight starfield read as "zooming" fast dots
 status: Fixed
-fixed-in: c3c7260
+fixed-in: fc39ad8
 component: Phase-6 render interpolation (interp.c / backgrnd.c)
 affects: highfps_mode only (classic rendering unaffected)
 ---
