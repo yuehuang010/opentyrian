@@ -105,6 +105,7 @@ static int controller_config = 0;
  * (left stick + D-pad, START, BACK) and not user-adjustable. */
 typedef enum
 {
+	ROW_DEVICE,
 	ROW_ANALOG,
 	ROW_SENSITIVITY,
 	ROW_THRESHOLD,
@@ -119,12 +120,16 @@ typedef struct
 	Controller_row_kind kind;
 	const char *label; // literal, or NULL to use menuInt[6][menu_int]
 	int menu_int;      // index into menuInt[6][], or -1
-	int assignment;    // index into controller[].assignment[], ROW_BINDING only, else -1
+	int assignment;    // ROW_BINDING: index into controller[].assignment[].
+	                    // ROW_DEVICE: player index into inputDevice[]/player[] (0 or 1).
+	                    // else -1.
 }
 Controller_row;
 
 static const Controller_row controller_rows[] =
 {
+	{ ROW_DEVICE,      "PLAYER 1",     -1,  0 },
+	{ ROW_DEVICE,      "PLAYER 2",     -1,  1 },
 	{ ROW_ANALOG,      "ANALOG STICK", -1, -1 },
 	{ ROW_SENSITIVITY, " SENSITIVITY", -1, -1 },
 	{ ROW_THRESHOLD,   " THRESHOLD",   -1, -1 },
@@ -550,7 +555,24 @@ void JE_itemScreen(void)
 				// remembered slot keeps showing its mapping
 				bool shows_value = row->kind != ROW_RESET && row->kind != ROW_DONE;
 
-				if (shows_value && controllers == 0)
+				if (row->kind == ROW_DEVICE)
+				{
+					// Keyboard/mouse cycling stays meaningful with zero pads
+					// connected, so this row is never replaced with "-".
+					// Formatting mirrors the 2P-arcade device display
+					// (below, "2 player input devices").
+					int dev = inputDevice[row->assignment];
+
+					if (dev >= 1 && dev <= 2)
+						sprintf(value, "%s", inputDevices[dev - 1]);
+					else if (controllers > 1 && dev > 2)
+						sprintf(value, "%s %d", inputDevices[2], dev - 2);
+					else if (dev > 2)
+						sprintf(value, "%s", inputDevices[2]); // plain "CONTROLLER"
+					else
+						sprintf(value, "%s", inputDevices[0]); // dev == 0 ("any"): not menu-reachable, show as keyboard until cycled
+				}
+				else if (shows_value && controllers == 0)
 				{
 					sprintf(value, "-");
 				}
@@ -893,7 +915,7 @@ void JE_itemScreen(void)
 		// PLAY_NEXT_LEVEL, KEYBOARD_CONFIG, CONTROLLER_CONFIG, LOAD_SAVE,
 		// DATA_CUBES, DATA_CUBE_SUB -- verified by auditing every draw call's
 		// coordinates in this file).
-		if (coopJoinController >= 0)
+		if (coopJoinController != -1) // >= 0 (pad) or COOP_JOIN_KEYBOARD
 			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 READY", 14, 1, DARKEN);
 		else if (campaignCoop && twoPlayerMode)
 			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 JOINED", 14, 1, DARKEN);
@@ -1116,25 +1138,93 @@ void JE_itemScreen(void)
 					const int p1_pad = (inputDevice[0] == 0) ? 0
 					                 : (inputDevice[0] >= 3) ? inputDevice[0] - 3 : -1;
 
+					// The join/leave gesture depends on the device chosen for P2
+					// in the controller-config menu (ROW_DEVICE, inputDevice[1]):
+					// an explicit pad reserves the gesture to only that pad; the
+					// keyboard uses the ship-morph key (which does nothing in
+					// menus otherwise); mouse/"any" keeps the legacy any-pad
+					// behavior.
 					if (campaignCoop && twoPlayerMode)
 					{
-						// P2 reached the shop still joined: the same gesture on
-						// P2's assigned pad now leaves the session outright
-						// (unlike a mid-level drop, campaignCoop is cleared too --
-						// this is a deliberate exit, not an involuntary drop).
-						// After leaving, the plain join poll above applies again
-						// next frame (twoPlayerMode false) and P2 can re-ready.
-						const int p2_pad = inputDevice[1] - 3;
-						if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
-						    controller[p2_pad].action_pressed[0])
+						// P2 reached the shop still joined: the same gesture that
+						// would join now leaves the session outright (unlike a
+						// mid-level drop, campaignCoop is cleared too -- this is
+						// a deliberate exit, not an involuntary drop). After
+						// leaving, the plain join poll above applies again next
+						// frame (twoPlayerMode false) and P2 can re-ready.
+						bool leave = false;
+
+						if (inputDevice[1] == 1)
+						{
+							if (keysactive[keySettings[KEY_SETTING_SHIP_MORPH]])
+							{
+								keysactive[keySettings[KEY_SETTING_SHIP_MORPH]] = false; // consume
+								leave = true;
+							}
+						}
+						else
+						{
+							const int p2_pad = inputDevice[1] - 3;
+							if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
+							    controller[p2_pad].action_pressed[0])
+							{
+								leave = true;
+							}
+						}
+
+						if (leave)
 						{
 							twoPlayerMode = false;
 							campaignCoop = false;
 							JE_playSampleNum(S_CLICK);
 						}
 					}
+					else if (inputDevice[1] >= 3)
+					{
+						// Explicit pad chosen for P2: only that pad may
+						// claim/toggle the P2 slot.
+						const int p2_pad = inputDevice[1] - 3;
+						if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
+						    controller[p2_pad].action_pressed[0])
+						{
+							if (coopJoinController == -1)
+							{
+								coopJoinController = p2_pad;
+								JE_playSampleNum(S_CLICK);
+							}
+							else if (coopJoinController == p2_pad)
+							{
+								coopJoinController = -1;
+								JE_playSampleNum(S_CLICK);
+							}
+						}
+					}
+					else if (inputDevice[1] == 1 && inputDevice[0] != 1)
+					{
+						// Keyboard chosen for P2 (and P1 isn't also on keyboard):
+						// the ship-morph key toggles ready state. Consumed like
+						// the in-flight morph trigger's key handling so a held
+						// key doesn't repeat every frame.
+						if (keysactive[keySettings[KEY_SETTING_SHIP_MORPH]])
+						{
+							keysactive[keySettings[KEY_SETTING_SHIP_MORPH]] = false; // consume
+
+							if (coopJoinController == -1)
+							{
+								coopJoinController = COOP_JOIN_KEYBOARD;
+								JE_playSampleNum(S_CLICK);
+							}
+							else if (coopJoinController == COOP_JOIN_KEYBOARD)
+							{
+								coopJoinController = -1;
+								JE_playSampleNum(S_CLICK);
+							}
+						}
+					}
 					else
 					{
+						// Mouse or "any" chosen for P2: legacy behavior -- any
+						// pad that isn't P1's claims/toggles P2.
 						for (int c = 0; c < controllers; c++)
 						{
 							if (c == p1_pad)
@@ -1551,12 +1641,31 @@ void JE_itemScreen(void)
 			case SDL_SCANCODE_LEFT:
 				if (curMenu == MENU_CONTROLLER_CONFIG)
 				{
-					if (controllers > 0)
-					{
-						int row = curSel[curMenu] - 2;
-						Controller_row_kind kind = (row >= 0 && (uint)row < COUNTOF(controller_rows))
-							? controller_rows[row].kind : ROW_DONE;
+					int row = curSel[curMenu] - 2;
+					Controller_row_kind kind = (row >= 0 && (uint)row < COUNTOF(controller_rows))
+						? controller_rows[row].kind : ROW_DONE;
 
+					if (kind == ROW_DEVICE)
+					{
+						// Always usable, even with zero pads connected --
+						// keyboard/mouse cycling still makes sense.
+						JE_playSampleNum(S_CURSOR);
+
+						int temp = controller_rows[row].assignment;
+						do
+						{
+							if (controllers == 0)
+								inputDevice[temp == 0 ? 1 : 0] = inputDevice[temp]; // swap controllers
+							if (inputDevice[temp] <= 1)
+								inputDevice[temp] = 2 + controllers;
+							else
+								inputDevice[temp]--;
+						} while (inputDevice[temp] == inputDevice[temp == 0 ? 1 : 0]);
+
+						coopJoinController = -1; // a readied pad/keyboard may no longer match
+					}
+					else if (controllers > 0)
+					{
 						switch (kind)
 						{
 							case ROW_ANALOG:
@@ -1654,12 +1763,31 @@ void JE_itemScreen(void)
 			case SDL_SCANCODE_RIGHT:
 				if (curMenu == MENU_CONTROLLER_CONFIG)
 				{
-					if (controllers > 0)
-					{
-						int row = curSel[curMenu] - 2;
-						Controller_row_kind kind = (row >= 0 && (uint)row < COUNTOF(controller_rows))
-							? controller_rows[row].kind : ROW_DONE;
+					int row = curSel[curMenu] - 2;
+					Controller_row_kind kind = (row >= 0 && (uint)row < COUNTOF(controller_rows))
+						? controller_rows[row].kind : ROW_DONE;
 
+					if (kind == ROW_DEVICE)
+					{
+						// Always usable, even with zero pads connected --
+						// keyboard/mouse cycling still makes sense.
+						JE_playSampleNum(S_CURSOR);
+
+						int temp = controller_rows[row].assignment;
+						do
+						{
+							if (controllers == 0)
+								inputDevice[temp == 0 ? 1 : 0] = inputDevice[temp]; // swap controllers
+							if (inputDevice[temp] >= 2 + controllers)
+								inputDevice[temp] = 1;
+							else
+								inputDevice[temp]++;
+						} while (inputDevice[temp] == inputDevice[temp == 0 ? 1 : 0]);
+
+						coopJoinController = -1; // a readied pad/keyboard may no longer match
+					}
+					else if (controllers > 0)
+					{
 						switch (kind)
 						{
 							case ROW_ANALOG:
@@ -2578,8 +2706,22 @@ void JE_drawMainMenuHelpText(void)
 	temp = curSel[curMenu] - 2;
 	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
-		const int help[COUNTOF(controller_rows)] = { 15, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
-		memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
+		int row_index = curSel[curMenu] - 2;
+		if (row_index >= 0 && (uint)row_index < COUNTOF(controller_rows) &&
+		    controller_rows[row_index].kind == ROW_DEVICE)
+		{
+			// Literal, not a mainMenuHelp[] lookup: same reasoning as the
+			// "SHIP MORPH" label above -- no room in the data file for new
+			// help-text strings.
+			const char *text = "Choose which device flies this player's ship.";
+			strncpy(tempStr, text, sizeof(tempStr) - 1);
+			tempStr[sizeof(tempStr) - 1] = '\0';
+		}
+		else
+		{
+			const int help[COUNTOF(controller_rows)] = { 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
+			memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
+		}
 	}
 	else if (curMenu < MENU_PLAY_NEXT_LEVEL ||
 	         curMenu == MENU_2_PLAYER_ARCADE ||
@@ -3158,11 +3300,31 @@ void JE_menuFunction(JE_byte select)
 		bool valid_row = row_index >= 0 && (uint)row_index < COUNTOF(controller_rows);
 		Controller_row_kind kind = valid_row ? controller_rows[row_index].kind : ROW_DONE;
 
-		if (controllers == 0 && kind != ROW_DONE)
+		if (controllers == 0 && kind != ROW_DONE && kind != ROW_DEVICE)
 			break;
 
 		switch (kind)
 		{
+		case ROW_DEVICE:
+		{
+			// Fire/select cycles forward, mirroring the 2P-arcade device
+			// cycler below (case MENU_2_PLAYER_ARCADE, cases 3/4). Always
+			// usable, even with zero pads connected.
+			int temp = controller_rows[row_index].assignment;
+			JE_playSampleNum(S_CURSOR);
+			do
+			{
+				if (controllers == 0)
+					inputDevice[temp == 0 ? 1 : 0] = inputDevice[temp]; // swap controllers
+				if (inputDevice[temp] >= 2 + controllers)
+					inputDevice[temp] = 1;
+				else
+					inputDevice[temp]++;
+			} while (inputDevice[temp] == inputDevice[temp == 0 ? 1 : 0]);
+
+			coopJoinController = -1; // a readied pad/keyboard may no longer match
+			break;
+		}
 		case ROW_ANALOG:
 			controller[controller_config].analog = !controller[controller_config].analog;
 			break;

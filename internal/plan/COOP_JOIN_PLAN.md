@@ -1,7 +1,10 @@
 # COOP_JOIN_PLAN.md — drop-in co-op in the single-player campaign
 
-Status: **implemented through C2** (C0 `f71f624`, C1 `71c3f17`, C2 — see git
-log). Full join → fly → drop/leave → rejoin loop in place. C3
+Status: **implemented through C2, plus a device-choice menu on top** (C0
+`f71f624`, C1 `71c3f17`, C2 — see git log). Full join → fly → drop/leave →
+rejoin loop in place, and the join gesture now honors an explicit per-player
+device choice (keyboard / mouse / controller N) made in the controller-config
+menu, including joining via keyboard. See "Device menu" below. C3
 (polish/balance) awaits the user's two-pad playtest. Note vs. the draft:
 `inputDevice` joystick values are `3 + pad`, not `2 +` as sketched below.
 Builds on [SHIP_MODE_SWITCH_PLAN.md](SHIP_MODE_SWITCH_PLAN.md) (M0–M3, done):
@@ -139,3 +142,54 @@ morph becomes available again — intended.
 - Open for user: join gesture scope (controller-only v1 OK?), P2 death =
   drop-out-until-next-shop (vs. some respawn cost), difficulty unchanged on
   join (vs. arcade's +1), shield regen costing power for both players.
+
+## Device menu (post-C2 follow-up)
+
+C1's join gesture ("press fire on a pad that isn't P1's") worked, but gave
+no way to join from the keyboard and no way to pin a specific pad to P2
+when more than one is connected. This follow-up adds a menu to choose each
+player's device up front, and makes the join/leave gesture honor it.
+
+- **Two new rows in `MENU_CONTROLLER_CONFIG`** (`src/game_menu.c`,
+  `controller_rows[]`): `ROW_DEVICE` rows "PLAYER 1" / "PLAYER 2", inserted
+  at the top of the table, ahead of `ROW_ANALOG`. Each shows/edits
+  `inputDevice[0]` / `inputDevice[1]` respectively (the row's `assignment`
+  field doubles as the player index for `ROW_DEVICE`, distinct from its
+  `ROW_BINDING` meaning). Value text mirrors the existing 2P-arcade device
+  display: `KEYBOARD` / `MOUSE` / `CONTROLLER n` (n = value − 2, only shown
+  once more than one pad is connected) / plain `CONTROLLER`. Cycling (fire,
+  left, right) mirrors the 2P-arcade device cycler exactly, including its
+  uniqueness do-while (`inputDevice[0]` can never equal `inputDevice[1]`,
+  and the `controllers == 0` swap-quirk is preserved) — and, unlike every
+  other row in this menu, stays usable with zero pads connected, since
+  keyboard/mouse cycling doesn't need one. Cycling either row clears
+  `coopJoinController` back to `-1`, since a readied pad/keyboard may no
+  longer match the newly-chosen device.
+- **`COOP_JOIN_KEYBOARD` sentinel** (`-2`, `src/config.h`): `coopJoinController`
+  now holds `-1` (none), `COOP_JOIN_KEYBOARD` (keyboard readied), or a pad
+  index (`>= 0`). It never collides with a real pad index, so every
+  pre-existing `== coopJoinController` pad comparison
+  (`src/controller.c` mute check) stays correct unchanged; every `>= 0` read
+  gating join/joined state (`src/game_menu.c` indicator,
+  `src/tyrian2.c` activation) became `!= -1` to include the keyboard case.
+- **Device-aware join/leave gesture** (`src/game_menu.c`, the item-screen
+  join poll): the gesture now branches on `inputDevice[1]`:
+  - `>= 3` (explicit pad): only that pad (and only while it's connected and
+    isn't P1's) may claim/toggle P2 — no other pad reacts.
+  - `== 1` (keyboard) and `inputDevice[0] != 1`: the ship-morph key
+    (`KEY_SETTING_SHIP_MORPH`) toggles ready state, consumed the same way
+    the in-flight morph trigger's key press is consumed elsewhere (cleared
+    from `keysactive` so a held key doesn't repeat every frame). The morph
+    key is otherwise inert in menus, so there's no double-action risk.
+  - otherwise (mouse or "any"): unchanged legacy behavior — any pad that
+    isn't P1's claims/toggles P2.
+  The joined-at-the-shop leave branch follows the same split (morph key for
+  keyboard P2, pad check otherwise).
+- **Activation** (`src/tyrian2.c`, level-launch block): if
+  `coopJoinController == COOP_JOIN_KEYBOARD`, sets `inputDevice[1] = 1`
+  directly (no pad-collision fixup needed) with a defensive fallback if
+  `inputDevice[0]` somehow also ended up on keyboard; otherwise the
+  pre-existing pad path is unchanged.
+- **No new persistence**: `inputDevice[]` already rides the existing
+  per-save-slot fields (`saveFiles[].input1`/`.input2`, `src/config.c`), so
+  a chosen device survives save/load with zero format changes.

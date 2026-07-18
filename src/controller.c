@@ -257,7 +257,9 @@ void push_controllers_as_keyboard(void)
 		// for the join gesture entirely -- this function's own poll_controllers()
 		// above is the FIRST observer of a new press, so without the blanket
 		// reservation the joining/un-readying fire press would leak here as a
-		// synthesized "confirm" before the join poll ever sees it.
+		// synthesized "confirm" before the join poll ever sees it. (A
+		// keyboard-readied P2 stores COOP_JOIN_KEYBOARD here, which never
+		// equals a pad index c, so this check stays safe unchanged.)
 		if (c == coopJoinController)
 			continue;
 		if (coopJoinPollActive)

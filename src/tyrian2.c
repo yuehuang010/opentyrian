@@ -789,28 +789,40 @@ start_level_first:
 	// last item screen becomes P2 for this level. Runs before is_alive,
 	// positions, shield/armor init, and the autosave below, all of which
 	// already treat both players uniformly once twoPlayerMode is true.
-	if (coopJoinController >= 0 && !twoPlayerMode)
+	if (coopJoinController != -1 && !twoPlayerMode)
 	{
 		campaignCoop = true;
 		twoPlayerMode = true;
 
-		int p2_pad = coopJoinController;
-		inputDevice[1] = 3 + p2_pad;
-
-		// Fix P1's device if it was "any" or collides with P2's newly-claimed pad.
-		if (inputDevice[0] == 0 ||
-		    (inputDevice[0] >= 3 && inputDevice[0] - 3 == p2_pad))
+		if (coopJoinController == COOP_JOIN_KEYBOARD)
 		{
-			int other_pad = -1;
-			for (int c = 0; c < controllers; c++)
+			inputDevice[1] = 1; // keyboard
+
+			// Shouldn't be reachable -- the join poll only offers the keyboard
+			// gesture when inputDevice[0] != 1 -- but guard it anyway.
+			if (inputDevice[0] == 1)
+				inputDevice[0] = (controllers > 0) ? 3 : 2;
+		}
+		else
+		{
+			int p2_pad = coopJoinController;
+			inputDevice[1] = 3 + p2_pad;
+
+			// Fix P1's device if it was "any" or collides with P2's newly-claimed pad.
+			if (inputDevice[0] == 0 ||
+			    (inputDevice[0] >= 3 && inputDevice[0] - 3 == p2_pad))
 			{
-				if (c != p2_pad)
+				int other_pad = -1;
+				for (int c = 0; c < controllers; c++)
 				{
-					other_pad = c;
-					break;
+					if (c != p2_pad)
+					{
+						other_pad = c;
+						break;
+					}
 				}
+				inputDevice[0] = (other_pad >= 0) ? 3 + other_pad : 1; // else keyboard
 			}
-			inputDevice[0] = (other_pad >= 0) ? 3 + other_pad : 1; // else keyboard
 		}
 
 		// Derive P2 from P1's purchased loadout: rear-weapon id/power stay P1's
