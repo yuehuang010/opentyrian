@@ -706,14 +706,17 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	}
 
 	// Rear-config buttons (JE_drawPortConfigButtons, mainint.c:210-224): 1P ONLY
-	// (it returns for 2P). Left button at (285,44), right at (302,44); which one
-	// shows the "lit" sprite (18) vs "unlit" (19) depends on player[0].weapon_mode
-	// (==1: left lit / right unlit; else: left unlit / right lit). Try HD per
-	// button; punch out only the buttons whose HD asset is missing.
+	// (it returns for 2P), and also hidden in single-player Dragonwing mode --
+	// the charge cannon ignores weapon_mode, so there's nothing for the buttons
+	// to indicate (SHIP_MODE_SWITCH_PLAN.md phase M3). Left button at (285,44),
+	// right at (302,44); which one shows the "lit" sprite (18) vs "unlit" (19)
+	// depends on player[0].weapon_mode (==1: left lit / right unlit; else: left
+	// unlit / right lit). Try HD per button; punch out only the buttons whose
+	// HD asset is missing.
 	bool btn_hd[2] = { false, false };
 	int  btn_sprite[2] = { -1, -1 };
 	const int btn_x[2] = { 285, 302 };
-	if (mode == 0)
+	if (mode == 0 && !player[0].is_dragonwing)
 	{
 		int lit = 18, unlit = 19;
 		if (player[0].weapon_mode == 1)
@@ -774,6 +777,13 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	// separately over VGAScreen too, at (268, 118) in 1P / (268, 76) in 2P
 	// -- tyrian2.c:825).
 	draw_hud_text(268, mode ? 76 : 118, levelName);
+
+	// Single-player ship-mode indicator (SHIP_MODE_SWITCH_PLAN.md, phase M3):
+	// mirrors JE_drawShipModeIndicator's classic placement (265,105) in the free
+	// strip between the sidekick gauges and the level-name plate. Same gating as
+	// the toggle itself, so it never shows where the switch can't fire.
+	if (mode == 0 && ship_mode_switch_enabled && !galagaMode && superArcadeMode == SA_NONE && !superTyrian)
+		draw_hud_text(265, 105, player[0].is_dragonwing ? "DRAGON" : "FIGHTER");
 
 	// Message-bar text: re-emit the shadowed glyphs (populated by the
 	// hd_hud_msg_* hooks at the classic draw sites) as crisp HD glyphs over the

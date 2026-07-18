@@ -966,6 +966,11 @@ start_level_first:
 
 	JE_drawPortConfigButtons();
 
+	// Single-player ship-mode indicator (SHIP_MODE_SWITCH_PLAN.md, phase M3): paint
+	// once here like the level-name text above -- persistent classic pixels (the
+	// function itself forces classic glyphs; see its comment).
+	JE_drawShipModeIndicator();
+
 	/* --- MAIN LOOP --- */
 
 #ifdef WITH_NETWORK

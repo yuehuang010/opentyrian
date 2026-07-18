@@ -212,6 +212,21 @@ void JE_drawPortConfigButtons(void) // rear weapon pattern indicator
 	if (twoPlayerMode)
 		return;
 
+	// Erase both button cells first: when this is called right after a ship-mode
+	// toggle into Dragonwing, the early-return below leaves nothing behind to
+	// redraw over the stale lit/unlit sprites from the prior Fighter-mode call.
+	{
+		int w = get_sprite_width(OPTION_SHAPES, 18);
+		int h = get_sprite_height(OPTION_SHAPES, 18);
+		fill_rectangle_xy(VGAScreenSeg, 285, 44, 285 + w - 1, 44 + h - 1, 0);
+		fill_rectangle_xy(VGAScreenSeg, 302, 44, 302 + w - 1, 44 + h - 1, 0);
+	}
+
+	// The charge cannon (Dragonwing mode) ignores weapon_mode entirely -- the
+	// rear-port-config buttons have nothing to indicate, so hide them (erased above).
+	if (player[0].is_dragonwing)
+		return;
+
 	if (player[0].weapon_mode == 1)
 	{
 		blit_sprite(VGAScreenSeg, 285, 44, OPTION_SHAPES, 18);  // lit
@@ -222,6 +237,30 @@ void JE_drawPortConfigButtons(void) // rear weapon pattern indicator
 		blit_sprite(VGAScreenSeg, 285, 44, OPTION_SHAPES, 19);  // unlit
 		blit_sprite(VGAScreenSeg, 302, 44, OPTION_SHAPES, 18);  // lit
 	}
+}
+
+// Single-player ship-mode indicator (SHIP_MODE_SWITCH_PLAN.md, phase M3): a small
+// TINY_FONT label in the free strip between the sidekick gauges (bottom at y=97)
+// and the level-name text (y=118) on the 1P sidebar (pic 3). Drawn once at level
+// start and again on every ship-mode toggle (mainint.c, ship-morph handling); the
+// sidebar otherwise persists frame-to-frame so no per-tick redraw is needed. Gated
+// identically to the toggle itself so it never appears where the switch can't fire.
+void JE_drawShipModeIndicator(void)
+{
+	if (!ship_mode_switch_enabled || twoPlayerMode || galagaMode || superArcadeMode != SA_NONE || superTyrian)
+		return;
+
+	// Always paint persistent classic pixels: this is drawn once (level start /
+	// mode toggle), not re-emitted every frame, so letting it claim HD glyphs
+	// would make it vanish after one present (see internal/issue/hd-text-vanish.md).
+	// The HD HUD re-emits its own copy of the label every frame (hd_hud.c).
+	bool old_force_classic = hd_font_force_classic;
+	hd_font_force_classic = true;
+
+	fill_rectangle_xy(VGAScreenSeg, 264, 103, 313, 116, 0); // erase previous label (lengths differ)
+	JE_textShade(VGAScreenSeg, 265, 105, player[0].is_dragonwing ? "DRAGON" : "FIGHTER", 12, 0, PART_SHADE);
+
+	hd_font_force_classic = old_force_classic;
 }
 
 /* ===================== In-game help system ===================== */
@@ -3617,6 +3656,12 @@ void JE_playerMovement(Player *this_player,
 	// call this with distinct playerNum_, so their draws get distinct tags.
 	interp_tag(INTERP_TAG(INTERP_TAG_PLAYER, playerNum_));
 
+	// Ship-morph flash countdown (phase M3): purely cosmetic, ticks down every
+	// frame regardless of mode/invulnerability; the flash draw itself lives at
+	// the invulnerability-blend branch further down.
+	if (this_player->morph_flash_ticks > 0)
+		--this_player->morph_flash_ticks;
+
 	if (this_player->is_dragonwing || !twoPlayerMode)
 	{
 		tempW = weaponPort[this_player->items.weapon[REAR_WEAPON].id].opnum;
@@ -3914,6 +3959,12 @@ redo:
 					    ship_mode_key_down && !ship_mode_key_was_down)
 					{
 						player_toggle_ship_mode(this_player);
+
+						// Refresh the sidebar for the new mode: the mode label text and the
+						// rear-config buttons (hidden entirely in Dragonwing mode) -- both
+						// draw straight to VGAScreenSeg, matching their other call sites.
+						JE_drawShipModeIndicator();
+						JE_drawPortConfigButtons();
 					}
 
 					ship_mode_key_was_down = ship_mode_key_down;
@@ -4320,9 +4371,15 @@ redo:
 			}
 		}
 
-		if (this_player->invulnerable_ticks > 0)
+		// Ship-morph flash (SHIP_MODE_SWITCH_PLAN.md, phase M3): reuses the existing
+		// invulnerability blend draw variant purely as a cosmetic OR-condition here.
+		// morph_flash_ticks is decremented separately (JE_playerMovement, per tick);
+		// invulnerable_ticks's own decrement below is untouched and still gated on
+		// its own check, so actual invulnerability/damage logic is unaffected.
+		if (this_player->invulnerable_ticks > 0 || this_player->morph_flash_ticks > 0)
 		{
-			--this_player->invulnerable_ticks;
+			if (this_player->invulnerable_ticks > 0)
+				--this_player->invulnerable_ticks;
 
 			if (shipGr_ == 0)
 			{
@@ -4422,7 +4479,13 @@ redo:
 				this_player->delta_y_shot_move = this_player->y - this_player->last_y_shot_move;
 
 				/* PLAYER SHOT Change */
-				if (button[4-1])
+				// In single-player Dragonwing mode the charge cannon ignores weapon_mode,
+				// so cycling it here would be harmless-but-invisible (JE_drawPortConfigButtons
+				// already hides the indicator above) -- skip the whole cycle for consistency.
+				// NOTE: 2P Dragonwing (player[1], always is_dragonwing) is untouched: its
+				// REAR port fires a normal weapon_mode-patterned shot alongside the charge
+				// cannon (see the Normal Main Weapons loop below), so cycling still matters there.
+				if (button[4-1] && !(!twoPlayerMode && this_player->is_dragonwing))
 				{
 					portConfigChange = true;
 					if (portConfigDone)
@@ -4513,7 +4576,10 @@ redo:
 						chargeGrWait = 3;
 					}
 
-					if (chargeLevel > 0)
+					// Sidebar charge pips: hard-coded 2P-panel coordinates (269,107+...); the
+					// 1P panel (pic 3) already shows charge via the in-world sprite above the
+					// ship (blit_sprite2 above), so only draw these into the 2P sidebar.
+					if (twoPlayerMode && chargeLevel > 0)
 					{
 						fill_rectangle_xy(VGAScreenSeg, 269, 107 + (chargeLevel - 1) * 3, 275, 108 + (chargeLevel - 1) * 3, 193);
 					}
@@ -4532,7 +4598,7 @@ redo:
 							chargeWait -= 5;
 					}
 
-					if (chargeLevel > 0)
+					if (twoPlayerMode && chargeLevel > 0)
 						fill_rectangle_xy(VGAScreenSeg, 269, 107 + (chargeLevel - 1) * 3, 275, 108 + (chargeLevel - 1) * 3, 204);
 
 					if (shotRepeat[SHOT_P2_CHARGE] > 0)
@@ -4544,7 +4610,7 @@ redo:
 						shotMultiPos[SHOT_P2_CHARGE] = 0;
 						b = player_shot_create(16, SHOT_P2_CHARGE, this_player->x, this_player->y, *mouseX_, *mouseY_, chargeGunWeapons[this_player->items.weapon[REAR_WEAPON].id-1] + chargeLevel, playerNum_);
 
-						if (chargeLevel > 0)
+						if (twoPlayerMode && chargeLevel > 0)
 							fill_rectangle_xy(VGAScreenSeg, 269, 107 + (chargeLevel - 1) * 3, 275, 108 + (chargeLevel - 1) * 3, 193);
 
 						chargeLevel = 0;

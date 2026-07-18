@@ -1,6 +1,8 @@
 # SHIP_MODE_SWITCH_PLAN.md — single-player Fighter ⇄ Dragonwing mode switch
 
-Status: **design draft** (2026-07-17) — explored, not yet approved/implemented.
+Status: **implemented** (M0 `78905fc`, M1 `ccf2cf3`, M2 `dff2ddb`, M3 — see git
+log). Awaiting user playtest for visuals/feel; balance pass (charge rates,
+lockout length) deliberately deferred until after playtest.
 
 ## Goal
 

@@ -24,6 +24,8 @@
 
 #include "player.h"
 
+#include "nortsong.h"
+#include "sndmast.h"
 #include "varz.h"
 
 Player player[2];
@@ -74,4 +76,10 @@ void player_toggle_ship_mode(Player *this_player)
 	shotMultiPos[SHOT_P2_CHARGE] = 0;
 
 	shotRepeat[SHOT_FRONT] = shotRepeat[SHOT_REAR] = shotRepeat[SHOT_P2_CHARGE] = 17;
+
+	// Morph feedback (phase M3): a short mechanical click (not S_POWERUP/S_ITEM --
+	// this isn't a pickup) plus a brief invulnerability-blend flash on the ship
+	// sprite (mainint.c, morph_flash_ticks), purely cosmetic.
+	JE_playSampleNum(S_CLICK);
+	this_player->morph_flash_ticks = 12;
 }
