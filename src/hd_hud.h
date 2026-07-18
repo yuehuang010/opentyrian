@@ -22,12 +22,12 @@
 #include "SDL.h"
 
 /**
- * HD in-flight HUD overlay (REMASTER_HUD.md phase H2.5). Draws a fully
- * PROCEDURAL vector panel for the sidebar (VGA x in [264,320), y in [0,200))
- * and bottom bar (VGA y in [184,200), x in [0,264)) strips -- flat dark fills,
- * hairline steel frames, inset wells, and crisp HD-font labels -- plus
+ * HD in-flight HUD overlay (REMASTER_HUD.md phase H2.6). Draws the sidebar
+ * (VGA x in [264,320), y in [0,200)) and bottom bar (VGA y in [184,200),
+ * x in [0,264)) strips from a once-per-level-palette hq4x upscale of a clean
+ * PIC #3 panel (the original game art, crisp instead of blurry), plus
  * vectorized shield/armor/power bars, weapon-power dots, and sidekick ammo
- * gauges, at output resolution. No bitmap panel art is used.
+ * gauges on top, at output resolution.
  *
  * Called from the hd_mode && hd_flight_active branch of scale_and_flip()
  * (src/video.c), after the flight-sprite clip rect is released and before

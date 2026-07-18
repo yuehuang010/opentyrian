@@ -38,4 +38,10 @@ extern const uint scalers_count;
 
 void set_scaler_by_name(const char *name);
 
+// hq4x_32() itself is defined in video_scale_hqNx.c and forward-declared
+// locally in video_scale.c for the scaler registry; exported here too so
+// non-scaler callers (the HD HUD panel bake, src/hd_hud.c) can invoke it
+// directly on their own scratch surface/texture without duplicating it.
+void hq4x_32(SDL_Surface *src_surface, SDL_Texture *dst_texture);
+
 #endif /* VIDEO_SCALE_H */

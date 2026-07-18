@@ -17,7 +17,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 /** @file hd_hud.c
- * HD in-flight HUD overlay (internal/plan/REMASTER_HUD.md, phase H2.5).
+ * HD in-flight HUD overlay (internal/plan/REMASTER_HUD.md, phase H2.6).
  *
  * State-driven overlay, not draw interception: every present, this redraws the
  * whole sidebar/bottom-bar panel from live game state directly on top of the
@@ -25,12 +25,14 @@
  * or fails to draw, simply shows the classic pixels already there -- nothing is
  * erased or intercepted. Gated to 1P; 2P falls through to the classic panel.
  *
- * H2.5 replaces the earlier hdpic03.dat AI-upscaled panel art (rejected as too
- * smooth/fuzzy) with a fully PROCEDURAL vector panel: flat near-black fills,
- * hairline steel frames, inset wells, and crisp HD-font labels -- a clean modern
- * HUD. Layout/positions stay EXACTLY where the classic art and the dynamic
- * classic draws put them (alignment with the classic fallback and the remaining
- * punch-outs is non-negotiable), only the ornamentation changes.
+ * H2.6 restores the ORIGINAL PIC #3 panel art (H2.5's fully-procedural "modern
+ * flat" panel deviated too far from the original game per user feedback), but
+ * crisp: the panel is baked once per level palette by loading a clean PIC #3
+ * into a scratch 8-bit surface and running it through the in-repo hq4x pixel-art
+ * scaler (video_scale_hqNx.c) into a 4x streaming texture, instead of either the
+ * earlier AI-upscaled hdpic03.dat asset (fuzzy) or H2.5's procedural fills.
+ * Layout/positions stay EXACTLY where the classic art and the dynamic classic
+ * draws put them.
  *
  * Geometry/colors of the dynamic bars are hand-ported from the classic draw
  * sites (see REMASTER_HUD.md) so they read as reproductions, not derivations --
@@ -40,13 +42,14 @@
  *
  * Palette / fade sync: the dynamic bars sample the LIVE (post-fade) palette
  * (get_live_palette()), so palette fades and damage flashes track automatically.
- * The fixed-RGB panel/frame/well colors are scaled by a dim factor derived from
- * how faded the live palette is versus the full target palette, so they never
- * pop to full brightness during a level-start/-end fade. Labels are HD-font
- * glyphs synthesized against the palette and cached by (glyph,hue,value); in
- * practice level fades happen outside hd_flight_active so labels only ever
- * synthesize at full brightness (a documented caching limitation, not a fade
- * bug in normal play).
+ * The baked panel texture is always rendered from the full-brightness target
+ * palette (colors[]) and dimmed uniformly via SDL_SetTextureColorMod using the
+ * same dim factor, so it never pops to full brightness during a level-start/
+ * -end fade. The level name (the PIC's name plate is blank; the classic code
+ * draws it separately) stays an HD-font glyph synthesized against the palette
+ * and cached by (glyph,hue,value); in practice level fades happen outside
+ * hd_flight_active so it only ever synthesizes at full brightness (a
+ * documented caching limitation, not a fade bug in normal play).
  */
 
 #include "hd_hud.h"
@@ -56,10 +59,12 @@
 #include "config.h"
 #include "fonthand.h"
 #include "palette.h"
+#include "picload.h"
 #include "player.h"
 #include "sprite.h"
 #include "varz.h"
 #include "video.h"
+#include "video_scale.h"
 
 #include <assert.h>
 #include <stdbool.h>
@@ -74,13 +79,13 @@
 
 static SDL_Renderer *g_ren;
 static const SDL_Rect *g_dst;
-static float g_dim = 1.f;  // 0..1 fade factor for fixed-RGB panel elements
+static float g_dim = 1.f;  // 0..1 fade factor for the baked panel texture
 
 // Punch-out cells: logical VGA rects whose classic pixels (icons, buttons, the
-// message text) must keep showing through -- the procedural fills skip them.
+// message text) must keep showing through -- the panel draw skips them.
 typedef struct { int x, y, w, h; } HdHudCell;
 
-#define MAX_CELLS 8
+#define MAX_CELLS 4
 static HdHudCell g_cells[MAX_CELLS];
 static int g_ncells;
 
@@ -127,77 +132,6 @@ static float compute_dim(void)
 	return d < 0.f ? 0.f : d > 1.f ? 1.f : d;
 }
 
-// ---- Cell-aware flat fill ----------------------------------------------------
-
-static bool cell_covers(int mx, int my)
-{
-	for (int i = 0; i < g_ncells; ++i)
-		if (mx >= g_cells[i].x && mx < g_cells[i].x + g_cells[i].w &&
-		    my >= g_cells[i].y && my < g_cells[i].y + g_cells[i].h)
-			return true;
-	return false;
-}
-
-/* Fills the VGA rect (x,y,w,h) with a dimmed RGB colour, skipping the punch-out
- * cells. Rect subtraction via coordinate compression: cell y-edges split the
- * rect into bands, each band's active cells' x-edges split it into spans, and a
- * span is drawn iff its midpoint isn't inside any cell. Cheap and correct for
- * the small, non-overlapping cell counts here. */
-static void fill_rgb(int x, int y, int w, int h, Uint8 r, Uint8 g, Uint8 b)
-{
-	if (w <= 0 || h <= 0)
-		return;
-
-	SDL_SetRenderDrawColor(g_ren, (Uint8)(r * g_dim), (Uint8)(g * g_dim), (Uint8)(b * g_dim), 255);
-
-	int ys[2 + 2 * MAX_CELLS];
-	int ny = 0;
-	ys[ny++] = y;
-	ys[ny++] = y + h;
-	for (int i = 0; i < g_ncells; ++i)
-	{
-		int y0 = MAX(g_cells[i].y, y);
-		int y1 = MIN(g_cells[i].y + g_cells[i].h, y + h);
-		if (y0 < y1) { ys[ny++] = y0; ys[ny++] = y1; }
-	}
-	for (int i = 1; i < ny; ++i) { int v = ys[i], j = i - 1; while (j >= 0 && ys[j] > v) { ys[j+1] = ys[j]; --j; } ys[j+1] = v; }
-
-	for (int yi = 0; yi + 1 < ny; ++yi)
-	{
-		int y0 = ys[yi], y1 = ys[yi + 1];
-		if (y1 <= y0)
-			continue;
-		int mid_y = y0 + (y1 - y0) / 2;
-
-		int xs[2 + 2 * MAX_CELLS];
-		int nx = 0;
-		xs[nx++] = x;
-		xs[nx++] = x + w;
-		for (int i = 0; i < g_ncells; ++i)
-		{
-			if (mid_y < g_cells[i].y || mid_y >= g_cells[i].y + g_cells[i].h)
-				continue;
-			int x0 = MAX(g_cells[i].x, x);
-			int x1 = MIN(g_cells[i].x + g_cells[i].w, x + w);
-			if (x0 < x1) { xs[nx++] = x0; xs[nx++] = x1; }
-		}
-		for (int i = 1; i < nx; ++i) { int v = xs[i], j = i - 1; while (j >= 0 && xs[j] > v) { xs[j+1] = xs[j]; --j; } xs[j+1] = v; }
-
-		for (int xi = 0; xi + 1 < nx; ++xi)
-		{
-			int x0 = xs[xi], x1 = xs[xi + 1];
-			if (x1 <= x0)
-				continue;
-			int mid_x = x0 + (x1 - x0) / 2;
-			if (cell_covers(mid_x, mid_y))
-				continue;
-
-			SDL_Rect win = vga_rect_to_window(x0, y0, x1 - x0, y1 - y0);
-			SDL_RenderFillRect(g_ren, &win);
-		}
-	}
-}
-
 // ---- Palette-sampled fill (for the dynamic bars: fades with the live palette)-
 
 static void fill_pal(int x, int y, int w, int h, Uint8 color_index)
@@ -211,81 +145,26 @@ static void fill_pal(int x, int y, int w, int h, Uint8 color_index)
 	SDL_RenderFillRect(g_ren, &win);
 }
 
-// ---- Panel design language ---------------------------------------------------
+// ---- HD-font level name -------------------------------------------------------
 
-// Flat, dark, crisp. All values pre-dim; fill_rgb scales by g_dim.
-#define PANEL_R 0x12
-#define PANEL_G 0x14
-#define PANEL_B 0x18   // base near-black #121418
-#define BAND_R  0x18
-#define BAND_G  0x1b
-#define BAND_B  0x21   // subtly lighter upper two-tone band
-#define WELL_R  0x0a
-#define WELL_G  0x0c
-#define WELL_B  0x10   // inset darker well #0a0c10
-#define FRAME_R 0x3c
-#define FRAME_G 0x43
-#define FRAME_B 0x50   // desaturated steel hairline #3c4350
-#define BEVEL_R 0x5a
-#define BEVEL_G 0x64
-#define BEVEL_B 0x74   // brighter top edge for a subtle bevel
-
-static void draw_hline(int x, int y, int w, Uint8 r, Uint8 g, Uint8 b)
+/* Draws a horizontal string as crisp HD glyphs at present time (green HUD
+ * text), advancing by the classic TINY_FONT glyph widths + kerning exactly as
+ * JE_outText does. Left-aligned only: the baked panel art's name plate is
+ * blank (the classic code draws the level name itself, left-aligned, over
+ * PIC #3), so no centring is needed here. */
+static void draw_hud_text(int x, int y, const char *s)
 {
-	SDL_Rect win = vga_rect_to_window(x, y, w, 1);
-	win.h = 1;  // exactly one output pixel tall (hairline)
-	SDL_SetRenderDrawColor(g_ren, (Uint8)(r * g_dim), (Uint8)(g * g_dim), (Uint8)(b * g_dim), 255);
-	SDL_RenderFillRect(g_ren, &win);
-}
-
-static void draw_vline(int x, int y, int h, Uint8 r, Uint8 g, Uint8 b)
-{
-	SDL_Rect win = vga_rect_to_window(x, y, 1, h);
-	win.w = 1;
-	SDL_SetRenderDrawColor(g_ren, (Uint8)(r * g_dim), (Uint8)(g * g_dim), (Uint8)(b * g_dim), 255);
-	SDL_RenderFillRect(g_ren, &win);
-}
-
-/* Hairline steel frame around a logical VGA box, with a brighter top edge for a
- * subtle bevel. Drawn as four 1-output-pixel lines (crisp, resolution-native). */
-static void frame_box(int x, int y, int w, int h)
-{
-	draw_hline(x, y, w, BEVEL_R, BEVEL_G, BEVEL_B);          // top (bevel)
-	draw_hline(x, y + h - 1, w, FRAME_R, FRAME_G, FRAME_B);  // bottom
-	draw_vline(x, y, h, FRAME_R, FRAME_G, FRAME_B);          // left
-	draw_vline(x + w - 1, y, h, FRAME_R, FRAME_G, FRAME_B);  // right
-}
-
-/* An inset "screen": dark well fill (skipping punch-out cells) + steel frame. */
-static void draw_screen(int x, int y, int w, int h)
-{
-	fill_rgb(x, y, w, h, WELL_R, WELL_G, WELL_B);
-	frame_box(x, y, w, h);
-}
-
-// ---- HD-font labels ----------------------------------------------------------
-
-static int hud_text_width(const char *s)
-{
-	int x = 0;
-	for (int i = 0; s[i] != '\0'; ++i)
-	{
-		int id = fontMap[(unsigned char)s[i]];
-		if (s[i] == ' ')
-			x += 6;
-		else if (id != -1 && sprite_exists(TINY_FONT, id))
-			x += sprite(TINY_FONT, id)->width + 1;
-	}
-	return x;
-}
-
-/* Draws a horizontal string as crisp HD glyphs at present time (green HUD text),
- * advancing by the classic TINY_FONT glyph widths + kerning exactly as JE_outText
- * does. `centered` centres the string on x. */
-static void draw_hud_text(int x, int y, const char *s, bool centered)
-{
-	if (centered)
-		x -= hud_text_width(s) / 2;
+	// HD glyph textures are cached per (glyph, hue, value) and synthesized at
+	// full palette brightness, so they can't be dimmed by the texture-mod path
+	// the baked panel uses. Approximate the level fade by stepping the glyph
+	// brightness `value` down with g_dim instead -- quantized to 4 levels so at
+	// most 4 cached variants per glyph exist (no cache thrash), which is enough
+	// to keep the name from popping full-bright over a dimmed panel.
+	static const Sint8 fade_value[4] = { -8, -4, 0, HUD_GREEN_VALUE };
+	int fi = (int)(g_dim * 4.f);
+	if (fi > 3)
+		fi = 3;
+	const Sint8 value = fade_value[fi];
 
 	for (int i = 0; s[i] != '\0'; ++i)
 	{
@@ -297,21 +176,9 @@ static void draw_hud_text(int x, int y, const char *s, bool centered)
 		}
 		if (id != -1 && sprite_exists(TINY_FONT, id))
 		{
-			hd_hud_queue_glyph(TINY_FONT, (unsigned int)id, x, y, HUD_GREEN_HUE, HUD_GREEN_VALUE);
+			hd_hud_queue_glyph(TINY_FONT, (unsigned int)id, x, y, HUD_GREEN_HUE, value);
 			x += sprite(TINY_FONT, id)->width + 1;
 		}
-	}
-}
-
-/* Vertical stacked label: one glyph per row (SHIELD/ARMOR in the classic art). */
-static void draw_hud_text_vertical(int x, int y, int pitch, const char *s)
-{
-	for (int i = 0; s[i] != '\0'; ++i)
-	{
-		int id = fontMap[(unsigned char)s[i]];
-		if (id != -1 && sprite_exists(TINY_FONT, id))
-			hd_hud_queue_glyph(TINY_FONT, (unsigned int)id, x, y, HUD_GREEN_HUE, HUD_GREEN_VALUE);
-		y += pitch;
 	}
 }
 
@@ -418,62 +285,178 @@ static void draw_sidekick_gauge(int i)
 		fill_pal(x, y, 2, 2, (Uint8)(112 + 12 * partial / segment_value));
 }
 
-// ---- Procedural panel --------------------------------------------------------
+// ---- Baked panel art (hq4x upscale of a clean PIC #3) -------------------------
 
-/* Backgrounds: flat base fill for both strips, a subtle upper two-tone band, and
- * the inset wells. Everything respects the punch-out cells via fill_rgb. */
-static void draw_panel_background(void)
+// hq4x_32() always upscales the full 320x200 VGA surface by exactly 4x
+// (video_scale_hqNx.c hardcodes vga_width/vga_height, not the surface's own
+// w/h), so the bake texture size and the VGA->texture-source scale factor are
+// both compile-time constants -- no need to query the texture back.
+#define BAKE_TEX_W (4 * vga_width)
+#define BAKE_TEX_H (4 * vga_height)
+
+static SDL_Surface *g_bake_scratch;  // 320x200 8bpp scratch for JE_loadPic
+static SDL_Texture *g_bake_tex;      // BAKE_TEX_W x BAKE_TEX_H hq4x result
+static bool g_bake_setup_failed;     // surface/texture allocation failed once
+
+static bool g_have_baked;            // g_bake_tex holds a valid bake
+static SDL_Color g_baked_colors[256]; // colors[] snapshot the bake was made from
+
+/* Mirrors palette.c's static rgb_to_yuv() (not exported): hq4x_32 needs both
+ * rgb_palette[] (pixel colour) and yuv_palette[] (its edge-detection metric)
+ * refilled consistently from the same source palette, or the antialiasing
+ * pattern it picks would be judged against stale colours. */
+static Uint32 hud_rgb_to_yuv(int r, int g, int b)
 {
-	const int sk_y0 = hud_sidekick_y[0][0], sk_y1 = hud_sidekick_y[0][1];
-
-	// Base fill: sidebar [264,0,56,200] and bottom strip [0,184,264,16].
-	fill_rgb(264, 0, 56, 200, PANEL_R, PANEL_G, PANEL_B);
-	fill_rgb(0, 184, 264, 16, PANEL_R, PANEL_G, PANEL_B);
-
-	// Subtle two-tone: a lighter band across the upper sidebar (large flat rect,
-	// not a smooth dither).
-	fill_rgb(264, 0, 56, 110, BAND_R, BAND_G, BAND_B);
-
-	// Inset wells (dark) behind the bars and label plates.
-	fill_rgb(267, 10, 12, 96, WELL_R, WELL_G, WELL_B);          // power bar well
-
-	// Gun / mode / sidekick "screens": dark interior + steel frame.
-	draw_screen(280, 1, 39, 21);          // FRONT GUN box (dots at y17 inside)
-	draw_screen(280, 22, 39, 20);         // REAR GUN box (dots at y38 inside)
-	draw_screen(280, 43, 39, 21);         // MODE box (buttons y44 + MODE label inside)
-	frame_box(280, 62, 39, 19);           // sidekick 1 (icon+gauge punch-out inside)
-	frame_box(280, 81, 39, 19);           // sidekick 2
-	frame_box(267, 9, 12, 98);            // power-bar well frame
-
-	draw_screen(265, 114, 54, 14);        // level-name plate
-
-	// Bottom: shield/armor wells + the vertical-label plate between them.
-	draw_screen(266, 132, 14, 66);        // shield well
-	draw_screen(281, 132, 24, 66);        // SHIELD/ARMOR label plate
-	draw_screen(305, 132, 14, 66);        // armor well
-
-	// Bottom message bar frame (interior is a punch-out for the classic message).
-	frame_box(14, 185, 250, 14);
-
-	(void)sk_y0; (void)sk_y1;
+	int y = (r + g + b) >> 2,
+	    u = 128 + ((r - b) >> 2),
+	    v = 128 + ((-r + 2 * g - b) >> 3);
+	return ((Uint32)y << 16) + ((Uint32)u << 8) + (Uint32)v;
 }
 
-static void draw_panel_labels(void)
+/* Lazily creates the scratch surface + bake texture, then (re)bakes iff
+ * colors[] has changed since the last bake (a level load/change, or the very
+ * first draw). Returns false -- draw nothing, classic panel shows through --
+ * on any allocation failure, fail-once like every other HD asset cache. */
+static bool ensure_baked_panel(void)
 {
-	// Upper sidebar labels, two lines each above their dot wells (pitch 8 keeps
-	// the two lines from touching; the second line sits just above the dots).
-	draw_hud_text(284, 2, "FRONT", false);
-	draw_hud_text(284, 10, "GUN", false);
-	draw_hud_text(284, 23, "REAR", false);
-	draw_hud_text(284, 31, "GUN", false);
-	draw_hud_text(284, 54, "MODE", false);
+	if (g_bake_setup_failed)
+		return false;
 
-	// Vertical SHIELD / ARMOR between/beside their bars (one glyph per row).
-	draw_hud_text_vertical(285, 137, 7, "SHIELD");
-	draw_hud_text_vertical(297, 137, 7, "ARMOR");
+	if (g_bake_scratch == NULL)
+	{
+		// Mirrors how video.c creates the 8-bit VGAScreen family of surfaces.
+		g_bake_scratch = SDL_CreateRGBSurface(0, vga_width, vga_height, 8, 0, 0, 0, 0);
+		if (g_bake_scratch == NULL)
+		{
+			g_bake_setup_failed = true;
+			return false;
+		}
+	}
 
-	// Level name on the plate (was a classic punch-out; now HD-drawn).
-	draw_hud_text(268, 118, levelName, false);
+	if (g_bake_tex == NULL)
+	{
+		g_bake_tex = SDL_CreateTexture(g_ren, main_window_tex_format->format,
+			SDL_TEXTUREACCESS_STREAMING, BAKE_TEX_W, BAKE_TEX_H);
+		if (g_bake_tex == NULL)
+		{
+			g_bake_setup_failed = true;
+			return false;
+		}
+	}
+
+	if (g_have_baked && memcmp(g_baked_colors, colors, sizeof(colors)) == 0)
+		return true; // still current, nothing to do
+
+	// JE_loadPic(..., false) writes raw indices into the scratch surface and,
+	// as an unconditional side effect (storepal only gates set_palette()),
+	// overwrites the `colors` global with PIC #3's own native palette bank --
+	// save/restore around it so this present-time rebake can never leave
+	// `colors` (the stable per-level target every other HD-HUD calculation
+	// reads) permanently clobbered.
+	Palette saved_colors;
+	memcpy(saved_colors, colors, sizeof(colors));
+	JE_loadPic(g_bake_scratch, 3, false); // PIC #3 == 1P panel (tyrian2.c:816)
+	memcpy(colors, saved_colors, sizeof(colors));
+
+	// hq4x_32 samples the global live rgb_palette[]/yuv_palette[]; swap in the
+	// full-brightness target palette (colors[]) for the duration of the bake
+	// (dimming is applied uniformly afterwards via texture colour mod, not
+	// baked in), then restore whatever the live present-time values were.
+	Uint32 saved_rgb[256], saved_yuv[256];
+	memcpy(saved_rgb, rgb_palette, sizeof(rgb_palette));
+	memcpy(saved_yuv, yuv_palette, sizeof(yuv_palette));
+
+	for (int i = 0; i < 256; ++i)
+	{
+		rgb_palette[i] = SDL_MapRGB(main_window_tex_format, colors[i].r, colors[i].g, colors[i].b);
+		yuv_palette[i] = hud_rgb_to_yuv(colors[i].r, colors[i].g, colors[i].b);
+	}
+
+	hq4x_32(g_bake_scratch, g_bake_tex);
+
+	memcpy(rgb_palette, saved_rgb, sizeof(rgb_palette));
+	memcpy(yuv_palette, saved_yuv, sizeof(yuv_palette));
+
+	memcpy(g_baked_colors, colors, sizeof(colors));
+	g_have_baked = true;
+	return true;
+}
+
+/* Logical VGA rect -> source rect within the bake texture: an exact 4x scale
+ * (see BAKE_TEX_W/H above), not a proportional query-based scale. */
+static SDL_Rect vga_rect_to_bake_src(int lx, int ly, int lw, int lh)
+{
+	SDL_Rect r = { lx * 4, ly * 4, lw * 4, lh * 4 };
+	return r;
+}
+
+/* Draws the VGA strip rect (x,y,w,h) from the baked texture, skipping the
+ * punch-out cells. Rect subtraction via coordinate compression: cell y-edges
+ * split the strip into horizontal bands, each band's active cells' x-edges
+ * split it into spans, and a span is drawn (as a textured RenderCopy) iff its
+ * midpoint isn't inside any cell. Cheap and correct for the small,
+ * non-overlapping cell counts here; not a general polygon clipper. */
+static void draw_panel_strip(int x, int y, int w, int h)
+{
+	if (w <= 0 || h <= 0)
+		return;
+
+	int ys[2 + 2 * MAX_CELLS];
+	int ny = 0;
+	ys[ny++] = y;
+	ys[ny++] = y + h;
+	for (int i = 0; i < g_ncells; ++i)
+	{
+		int y0 = MAX(g_cells[i].y, y);
+		int y1 = MIN(g_cells[i].y + g_cells[i].h, y + h);
+		if (y0 < y1) { ys[ny++] = y0; ys[ny++] = y1; }
+	}
+	for (int i = 1; i < ny; ++i) { int v = ys[i], j = i - 1; while (j >= 0 && ys[j] > v) { ys[j+1] = ys[j]; --j; } ys[j+1] = v; }
+
+	for (int yi = 0; yi + 1 < ny; ++yi)
+	{
+		int y0 = ys[yi], y1 = ys[yi + 1];
+		if (y1 <= y0)
+			continue;
+		int mid_y = y0 + (y1 - y0) / 2;
+
+		int xs[2 + 2 * MAX_CELLS];
+		int nx = 0;
+		xs[nx++] = x;
+		xs[nx++] = x + w;
+		for (int i = 0; i < g_ncells; ++i)
+		{
+			if (mid_y < g_cells[i].y || mid_y >= g_cells[i].y + g_cells[i].h)
+				continue;
+			int x0 = MAX(g_cells[i].x, x);
+			int x1 = MIN(g_cells[i].x + g_cells[i].w, x + w);
+			if (x0 < x1) { xs[nx++] = x0; xs[nx++] = x1; }
+		}
+		for (int i = 1; i < nx; ++i) { int v = xs[i], j = i - 1; while (j >= 0 && xs[j] > v) { xs[j+1] = xs[j]; --j; } xs[j+1] = v; }
+
+		for (int xi = 0; xi + 1 < nx; ++xi)
+		{
+			int x0 = xs[xi], x1 = xs[xi + 1];
+			if (x1 <= x0)
+				continue;
+			int mid_x = x0 + (x1 - x0) / 2;
+
+			bool covered = false;
+			for (int i = 0; i < g_ncells; ++i)
+				if (mid_x >= g_cells[i].x && mid_x < g_cells[i].x + g_cells[i].w &&
+				    mid_y >= g_cells[i].y && mid_y < g_cells[i].y + g_cells[i].h)
+				{
+					covered = true;
+					break;
+				}
+			if (covered)
+				continue;
+
+			SDL_Rect win = vga_rect_to_window(x0, y0, x1 - x0, y1 - y0);
+			SDL_Rect src = vga_rect_to_bake_src(x0, y0, x1 - x0, y1 - y0);
+			SDL_RenderCopy(g_ren, g_bake_tex, &src, &win);
+		}
+	}
 }
 
 void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
@@ -487,10 +470,17 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	g_dst = dst_rect;
 	g_dim = compute_dim();
 
+	if (!ensure_baked_panel())
+		return; // asset/allocation unavailable: draw nothing, classic base shows
+
 	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+	SDL_SetTextureBlendMode(g_bake_tex, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureAlphaMod(g_bake_tex, 255);
+	Uint8 f = (Uint8)(g_dim * 255.f);
+	SDL_SetTextureColorMod(g_bake_tex, f, f, f);
 
 	// Punch-out cells: elements whose classic pixels must keep showing through
-	// the procedural panel (the fills skip these rects).
+	// the baked panel art (the textured strip draw skips these rects).
 	const int sk_y0 = hud_sidekick_y[0][0], sk_y1 = hud_sidekick_y[0][1];
 	g_ncells = 0;
 
@@ -516,7 +506,9 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 
 	assert(g_ncells <= MAX_CELLS);
 
-	draw_panel_background();
+	// The two panel strips (sidebar + bottom bar), from the baked hq4x art.
+	draw_panel_strip(264, 0, 56, 200);
+	draw_panel_strip(0, 184, 264, 16);
 
 	draw_shield_bar();
 	draw_armor_bar();
@@ -525,5 +517,7 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	draw_sidekick_gauge(0);
 	draw_sidekick_gauge(1);
 
-	draw_panel_labels();
+	// Level name on the plate (blank in the baked art; the classic code draws
+	// it separately over VGAScreen too, at the same coordinates).
+	draw_hud_text(268, 118, levelName);
 }
