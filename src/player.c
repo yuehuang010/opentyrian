@@ -24,6 +24,8 @@
 
 #include "player.h"
 
+#include "varz.h"
+
 Player player[2];
 
 void calc_purple_balls_needed(Player *this_player)
@@ -58,4 +60,18 @@ void handle_got_purple_ball(Player *this_player)
 		--this_player->purple_balls_needed;
 	else
 		power_up_weapon(this_player, this_player->is_dragonwing ? REAR_WEAPON : FRONT_WEAPON);
+}
+
+// Single-player Fighter <-> Dragonwing mode switch (SHIP_MODE_SWITCH_PLAN.md, phase M1).
+// Flips ship mode and resets the charge-cannon state + applies a brief fire lockout
+// so switching mid-fight isn't a free reload. weapon_mode (rear port config) is preserved.
+void player_toggle_ship_mode(Player *this_player)
+{
+	this_player->is_dragonwing = !this_player->is_dragonwing;
+
+	chargeLevel = 0;
+	chargeWait = 30;
+	shotMultiPos[SHOT_P2_CHARGE] = 0;
+
+	shotRepeat[SHOT_FRONT] = shotRepeat[SHOT_REAR] = shotRepeat[SHOT_P2_CHARGE] = 17;
 }

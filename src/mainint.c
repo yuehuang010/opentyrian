@@ -3900,6 +3900,22 @@ redo:
 					}
 				}
 
+				// Single-player Fighter <-> Dragonwing ship-mode switch (SHIP_MODE_SWITCH_PLAN.md, phase M1).
+				// TODO(M2): provisional binding, replace with configurable key
+				{
+					static bool ship_mode_key_was_down = false;
+					const bool ship_mode_key_down = keysactive[SDL_SCANCODE_GRAVE];
+
+					if (!twoPlayerMode && !galagaMode && superArcadeMode == SA_NONE && !superTyrian &&
+					    this_player->is_alive && !endLevel &&
+					    ship_mode_key_down && !ship_mode_key_was_down)
+					{
+						player_toggle_ship_mode(this_player);
+					}
+
+					ship_mode_key_was_down = ship_mode_key_down;
+				}
+
 				if (smoothies[9-1])
 				{
 					*mouseY_ = this_player->y - (*mouseY_ - this_player->y);
@@ -4444,12 +4460,15 @@ redo:
 				{
 					int min, max;
 
-					if (!twoPlayerMode)
+					// Single-player Fighter mode fires FRONT only; Dragonwing mode fires REAR only
+					// (its charge cannon, below, is derived from the REAR weapon id). This intentionally
+					// removes the old single-player both-ports loop (SHIP_MODE_SWITCH_PLAN.md Decisions #1)
+					// — but only where the ship-mode switch exists: modes that can't switch (Galaga
+					// bonus rounds, Super Arcade, SuperTyrian) keep the legacy both-ports behavior.
+					if (!twoPlayerMode && (galagaMode || superArcadeMode != SA_NONE || superTyrian))
 						min = 1, max = 2;
-					else if (this_player->is_dragonwing)
-						min = max = REAR_WEAPON + 1;
 					else
-						min = max = FRONT_WEAPON + 1;
+						min = max = this_player->is_dragonwing ? REAR_WEAPON + 1 : FRONT_WEAPON + 1;
 
 					for (temp = min - 1; temp < max; temp++)
 					{
@@ -4806,8 +4825,13 @@ void JE_mainGamePlayerFunctions(void)
 	}
 	else
 	{
+		// Dragonwing mode (single-player ship-mode switch) uses the standard twin-hull
+		// graphic (shipGr2 == 0, spriteSheet9 — see JE_getShipInfo, varz.c) regardless of
+		// the player's chosen ship, matching player[1]'s default appearance in 2P.
 		JE_playerMovement(&player[0],
-		                  0, 1, shipGr, shipGrPtr,
+		                  0, 1,
+		                  player[0].is_dragonwing ? 0 : shipGr,
+		                  player[0].is_dragonwing ? &spriteSheet9 : shipGrPtr,
 		                  &player[0].mouseX, &player[0].mouseY);
 	}
 

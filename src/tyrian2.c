@@ -788,6 +788,10 @@ start_level_first:
 	for (uint i = 0; i < COUNTOF(player); ++i)
 		player[i].is_alive = true;
 
+	// Single-player ship-mode switch (SHIP_MODE_SWITCH_PLAN.md): every level starts in Fighter mode.
+	if (!twoPlayerMode)
+		player[0].is_dragonwing = false;
+
 	oldDifficultyLevel = difficultyLevel;
 	if (episodeNum == EPISODE_AVAILABLE)
 		difficultyLevel--;

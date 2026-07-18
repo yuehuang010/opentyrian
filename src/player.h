@@ -132,5 +132,6 @@ static inline bool all_players_alive(void)
 void calc_purple_balls_needed(Player *);
 bool power_up_weapon(Player *, uint port);
 void handle_got_purple_ball(Player *);
+void player_toggle_ship_mode(Player *);
 
 #endif // PLAYER_H
