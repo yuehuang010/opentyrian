@@ -1,6 +1,9 @@
 # COOP_JOIN_PLAN.md — drop-in co-op in the single-player campaign
 
-Status: **design draft** (2026-07-18) — explored, awaiting user approval.
+Status: **implemented through C2** (C0 `f71f624`, C1 `71c3f17`, C2 — see git
+log). Full join → fly → drop/leave → rejoin loop in place. C3
+(polish/balance) awaits the user's two-pad playtest. Note vs. the draft:
+`inputDevice` joystick values are `3 + pad`, not `2 +` as sketched below.
 Builds on [SHIP_MODE_SWITCH_PLAN.md](SHIP_MODE_SWITCH_PLAN.md) (M0–M3, done):
 the solo Fighter ⇄ Dragonwing morph is the single-player experience; this plan
 adds a second player **joining at the between-level upgrade screen**, flying

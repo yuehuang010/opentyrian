@@ -3767,6 +3767,18 @@ redo:
 				}
 
 			}
+			else if (campaignCoop && twoPlayerMode && playerNum_ == 2)
+			{
+				// Campaign co-op (COOP_JOIN_PLAN.md C2): campaign players never
+				// respawn (the arcade branch above is unreachable here), so P2
+				// finishing their death animation is the drop-out signal --
+				// galaga-style twoPlayerMode = false, mirrored at the same
+				// exploding-done hook point galaga uses just above. campaignCoop
+				// stays set: it marks the session so P2 can rejoin at the next
+				// upgrade screen. P1 (playerNum_ == 1) never triggers this --
+				// their death alone leaves the level to continue with P2 flying.
+				twoPlayerMode = false;
+			}
 		}
 	}
 	else if (constantDie)

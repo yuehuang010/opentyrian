@@ -895,6 +895,8 @@ void JE_itemScreen(void)
 		// coordinates in this file).
 		if (coopJoinController >= 0)
 			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 READY", 14, 1, DARKEN);
+		else if (campaignCoop && twoPlayerMode)
+			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 JOINED", 14, 1, DARKEN);
 
 		if (newPal > 0) /* can't reindex this :( */
 		{
@@ -1091,9 +1093,12 @@ void JE_itemScreen(void)
 					}
 				}
 
-				// Co-op join poll (COOP_JOIN_PLAN.md C1): only in a solo full-game
-				// campaign session (P2 already flying is C2's concern, not this).
-				// Must run *before* waitUntilElapsed() below -- that call (via
+				// Co-op join poll (COOP_JOIN_PLAN.md C1/C2): active for a solo
+				// full-game campaign session readying P2, *and* (C2) for a
+				// campaign session P2 is already flying in, so the same gesture
+				// on P2's pad can leave. Genuine 2P arcade (twoPlayerMode &&
+				// !campaignCoop) is never included. Must run *before*
+				// waitUntilElapsed() below -- that call (via
 				// push_controllers_as_keyboard()) turns a pad's fire button into a
 				// synthesized "confirm" keypress for menu navigation, and a
 				// newly-readied pad's coopJoinController gate (checked inside
@@ -1103,7 +1108,7 @@ void JE_itemScreen(void)
 				// triggered) as last set by the previous iteration's polling, which
 				// is safe: nothing else touches it between iterations.
 				coopJoinPollActive = !isNetworkGame && !onePlayerAction && !superTyrian &&
-				                     superArcadeMode == SA_NONE && !twoPlayerMode;
+				                     superArcadeMode == SA_NONE && (!twoPlayerMode || campaignCoop);
 				if (coopJoinPollActive)
 				{
 					// P1's effective pad: explicit joystick device, or pad 0 when
@@ -1111,23 +1116,43 @@ void JE_itemScreen(void)
 					const int p1_pad = (inputDevice[0] == 0) ? 0
 					                 : (inputDevice[0] >= 3) ? inputDevice[0] - 3 : -1;
 
-					for (int c = 0; c < controllers; c++)
+					if (campaignCoop && twoPlayerMode)
 					{
-						if (c == p1_pad)
-							continue; // P1's own pad
-
-						if (!controller[c].action_pressed[0]) // fire
-							continue;
-
-						if (coopJoinController == -1)
+						// P2 reached the shop still joined: the same gesture on
+						// P2's assigned pad now leaves the session outright
+						// (unlike a mid-level drop, campaignCoop is cleared too --
+						// this is a deliberate exit, not an involuntary drop).
+						// After leaving, the plain join poll above applies again
+						// next frame (twoPlayerMode false) and P2 can re-ready.
+						const int p2_pad = inputDevice[1] - 3;
+						if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
+						    controller[p2_pad].action_pressed[0])
 						{
-							coopJoinController = c;
+							twoPlayerMode = false;
+							campaignCoop = false;
 							JE_playSampleNum(S_CLICK);
 						}
-						else if (c == coopJoinController)
+					}
+					else
+					{
+						for (int c = 0; c < controllers; c++)
 						{
-							coopJoinController = -1;
-							JE_playSampleNum(S_CLICK);
+							if (c == p1_pad)
+								continue; // P1's own pad
+
+							if (!controller[c].action_pressed[0]) // fire
+								continue;
+
+							if (coopJoinController == -1)
+							{
+								coopJoinController = c;
+								JE_playSampleNum(S_CLICK);
+							}
+							else if (c == coopJoinController)
+							{
+								coopJoinController = -1;
+								JE_playSampleNum(S_CLICK);
+							}
 						}
 					}
 				}

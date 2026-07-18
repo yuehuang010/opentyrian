@@ -530,6 +530,21 @@ void JE_loadGame(JE_byte slot)
 	extraGame = false;
 	galagaMode = false;
 
+	// Campaign co-op (COOP_JOIN_PLAN.md C2): co-op never persists, so any load
+	// must never carry a live campaignCoop session forward. Without this, a
+	// stale campaignCoop == true (left set from a prior in-process joined
+	// session -- it is never cleared by JE_saveGame or by simply reaching the
+	// load-game menu) would leak into whatever gets loaded here: harmlessly
+	// inert against a 1P slot (twoPlayerMode ends up false below, and every
+	// carve-out gate requires twoPlayerMode true), but if slot is a genuine
+	// 2P-ARCADE slot (12-22, twoPlayerMode forced true below) the stale flag
+	// would wrongly carve arcade semantics into campaign ones (no respawns,
+	// full-game shop menu, purchased-power shield/regen instead of the arcade
+	// free regen, etc.) for the loaded arcade game. Also drop any pad readied
+	// to join -- it was never meant to survive a load.
+	campaignCoop = false;
+	coopJoinController = -1;
+
 	initialDifficulty = saveFiles[slot-1].initialDifficulty;
 	gameHasRepeated   = saveFiles[slot-1].gameHasRepeated;
 	twoPlayerMode     = (slot-1) > 10;
