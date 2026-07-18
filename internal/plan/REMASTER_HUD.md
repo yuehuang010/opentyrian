@@ -163,17 +163,46 @@ the xBRZ-family look the user asked for) instead of the fuzzy AI upscale.
   glyph **level name** (the PIC's plate is blank), the punch-outs (sidekick
   icons, config buttons, message-bar interior), the fade dim factor, 1P gate.
 
-### H3 — HD text (later)
-- Level name + message bar re-rendered per present via the HD glyph machinery
-  (needs an immediate-mode glyph draw at present time, or state captured from
-  `JE_drawTextWindow`/`JE_outCharGlow` incl. per-char glow values). The
-  classic baked text stays underneath (covered), so `hd_font_force_classic`
-  at `tyrian2.c:824` stays as-is.
+### H3 — HD message-bar text (design settled 2026-07-17)
+The message bar is the last classic text. Design — **shadow model + hooks**,
+because `JE_outCharGlow` (mainint.c:109) is a *blocking animation loop* that
+paints per-char `blit_sprite_hv(TINY_FONT, id, bank, glowcol)` glyphs
+(bank 7 warningRed / 15 useLastBank / 14; glow value ramps -8..9) into
+VGAScreenSeg over many presents:
+- hd_hud owns a message shadow state: up to 60 glyphs of
+  `{x, y, sprite_id, hue, value}` + an active flag. Tiny hooks at the classic
+  draw sites (gated `hd_mode && hd_flight_active`, targeting VGAScreenSeg
+  only): `JE_drawTextWindow` (whole string at value 0), each
+  `blit_sprite_hv` in `JE_outCharGlow`'s loop (per-char live glow value), and
+  the auto-erase site (`textErase` countdown blit in tyrian2.c) + the erase in
+  JE_drawTextWindow (clear state). Classic draws stay untouched underneath.
+- When HD is on and the shadow state machinery is active, the message-bar
+  punch-out is REPLACED by the baked art (PIC #3's empty window interior) and
+  the shadow glyphs re-emit every present via `hd_hud_queue_glyph`. Any
+  in-flight writer to the message area that isn't hooked would become
+  invisible — audit for writers beyond JE_drawTextWindow / JE_outCharGlow /
+  the erase blits before flipping the punch-out.
+- Glow glyphs are cached per (glyph,hue,value); the -8..9 ramp is 18 variants
+  per glyph — check HD_FONT_CACHE_COUNT and quantize the glow value (e.g. to
+  even steps) if the cache would thrash.
+- Non-flight `JE_outCharGlow` uses (text screens) stay classic — hooks no-op.
 
-### H4 — bitmaps + 2P (later)
-- HD sidekick icons / rear-config buttons through the HD sprite pipeline.
-- Two-player layout (`hdpic06.dat`, different element positions,
-  `JE_drawOptionLevel` at x=268).
+### H4 — bitmaps + 2P (design settled 2026-07-17)
+- **Icons/buttons**: `hdoption_NN.dat` HD assets already exist (44 files,
+  matching OPTION_SHAPES indices; the menus load them via `hd_set_sprite`,
+  e.g. game_menu.c "hdoption_28.dat"). hd_hud reuses the same named-asset
+  texture cache (expose a lookup like the hdpic one) and draws: sidekick
+  icons (`options[...].icongr - 1`, black cell fill underneath, classic
+  punch-out fallback when the asset is missing) and the rear-config buttons
+  (OPTION_SHAPES 18/19). Punch-outs remain as the guarded fallback.
+- **2P layout**: bake `hdpic06.dat`… no — bake PIC **#6** via the same
+  scratch path (pick PIC by twoPlayerMode, rebake on mode change); 2P
+  geometry from the classic sites: shield/armor `JE_dBar3(270/307, 60+134*i,
+  roundf(v*0.8), …)`, weapon dots x=286 y=6/100 (per-player), sidekick
+  `hud_sidekick_y[1]`, level name at (268,76), `JE_drawOptionLevel`
+  (varz.c:433). **galagaMode stays classic** (it sets twoPlayerMode but draws
+  1P-style bars — not worth the matrix; keep the `twoPlayerMode &&
+  !galagaMode`-aware gate excluding galaga entirely).
 
 ## Risks / notes
 - The in-flight pause/menu and game-over paths present with different flags —
