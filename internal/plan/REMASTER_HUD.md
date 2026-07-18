@@ -1,6 +1,13 @@
 # REMASTER_HUD — HD vectorized in-flight HUD
 
-Status: **planned 2026-07-17** — phases H0–H2 in progress, H3–H4 later.
+Status: **H0–H2 done (`94bddf9`, 2026-07-17)** — `src/hd_hud.c` implements the
+overlay; H3 (HD text) and H4 (icon bitmaps, 2P/galaga) remain. Implementation
+notes vs. this plan: the power bar's classic incremental draw is
+history-dependent; the overlay draws its steady-state result (rows
+`[102-temp, 103]`, color `113 + min(temp, 104-y)/7`) — see the comment on
+`draw_power_bar`. Punch-out rect subtraction is a small coordinate-compression
+sweep (`draw_strip_minus_cells`). galagaMode is excluded along with 2P (it can
+run with `twoPlayerMode` set).
 Reverses the "in-flight HUD stays classic by design" deferral recorded in
 `REMASTER_ASSETS.md`. Goal: the flight sidebar/status panel renders at native
 output resolution — HD panel art plus **procedurally drawn (vector) dynamic
