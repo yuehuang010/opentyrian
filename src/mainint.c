@@ -1165,6 +1165,7 @@ void JE_initPlayerData(void)
 	superArcadeMode = SA_NONE;
 	superTyrian = false;
 	twoPlayerMode = false;
+	campaignCoop = false;
 
 	secretHint = (mt_rand() % 3) + 1;
 
@@ -3723,7 +3724,7 @@ redo:
 		}
 		else
 		{
-			if (twoPlayerMode || onePlayerAction)  // if arcade mode
+			if ((twoPlayerMode && !campaignCoop) || onePlayerAction)  // if arcade mode
 			{
 				if (*this_player->lives > 1)  // respawn if any extra lives
 				{

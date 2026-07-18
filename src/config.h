@@ -134,6 +134,10 @@ extern JE_boolean gameJustLoaded;
 extern JE_boolean galagaMode;
 extern JE_boolean extraGame;
 extern JE_boolean twoPlayerMode, twoPlayerLinked, onePlayerAction, superTyrian, trentWin;
+// Campaign co-op session flag: twoPlayerMode==true && campaignCoop==true means
+// "full-game campaign with P2 joined", carving arcade semantics out of the
+// otherwise-overloaded twoPlayerMode (which normally means "2-P arcade").
+extern bool campaignCoop;
 extern JE_byte superArcadeMode;
 extern JE_byte superArcadePowerUp;
 extern JE_real linkGunDirec;

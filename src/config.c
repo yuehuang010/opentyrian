@@ -215,6 +215,10 @@ JE_boolean galagaMode;
 JE_boolean extraGame;
 
 JE_boolean twoPlayerMode, twoPlayerLinked, onePlayerAction, superTyrian;
+// Campaign co-op session flag: twoPlayerMode==true && campaignCoop==true means
+// "full-game campaign with P2 joined", carving arcade semantics out of the
+// otherwise-overloaded twoPlayerMode (which normally means "2-P arcade").
+bool campaignCoop = false;
 JE_boolean trentWin = false;
 JE_byte    superArcadeMode;
 
@@ -475,7 +479,7 @@ void JE_saveGame(JE_byte slot, const char *name)
 	
 	playeritems_to_pitems(saveFiles[slot-1].items, &player[0].items, initial_episode_num);
 	
-	if (twoPlayerMode)
+	if (twoPlayerMode && !campaignCoop)
 		playeritems_to_pitems(saveFiles[slot-1].lastItems, &player[1].items, 0);
 	else
 		playeritems_to_pitems(saveFiles[slot-1].lastItems, &player[0].last_items, 0);
@@ -510,7 +514,7 @@ void JE_saveGame(JE_byte slot, const char *name)
 	for (uint port = 0; port < 2; ++port)
 	{
 		// if two-player, use first player's front and second player's rear weapon
-		saveFiles[slot-1].power[port] = player[twoPlayerMode ? port : 0].items.weapon[port].power;
+		saveFiles[slot-1].power[port] = player[(twoPlayerMode && !campaignCoop) ? port : 0].items.weapon[port].power;
 	}
 	
 	saveSaves();

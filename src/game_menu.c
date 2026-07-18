@@ -376,7 +376,7 @@ void JE_itemScreen(void)
 
 		if (curMenu == MENU_FULL_GAME)
 		{
-			if (twoPlayerMode)
+			if (twoPlayerMode && !campaignCoop)
 				curMenu = MENU_2_PLAYER_ARCADE;
 
 			if (isNetworkGame || onePlayerAction)

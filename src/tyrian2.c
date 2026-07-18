@@ -747,7 +747,7 @@ start_level:
 			fade_song();
 			fade_black(10);
 
-			JE_loadGame(twoPlayerMode ? 22 : 11);
+			JE_loadGame((twoPlayerMode && !campaignCoop) ? 22 : 11);
 			if (doNotSaveBackup)
 			{
 				superTyrian = false;
@@ -990,7 +990,7 @@ start_level_first:
 	/*Save backup game*/
 	if (!play_demo && !doNotSaveBackup)
 	{
-		temp = twoPlayerMode ? 22 : 11;
+		temp = (twoPlayerMode && !campaignCoop) ? 22 : 11;
 		JE_saveGame(temp, "LAST LEVEL    ");
 	}
 
@@ -1235,7 +1235,7 @@ level_loop:
 		}
 		else // not galagaMode
 		{
-			if (twoPlayerMode)
+			if (twoPlayerMode && !campaignCoop)
 			{
 				if (--shieldWait == 0)
 				{
@@ -1245,6 +1245,34 @@ level_loop:
 					{
 						if (player[i].shield < player[i].shield_max && player[i].is_alive)
 							++player[i].shield;
+					}
+
+					JE_drawShield();
+				}
+			}
+			else if (twoPlayerMode && campaignCoop)
+			{
+				// Campaign co-op: mirror the 1P branch below, but each living
+				// player regenerates independently, consuming `power` per
+				// player regenerated (same tick cadence as the 1P branch).
+				bool any_needs_shield = false;
+				for (uint i = 0; i < COUNTOF(player); ++i)
+				{
+					if (player[i].is_alive && player[i].shield < player[i].shield_max && power > shieldT)
+						any_needs_shield = true;
+				}
+
+				if (any_needs_shield && --shieldWait == 0)
+				{
+					shieldWait = 15;
+
+					for (uint i = 0; i < COUNTOF(player); ++i)
+					{
+						if (player[i].is_alive && player[i].shield < player[i].shield_max && power > shieldT)
+						{
+							power -= shieldT;
+							++player[i].shield;
+						}
 					}
 
 					JE_drawShield();
@@ -1290,7 +1318,7 @@ level_loop:
 		}
 
 		/*------------------------Power Bar-------------------------*/
-		if (twoPlayerMode || onePlayerAction)
+		if ((twoPlayerMode && !campaignCoop) || onePlayerAction)
 		{
 			power = 900;
 		}
@@ -2711,7 +2739,7 @@ new_game:
 
 					case '2':  // Jump to section in two-player or one-player arcade.
 						temp = atoi(s + 3);
-						if (twoPlayerMode || onePlayerAction)
+						if ((twoPlayerMode && !campaignCoop) || onePlayerAction)
 						{
 							mainLevel = temp;
 							jumpSection = true;
@@ -2750,11 +2778,11 @@ new_game:
 						break; /*store savepoint*/
 
 					case 'b':  // Explicit auto-save.  (Used before bonus games.)
-						if (twoPlayerMode)
+						if (twoPlayerMode && !campaignCoop)
 							temp = 22;
 						else
 							temp = 11;
-						JE_saveGame(11, "LAST LEVEL    ");
+						JE_saveGame(temp, "LAST LEVEL    ");
 						break;
 
 					case 'i':  // Set menu music track.
@@ -4946,7 +4974,7 @@ void JE_eventSystem(void)
 		break;
 
 	case 33: /* Enemy From other Enemies */
-		if (!((eventRec[eventLoc-1].eventdat == 512 || eventRec[eventLoc-1].eventdat == 513) && (twoPlayerMode || onePlayerAction || superTyrian)))
+		if (!((eventRec[eventLoc-1].eventdat == 512 || eventRec[eventLoc-1].eventdat == 513) && ((twoPlayerMode && !campaignCoop) || onePlayerAction || superTyrian)))
 		{
 			if (superArcadeMode != SA_NONE)
 			{
@@ -5061,7 +5089,7 @@ void JE_eventSystem(void)
 			{
 				eventRec[eventLoc-1].eventdat = 829 + (mt_rand() % 6);
 			}
-			if (twoPlayerMode || onePlayerAction)
+			if ((twoPlayerMode && !campaignCoop) || onePlayerAction)
 			{
 				for (temp = 0; temp < 100; temp++)
 				{
@@ -5076,7 +5104,7 @@ void JE_eventSystem(void)
 		if (eventRec[eventLoc-1].eventdat3 != 0)
 			damageRate = eventRec[eventLoc-1].eventdat3;
 
-		if (eventRec[eventLoc-1].eventdat2 == 0 || twoPlayerMode || onePlayerAction)
+		if (eventRec[eventLoc-1].eventdat2 == 0 || (twoPlayerMode && !campaignCoop) || onePlayerAction)
 		{
 			difficultyLevel += eventRec[eventLoc-1].eventdat;
 			if (difficultyLevel < DIFFICULTY_EASY)
@@ -5187,12 +5215,12 @@ void JE_eventSystem(void)
 		break;
 
 	case 63:  // skip events if not in 2-player mode
-		if (!twoPlayerMode && !onePlayerAction)
+		if (!(twoPlayerMode && !campaignCoop) && !onePlayerAction)
 			eventLoc += eventRec[eventLoc-1].eventdat;
 		break;
 
 	case 64:
-		if (!(eventRec[eventLoc-1].eventdat == 6 && twoPlayerMode && difficultyLevel > DIFFICULTY_NORMAL))
+		if (!(eventRec[eventLoc-1].eventdat == 6 && (twoPlayerMode && !campaignCoop) && difficultyLevel > DIFFICULTY_NORMAL))
 		{
 			smoothies[eventRec[eventLoc-1].eventdat-1] = eventRec[eventLoc-1].eventdat2;
 			temp = eventRec[eventLoc-1].eventdat;
