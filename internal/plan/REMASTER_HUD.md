@@ -138,6 +138,28 @@ modern game would ship. Direction:
   classic panel region into a texture — crisp edge-preserving pixel art
   instead of AI smoothing.
 
+### H2.6 — original art back, hqNx-crisp (art-direction change #2, 2026-07-17)
+User feedback after H2.5: the fully procedural panel **deviated too far from
+the original game** — the art's character is gone. New direction (this was the
+documented fallback): restore the **original PIC #3 panel art**, upscaled with
+the in-repo **hq4x** pixel-art scaler (`hq4x_32()` in `video_scale_hqNx.c`,
+the xBRZ-family look the user asked for) instead of the fuzzy AI upscale.
+- Bake once per level palette: load a clean PIC #3 into a scratch 8-bit
+  surface (`JE_loadPic(scratch, 3, false)` — blank name plate, no dynamic
+  draws), run `hq4x_32` into a 1280×800 streaming texture. `hq4x_32` samples
+  the global live `rgb_palette[]`, so save it, refill from the **target**
+  `colors[]`, and restore around the bake; rebake when `colors[]` changes
+  (memcmp per present, 768 B). Draw the two strips from the baked texture,
+  `SDL_SetTextureColorMod` by the fade dim factor.
+- The baked-in labels (FRONT GUN etc.) come back as hq4x renderings — crisp
+  edge-vectorized pixel art, same family as the HD font glyphs (which are
+  xBRZ-4x of the same letterforms), so no glyph overlay for them. The
+  procedural frames/labels from H2.5 are deleted; git has them (`955bfeb`)
+  if a "modern flat" option is ever wanted again.
+- Kept from H2/H2.5: vector bars/dots/gauges (live-palette colors), the HD
+  glyph **level name** (the PIC's plate is blank), the punch-outs (sidekick
+  icons, config buttons, message-bar interior), the fade dim factor, 1P gate.
+
 ### H3 — HD text (later)
 - Level name + message bar re-rendered per present via the HD glyph machinery
   (needs an immediate-mode glyph draw at present time, or state captured from
