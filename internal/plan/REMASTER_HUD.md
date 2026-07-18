@@ -115,6 +115,26 @@ color ramps but crisp at output resolution:
   interpolation (HUD values step per logic tick by design).
 - Icons (sidekick, rear-config) and all text **remain punch-outs** in H2.
 
+### H2.5 — procedural vector panel (art-direction change, 2026-07-17)
+User feedback after H2: the `hdpic03.dat` AI-upscaled panel reads **too
+smooth/fuzzy** (worst on the baked-in bitmap labels "FRONT GUN"/"REAR GUN");
+the desired look is a **crisp, modern, flat vector render**, like a HUD a
+modern game would ship. Direction:
+- Replace the hdpic-strip background entirely with a procedurally drawn
+  panel: flat dark fills, subtle two-tone gradients, hairline (1 output px)
+  borders, inset wells for the bars — **layout and element positions stay
+  exactly where classic puts them** (alignment with punch-outs and the
+  classic fallback is non-negotiable), but ornamentation simplifies.
+- Static labels (FRONT GUN, REAR GUN, MODE, vertical SHIELD/ARMOR) and the
+  level name render as crisp HD font glyphs (pulled forward from H3). These
+  are baked into the classic art, drawn by no code — the vector panel must
+  re-create them.
+- Colors derived from the live palette's panel tones so fades/flashes track.
+- **Fallback if the vector look disappoints**: runtime hqNx upscale (the
+  in-repo `video_scale_hqNx.c` family, closest to the requested xBRZ) of the
+  classic panel region into a texture — crisp edge-preserving pixel art
+  instead of AI smoothing.
+
 ### H3 — HD text (later)
 - Level name + message bar re-rendered per present via the HD glyph machinery
   (needs an immediate-mode glyph draw at present time, or state captured from
