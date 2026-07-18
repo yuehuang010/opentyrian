@@ -358,6 +358,22 @@ static bool ensure_baked_panel(void)
 	JE_loadPic(g_bake_scratch, 3, false); // PIC #3 == 1P panel (tyrian2.c:816)
 	memcpy(colors, saved_colors, sizeof(colors));
 
+	// PIC #3's playfield region (x<264, y<184) is index-0 black. hq4x's 3x3
+	// kernel would edge-round the panel border against that black, baking a
+	// dark rim into the art along x=264 and y=184 (in classic, that border
+	// abuts live tiles, not black). Pad the playfield side by replicating the
+	// panel's first row/column outward a few pixels so the filter sees
+	// continuation; the padded pixels themselves are never sampled (the strips
+	// only draw x>=264 / y>=184).
+	{
+		Uint8 *px = (Uint8 *)g_bake_scratch->pixels;
+		const int pitch = g_bake_scratch->pitch;
+		for (int y = 181; y <= 183; ++y)  // strip-top row upward
+			memcpy(px + y * pitch, px + 184 * pitch, 264);
+		for (int y = 0; y < 184; ++y)     // sidebar-left column outward
+			memset(px + y * pitch + 261, px[y * pitch + 264], 3);
+	}
+
 	// hq4x_32 samples the global live rgb_palette[]/yuv_palette[]; swap in the
 	// full-brightness target palette (colors[]) for the duration of the bake
 	// (dimming is applied uniformly afterwards via texture colour mod, not
