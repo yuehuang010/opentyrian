@@ -42,4 +42,38 @@
  */
 void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect);
 
+/**
+ * Message-bar text shadow hooks (REMASTER_HUD.md phase H3).
+ *
+ * The bottom message window is the last classic in-flight text. Rather than
+ * intercept the draws, hd_hud keeps a small "shadow" of the message glyphs
+ * populated by these tiny hooks at the classic draw sites; hd_hud_draw() then
+ * re-emits them as crisp HD glyphs over the baked window art every present
+ * (the message-bar punch-out is dropped, so the baked art shows underneath).
+ *
+ * ALL of these are no-ops unless the HD HUD is the live in-flight producer
+ * (hd_mode && hd_flight_active, targeting VGAScreenSeg): the classic draws
+ * underneath are never altered, and non-flight text screens that also use
+ * JE_outCharGlow stay fully classic. Safe to call unconditionally from the
+ * classic paths.
+ */
+
+// From JE_drawTextWindow: capture the whole static message string laid out
+// exactly as JE_outText(screen, x, y, s, hue, value) would (space + '~'
+// brightness handling included), replacing any prior shadow.
+void hd_hud_msg_text(int x, int y, const char *s, Uint8 hue, Sint8 value);
+
+// From JE_outCharGlow, before its per-char animation loop: start a fresh
+// (empty) glow capture so stale glyphs from an earlier message can't linger.
+void hd_hud_msg_glow_begin(void);
+
+// From JE_outCharGlow's inner blit_sprite_hv: capture/refresh one glyph at
+// char index `slot` with its live animated glow `value` (and `hue` = bank).
+void hd_hud_msg_glow_char(int slot, int x, int y, unsigned int sprite_id, Uint8 hue, Sint8 value);
+
+// From the message-erase sites (JE_drawTextWindow's erase blit and the
+// textErase countdown erase in tyrian2.c): drop the shadow so the baked
+// empty-window art shows with no stale glyphs.
+void hd_hud_msg_clear(void);
+
 #endif /* HD_HUD_H */

@@ -85,9 +85,105 @@ static float g_dim = 1.f;  // 0..1 fade factor for the baked panel texture
 // message text) must keep showing through -- the panel draw skips them.
 typedef struct { int x, y, w, h; } HdHudCell;
 
-#define MAX_CELLS 4
+#define MAX_CELLS 3
 static HdHudCell g_cells[MAX_CELLS];
 static int g_ncells;
+
+// ---- Message-bar text shadow (phase H3) --------------------------------------
+//
+// The bottom message window (JE_drawTextWindow / JE_outCharGlow, VGAScreenSeg
+// x16..263 y188..199) is the last classic in-flight text. Instead of covering
+// it with a punch-out (blocky classic pixels), the tiny hooks below mirror the
+// glyphs into this shadow as the classic code draws them; hd_hud_draw() re-emits
+// them as crisp HD glyphs over the baked (empty) window art every present.
+//
+// Cache pressure: HD glyph textures are cached per (glyph,hue,value) in a 4096-
+// entry LRU (HD_FONT_CACHE_COUNT, video.c). JE_outCharGlow ramps the glow value
+// over -8..9 (18 variants/glyph); the classic glyph arrays cap a message at 60
+// chars. Worst realistic case: 60 chars over one bank ~= (distinct letters ~40)
+// x 18 values ~= 720 distinct textures over the whole animation, and a SINGLE
+// present emits at most the 29-char glow window + the ~30-char level name + a
+// few playfield-HUD glyphs (< 100) -- both far under 4096, so there is no intra-
+// present eviction (no dangling queue pointer) and no cross-present thrash.
+// Raw glow values are therefore passed through un-quantized (full fidelity).
+#define MSG_MAX_GLYPHS 60
+typedef struct { bool valid; int x, y; unsigned int sprite_id; Uint8 hue; Sint8 value; } HdMsgGlyph;
+static HdMsgGlyph g_msg[MSG_MAX_GLYPHS];
+static int g_msg_count;   // one past the highest populated slot
+static bool g_msg_active; // a message is currently shadowed
+
+// True only while this HUD layer is the live in-flight producer targeting the
+// flight surface -- the gate every message hook shares (classic text screens
+// also drive JE_outCharGlow, with VGAScreen pointing elsewhere: they no-op).
+static bool msg_capture_live(void)
+{
+	return hd_mode && hd_flight_active && VGAScreen == VGAScreenSeg;
+}
+
+void hd_hud_msg_text(int x, int y, const char *s, Uint8 hue, Sint8 value)
+{
+	if (!msg_capture_live())
+		return;
+
+	// Lay the string out exactly as JE_outText(screen, x, y, s, hue, value)
+	// does (fonthand.c): space advances 6px, '~' toggles a +4 brightness bump,
+	// other glyphs advance by TINY_FONT width+1. Static text -> no glow ramp.
+	g_msg_count = 0;
+	int bright = 0;
+
+	for (int i = 0; s[i] != '\0' && g_msg_count < MSG_MAX_GLYPHS; ++i)
+	{
+		if (s[i] == ' ')
+		{
+			x += 6;
+			continue;
+		}
+		if (s[i] == '~')
+		{
+			bright = (bright == 0) ? 4 : 0;
+			continue;
+		}
+
+		int id = fontMap[(unsigned char)s[i]];
+		if (id != -1 && sprite_exists(TINY_FONT, id))
+		{
+			g_msg[g_msg_count++] = (HdMsgGlyph){ true, x, y, (unsigned int)id, hue, (Sint8)(value + bright) };
+			x += sprite(TINY_FONT, id)->width + 1;
+		}
+	}
+
+	g_msg_active = (g_msg_count > 0);
+}
+
+void hd_hud_msg_glow_begin(void)
+{
+	if (!msg_capture_live())
+		return;
+
+	for (int i = 0; i < MSG_MAX_GLYPHS; ++i)
+		g_msg[i].valid = false;
+	g_msg_count = 0;
+	g_msg_active = true; // glyphs stream in per char as the animation advances
+}
+
+void hd_hud_msg_glow_char(int slot, int x, int y, unsigned int sprite_id, Uint8 hue, Sint8 value)
+{
+	if (!msg_capture_live())
+		return;
+	if (slot < 0 || slot >= MSG_MAX_GLYPHS)
+		return;
+
+	g_msg[slot] = (HdMsgGlyph){ true, x, y, sprite_id, hue, value };
+	if (slot + 1 > g_msg_count)
+		g_msg_count = slot + 1;
+	g_msg_active = true;
+}
+
+void hd_hud_msg_clear(void)
+{
+	g_msg_count = 0;
+	g_msg_active = false;
+}
 
 // ---- Coordinate mapping ------------------------------------------------------
 
@@ -516,9 +612,12 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 		g_cells[g_ncells++] = (HdHudCell){ left, 44, right - left, h };
 	}
 
-	// Message bar interior (mainint.c:99-109): classic text at (16,190),
-	// punched out until H3 draws HD text here.
-	g_cells[g_ncells++] = (HdHudCell){ 16, 188, 263 - 16 + 1, 200 - 188 };
+	// Message-bar interior (mainint.c:99-109): NO punch-out (phase H3). The
+	// baked empty-window art draws here and the message-text shadow (populated
+	// by the hd_hud_msg_* hooks) re-emits as crisp HD glyphs on top -- see the
+	// re-emit at the end of this function. The writer audit (REMASTER_HUD.md H3)
+	// confirmed JE_drawTextWindow / JE_outCharGlow / the two erase blits are the
+	// only in-flight writers to this region, and all are hooked.
 
 	assert(g_ncells <= MAX_CELLS);
 
@@ -536,4 +635,19 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	// Level name on the plate (blank in the baked art; the classic code draws
 	// it separately over VGAScreen too, at the same coordinates).
 	draw_hud_text(268, 118, levelName);
+
+	// Message-bar text: re-emit the shadowed glyphs (populated by the
+	// hd_hud_msg_* hooks at the classic draw sites) as crisp HD glyphs over the
+	// baked window art. Each glyph carries its live hue (bank: 0 for the static
+	// window text, 7 warningRed / 15 useLastBank / 14 for the glow) and value
+	// (glow ramp), so red warnings render red and the glow animates.
+	if (g_msg_active)
+	{
+		for (int i = 0; i < g_msg_count; ++i)
+		{
+			const HdMsgGlyph *m = &g_msg[i];
+			if (m->valid && sprite_exists(TINY_FONT, m->sprite_id))
+				hd_hud_queue_glyph(TINY_FONT, m->sprite_id, m->x, m->y, m->hue, m->value);
+		}
+	}
 }

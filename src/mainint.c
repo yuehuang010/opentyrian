@@ -50,6 +50,7 @@
 #include "file.h"
 #include "font.h"
 #include "fonthand.h"
+#include "hd_hud.h"
 #include "helptext.h"
 #include "keyboard.h"
 #include "lds_play.h"
@@ -99,10 +100,14 @@ bool pause_pressed = false, ingamemenu_pressed = false;
 void JE_drawTextWindow(const char *text)
 {
 	if (textErase > 0) // erase current text
+	{
 		blit_sprite(VGAScreenSeg, 16, 189, OPTION_SHAPES, 36);  // in-game text area
+		hd_hud_msg_clear();  // HD (H3): drop the old message's shadow glyphs
+	}
 
 	textErase = 100;
 	JE_outText(VGAScreenSeg, 20, 190, text, 0, 4);
+	hd_hud_msg_text(20, 190, text, 0, 4);  // HD (H3): shadow the message for re-emit
 }
 
 void JE_outCharGlow(JE_word x, JE_word y, const char *s)
@@ -150,6 +155,8 @@ void JE_outCharGlow(JE_word x, JE_word y, const char *s)
 				loc += sprite(TINY_FONT, sprite_id)->width + 1;
 		}
 
+		hd_hud_msg_glow_begin();  // HD (H3): fresh glow capture (no-op off-flight)
+
 		for (loc = 0; (unsigned)loc < strlen(s) + 28; loc++)
 		{
 			if (ESCPressed)
@@ -168,6 +175,7 @@ void JE_outCharGlow(JE_word x, JE_word y, const char *s)
 					if (sprite_id != -1)
 					{
 						blit_sprite_hv(VGAScreen, textloc[z], y, TINY_FONT, sprite_id, bank, glowcol[z]);
+						hd_hud_msg_glow_char(z, textloc[z], y, (unsigned int)sprite_id, bank, glowcol[z]);  // HD (H3)
 
 						glowcol[z] += glowcolc[z];
 						if (glowcol[z] > 9)

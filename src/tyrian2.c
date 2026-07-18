@@ -48,6 +48,7 @@
 #include "font.h"
 #include "fonthand.h"
 #include "game_menu.h"
+#include "hd_hud.h"
 #include "interp.h"
 #include "keyboard.h"
 #include "lds_play.h"
@@ -1192,7 +1193,10 @@ level_loop:
 
 		/*-----------------------Message Bar------------------------*/
 		if (textErase > 0 && --textErase == 0)
+		{
 			blit_sprite(VGAScreenSeg, 16, 189, OPTION_SHAPES, 36);  // in-game message area
+			hd_hud_msg_clear();  // HD (H3): drop the message shadow glyphs on erase
+		}
 
 		/*------------------------Shield Gen-------------------------*/
 		if (galagaMode)
