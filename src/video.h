@@ -66,6 +66,13 @@ void hd_clear_backdrop(void);       // stop HD compositing (revert to classic); 
 // track the same live palette the glyph synthesizer samples.
 bool hd_hud_queue_glyph(unsigned int table, unsigned int index, int lx, int ly, Uint8 hue, Sint8 value);
 
+// Named-asset lookup for the HD HUD's icon/button bitmaps (REMASTER_HUD.md H4).
+// Returns the cached HD sprite texture for asset_name (e.g. "hdoption_18.dat"),
+// or NULL if HD is off or the asset is missing/malformed -- backed by the SAME
+// fail-once, load-once cache hd_set_sprite uses (no duplicate parsing). If
+// non-NULL, out_w/out_h (either may be NULL) receive the texture's pixel size.
+SDL_Texture *hd_hud_get_named_sprite(const char *asset_name, int *out_w, int *out_h);
+
 // HD ending-cutscene streaming compositor (tyrend.anm). Separate from the fail-once
 // PIC/asset backdrop cache: one persistent STREAMING texture, created lazily on the
 // first frame and SDL_UpdateTexture'd in place per frame, routed through the existing

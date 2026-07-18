@@ -876,6 +876,25 @@ void hd_clear_sprites(void)
 	hd_sprite_queue_count = 0;
 }
 
+SDL_Texture *hd_hud_get_named_sprite(const char *asset_name, int *out_w, int *out_h)
+{
+	// Shares load_hd_sprite's fail-once, load-once texture cache (no duplicate
+	// parsing) so the HD HUD panel's icons/buttons reuse the same textures the
+	// menus load via hd_set_sprite. Present-time lookup for the flight HUD; the
+	// caller (hd_hud_draw) already runs only under hd_mode && hd_flight_active.
+	if (!hd_mode)
+		return NULL;
+
+	SDL_Texture *tex = load_hd_sprite(asset_name);
+	if (tex == NULL)
+		return NULL;
+
+	if (out_w != NULL || out_h != NULL)
+		SDL_QueryTexture(tex, NULL, NULL, out_w, out_h);
+
+	return tex;
+}
+
 // Immediate-mode HD mouse cursor overlay: a single slot (only one cursor ever
 // exists) holding the four shopSpriteSheet sub-sprite textures of the classic
 // 2x2 cursor blit (index, index+1, index+19, index+20 -- blit_sprite2x2's

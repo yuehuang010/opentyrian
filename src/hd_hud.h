@@ -35,10 +35,12 @@
  * `dst_rect` is the same output rect the flight-sprite queue scales against
  * (src/video.c's classic_scale_base() output).
  *
- * Gated internally to 1P only; 2P falls through, leaving the classic 8-bit
- * panel (already present in the base image) showing through. Elements not yet
- * vectorized (sidekick icons, rear-config buttons, the message-bar interior)
- * stay as punch-outs: the procedural fills skip them so the classic pixels show.
+ * Handles both 1P (PIC #3) and genuine two-player (PIC #6) layouts (H4);
+ * galagaMode (which sets twoPlayerMode but draws 1P-style bars) is excluded and
+ * falls through to the classic 8-bit panel. Sidekick icons and rear-config
+ * buttons draw as HD bitmaps (hdoption_NN.dat) when available, falling back
+ * per-cell to a classic punch-out; the message-bar interior stays a shadowed
+ * HD-glyph re-emit over the baked window art.
  */
 void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect);
 

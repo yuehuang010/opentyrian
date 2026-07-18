@@ -23,7 +23,15 @@
  * whole sidebar/bottom-bar panel from live game state directly on top of the
  * already-composited classic 8-bit base. Any element this file doesn't cover,
  * or fails to draw, simply shows the classic pixels already there -- nothing is
- * erased or intercepted. Gated to 1P; 2P falls through to the classic panel.
+ * erased or intercepted. Handles 1P (PIC #3) and genuine 2P (PIC #6, H4) via a
+ * `mode` switch through every dynamic element; galagaMode (2P flag set but 1P-
+ * style bars) is excluded and falls through to the classic panel.
+ *
+ * H4 adds HD icon/button bitmaps (hdoption_NN.dat, shared with the menus via the
+ * same fail-once texture cache) for the sidekick icons and rear-config buttons,
+ * with per-cell classic punch-out fallback when an asset is missing, plus the
+ * full two-player layout (per-player shield/armor bars, 2P weapon-dot / sidekick
+ * positions, the 2P option-level indicator, and the 2P level-name placement).
  *
  * H2.6 restores the ORIGINAL PIC #3 panel art (H2.5's fully-procedural "modern
  * flat" panel deviated too far from the original game per user feedback), but
@@ -82,10 +90,12 @@ static const SDL_Rect *g_dst;
 static float g_dim = 1.f;  // 0..1 fade factor for the baked panel texture
 
 // Punch-out cells: logical VGA rects whose classic pixels (icons, buttons, the
-// message text) must keep showing through -- the panel draw skips them.
+// message text) must keep showing through -- the panel draw skips them. Worst
+// case (1P, every HD icon/button asset missing): 2 sidekick cells + 2 rear-config
+// button cells = 4; keep headroom.
 typedef struct { int x, y, w, h; } HdHudCell;
 
-#define MAX_CELLS 3
+#define MAX_CELLS 6
 static HdHudCell g_cells[MAX_CELLS];
 static int g_ncells;
 
@@ -303,11 +313,21 @@ static void draw_dbar3(int x, int y, int num, Uint8 base_col)
 	}
 }
 
-/* Shield bar (JE_drawShield, varz.c:1112) + max-shield marker (varz.c:1126). */
-static void draw_shield_bar(void)
+/* Shield bar (JE_drawShield, varz.c:1112). In 1P (else branch, varz.c:1121):
+ * one bar at y=194 from player[0].shield, plus the max-shield marker
+ * (varz.c:1122-1126). In 2P (varz.c:1114-1118, the twoPlayerMode && !galagaMode
+ * branch -- galaga already returned above): one bar per player at y=60+134*i
+ * from roundf(shield*0.8f), and NO max-shield marker. */
+static void draw_shield_bar(int mode)
 {
-	Player *p = &player[0];
+	if (mode == 1)
+	{
+		for (int i = 0; i < 2; ++i)
+			draw_dbar3(270, 60 + 134 * i, (int)roundf(player[i].shield * 0.8f), 144);
+		return;
+	}
 
+	Player *p = &player[0];
 	draw_dbar3(270, 194, (int)p->shield, 144);
 
 	if (p->shield != p->shield_max)
@@ -318,21 +338,32 @@ static void draw_shield_bar(void)
 }
 
 /* Armor bar (JE_drawArmor, varz.c:1130); classic clamps armor to 28 as a side
- * effect before drawing -- clamp a local copy instead (no game-state mutation). */
-static void draw_armor_bar(void)
+ * effect before drawing -- clamp a local copy instead (no game-state mutation).
+ * 1P: one bar at y=194 (varz.c:1143). 2P: one bar per player at y=60+134*i from
+ * roundf(armor*0.8f) (varz.c:1136-1139). */
+static void draw_armor_bar(int mode)
 {
+	if (mode == 1)
+	{
+		for (int i = 0; i < 2; ++i)
+			draw_dbar3(307, 60 + 134 * i, (int)roundf(MIN(player[i].armor, 28u) * 0.8f), 224);
+		return;
+	}
+
 	int armor = (int)MIN(player[0].armor, 28u);
 	draw_dbar3(307, 194, armor, 224);
 }
 
-/* Weapon-power dots (tyrian2.c:1256-1276): 2px wide x 3px tall, colour 115+j. */
-static void draw_weapon_dots(void)
+/* Weapon-power dots (tyrian2.c:1262-1281): 2px wide x 3px tall, colour 115+j.
+ * 1P: x=289, y=17 (front)/38 (rear), player[0]. 2P: x=286, y=6 (front,
+ * player[0])/100 (rear, player[1]) -- item_power = player[mode?i:0].weapon[i]. */
+static void draw_weapon_dots(int mode)
 {
 	for (uint i = 0; i < 2; ++i)
 	{
-		uint item_power = player[0].items.weapon[i].power;
-		int x = 289;
-		int y = (i == 0) ? 17 : 38;
+		uint item_power = player[mode ? i : 0].items.weapon[i].power;
+		int x = mode ? 286 : 289;
+		int y = (i == 0) ? (mode ? 6 : 17) : (mode ? 100 : 38);
 
 		for (uint j = 1; j <= item_power; ++j)
 		{
@@ -344,7 +375,8 @@ static void draw_weapon_dots(void)
 
 /* Main power bar (tyrian2.c:1288-1300) steady-state result, x=269..276. See the
  * long note in the prior revision: draws rows [102-temp,103], row y coloured
- * 113 + min(temp,104-y)/7. */
+ * 113 + min(temp,104-y)/7. Classic SKIPS this in 2P (tyrian2.c:1284 forces
+ * power=900 and draws nothing), so the caller only invokes it in 1P. */
 static void draw_power_bar(void)
 {
 	int temp = (int)power / 10;
@@ -358,10 +390,12 @@ static void draw_power_bar(void)
 }
 
 /* Sidekick ammo gauge (draw_segmented_gauge, vga256d.c:158) at (284,y+13),
- * base colour 112, 2x2px segments, segment_value = max(1, ammo_max/10). */
-static void draw_sidekick_gauge(int i)
+ * base colour 112, 2x2px segments, segment_value = max(1, ammo_max/10). Reads
+ * player[mode?1:0] and hud_sidekick_y[mode], mirroring JE_drawOptions
+ * (varz.c:401,422) and the per-frame refill/discharge redraws (mainint.c:4695). */
+static void draw_sidekick_gauge(int mode, int i)
 {
-	Player *p = &player[0];
+	Player *p = &player[mode ? 1 : 0];
 
 	int ammo_max = MAX(0, p->sidekick[i].ammo_max);
 	int ammo = MAX(0, p->sidekick[i].ammo);
@@ -370,7 +404,7 @@ static void draw_sidekick_gauge(int i)
 	int partial = ammo % segment_value;
 
 	int x = 284;
-	int y = hud_sidekick_y[0][i] + 13;
+	int y = hud_sidekick_y[mode][i] + 13;
 
 	for (int s = 0; s < segments; ++s)
 	{
@@ -379,6 +413,45 @@ static void draw_sidekick_gauge(int i)
 	}
 	if (partial > 0)
 		fill_pal(x, y, 2, 2, (Uint8)(112 + 12 * partial / segment_value));
+}
+
+/* 2P option-level indicator (JE_drawOptionLevel, varz.c:437-443): three 2px-wide
+ * x 4px-tall vertical ticks at x=268, y=127+(t-1)*6 for t=1..3, coloured 193
+ * normally and 204 (193+11) for the tick matching player[1].sidekick_level-100.
+ * 1P has no such indicator (JE_drawOptionLevel no-ops when !twoPlayerMode). */
+static void draw_option_level_2p(void)
+{
+	int lit = (int)player[1].items.sidekick_level - 100;
+	for (int t = 1; t <= 3; ++t)
+	{
+		int y = 127 + (t - 1) * 6;
+		// fill_rectangle_xy(268, y, 269, y+3) is inclusive: 2px wide, 4px tall.
+		fill_pal(268, y, 2, 4, (Uint8)(193 + (lit == t ? 11 : 0)));
+	}
+}
+
+/* Draws one HD OPTION_SHAPES sprite (hdoption_NN.dat) at logical (x,y) with the
+ * classic sprite's logical size, on top of the baked panel art. Returns true if
+ * the HD asset was available and drawn; false leaves the caller to keep the
+ * classic punch-out for that cell. */
+static bool draw_hd_option(int sprite_index, int x, int y)
+{
+	char name[32];
+	snprintf(name, sizeof name, "hdoption_%02d.dat", sprite_index);
+
+	SDL_Texture *tex = hd_hud_get_named_sprite(name, NULL, NULL);
+	if (tex == NULL)
+		return false;
+
+	int w = get_sprite_width(OPTION_SHAPES, sprite_index);
+	int h = get_sprite_height(OPTION_SHAPES, sprite_index);
+	SDL_Rect win = vga_rect_to_window(x, y, w, h);
+	SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+	SDL_SetTextureAlphaMod(tex, 255);
+	Uint8 f = (Uint8)(g_dim * 255.f);
+	SDL_SetTextureColorMod(tex, f, f, f);
+	SDL_RenderCopy(g_ren, tex, NULL, &win);
+	return true;
 }
 
 // ---- Baked panel art (hq4x upscale of a clean PIC #3) -------------------------
@@ -396,6 +469,7 @@ static bool g_bake_setup_failed;     // surface/texture allocation failed once
 
 static bool g_have_baked;            // g_bake_tex holds a valid bake
 static SDL_Color g_baked_colors[256]; // colors[] snapshot the bake was made from
+static int g_baked_pic = -1;         // PIC number the current bake was made from
 
 /* Mirrors palette.c's static rgb_to_yuv() (not exported): hq4x_32 needs both
  * rgb_palette[] (pixel colour) and yuv_palette[] (its edge-detection metric)
@@ -413,7 +487,7 @@ static Uint32 hud_rgb_to_yuv(int r, int g, int b)
  * colors[] has changed since the last bake (a level load/change, or the very
  * first draw). Returns false -- draw nothing, classic panel shows through --
  * on any allocation failure, fail-once like every other HD asset cache. */
-static bool ensure_baked_panel(void)
+static bool ensure_baked_panel(int pic)
 {
 	if (g_bake_setup_failed)
 		return false;
@@ -440,8 +514,8 @@ static bool ensure_baked_panel(void)
 		}
 	}
 
-	if (g_have_baked && memcmp(g_baked_colors, colors, sizeof(colors)) == 0)
-		return true; // still current, nothing to do
+	if (g_have_baked && g_baked_pic == pic && memcmp(g_baked_colors, colors, sizeof(colors)) == 0)
+		return true; // still current (same PIC + palette), nothing to do
 
 	// JE_loadPic(..., false) writes raw indices into the scratch surface and,
 	// as an unconditional side effect (storepal only gates set_palette()),
@@ -451,10 +525,12 @@ static bool ensure_baked_panel(void)
 	// reads) permanently clobbered.
 	Palette saved_colors;
 	memcpy(saved_colors, colors, sizeof(colors));
-	JE_loadPic(g_bake_scratch, 3, false); // PIC #3 == 1P panel (tyrian2.c:816)
+	JE_loadPic(g_bake_scratch, pic, false); // PIC #3 (1P) / #6 (2P) (tyrian2.c:817)
 	memcpy(colors, saved_colors, sizeof(colors));
 
-	// PIC #3's playfield region (x<264, y<184) is index-0 black. hq4x's 3x3
+	// The PIC's playfield region (x<264, y<184) is index-0 black -- the 264/184
+	// panel split is engine-wide (tyrian2.c playfield composite), same for #3 and
+	// #6. hq4x's 3x3
 	// kernel would edge-round the panel border against that black, baking a
 	// dark rim into the art along x=264 and y=184 (in classic, that border
 	// abuts live tiles, not black). Pad the playfield side by replicating the
@@ -490,6 +566,7 @@ static bool ensure_baked_panel(void)
 	memcpy(yuv_palette, saved_yuv, sizeof(yuv_palette));
 
 	memcpy(g_baked_colors, colors, sizeof(colors));
+	g_baked_pic = pic;
 	g_have_baked = true;
 	return true;
 }
@@ -573,16 +650,21 @@ static void draw_panel_strip(int x, int y, int w, int h)
 
 void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 {
-	// H4 (later): two-player uses a different panel and layout -- out of scope.
-	// The classic panel keeps drawing underneath, so this simply falls back.
-	if (twoPlayerMode)
+	// galagaMode sets twoPlayerMode but draws 1P-style bars against the #6 panel
+	// (JE_drawShield's else branch, varz.c:1119) -- not worth a third layout
+	// matrix, so keep it fully classic (draw nothing; the classic panel shows).
+	// Genuine 2P (twoPlayerMode && !galagaMode) is handled below via `mode`.
+	if (galagaMode)
 		return;
+
+	const int mode = twoPlayerMode ? 1 : 0; // 0 = 1P (PIC #3), 1 = 2P (PIC #6)
+	const int pic = mode ? 6 : 3;
 
 	g_ren = renderer;
 	g_dst = dst_rect;
 	g_dim = compute_dim();
 
-	if (!ensure_baked_panel())
+	if (!ensure_baked_panel(pic))
 		return; // asset/allocation unavailable: draw nothing, classic base shows
 
 	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
@@ -591,25 +673,66 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	Uint8 f = (Uint8)(g_dim * 255.f);
 	SDL_SetTextureColorMod(g_bake_tex, f, f, f);
 
-	// Punch-out cells: elements whose classic pixels must keep showing through
-	// the baked panel art (the textured strip draw skips these rects).
-	const int sk_y0 = hud_sidekick_y[0][0], sk_y1 = hud_sidekick_y[0][1];
+	// Sidekick icons: try the HD bitmap per cell; on success drop the punch-out
+	// (draw a black cell fill + the crisp HD icon on the baked art below), on any
+	// failure keep the punch-out so the classic icon shows through. The vector
+	// gauge always draws ON TOP afterwards. Icon = OPTION_SHAPES[icongr-1]
+	// (JE_drawOptions, varz.c:425-426); this_player = player[mode?1:0].
 	g_ncells = 0;
-
-	// Sidekick icons: fixed 29x16 erase-rect footprint (JE_drawOptions,
-	// varz.c:422). The vector gauge is drawn ON TOP; the icon bitmap shows.
-	g_cells[g_ncells++] = (HdHudCell){ 284, sk_y0, 29, 16 };
-	g_cells[g_ncells++] = (HdHudCell){ 284, sk_y1, 29, 16 };
-
-	// Rear-config buttons (mainint.c:202): OPTION_SHAPES 18/19 at (285,44),
-	// (302,44). Sized from the live sprite data so a data change can't create a
-	// mismatched hole.
+	bool icon_hd[2] = { false, false };
+	int  icon_idx[2] = { -1, -1 };
+	Player *this_player = &player[mode ? 1 : 0];
+	for (int i = 0; i < 2; ++i)
 	{
-		int w18 = get_sprite_width(OPTION_SHAPES, 18), h18 = get_sprite_height(OPTION_SHAPES, 18);
-		int w19 = get_sprite_width(OPTION_SHAPES, 19), h19 = get_sprite_height(OPTION_SHAPES, 19);
-		int w = MAX(w18, w19), h = MAX(h18, h19);
-		int left = MIN(285, 302), right = MAX(285 + w, 302 + w);
-		g_cells[g_ncells++] = (HdHudCell){ left, 44, right - left, h };
+		int y = hud_sidekick_y[mode][i];
+		int icongr = options[this_player->items.sidekick[i]].icongr;
+		if (icongr > 0)
+			icon_idx[i] = icongr - 1;
+
+		// Probe the HD asset; success suppresses the punch-out (the icon is drawn
+		// on top of the baked art below). The load is cached, so this probe and
+		// the later draw_hd_option() share one parse.
+		bool ok = false;
+		if (icon_idx[i] >= 0)
+		{
+			char name[32];
+			snprintf(name, sizeof name, "hdoption_%02d.dat", icon_idx[i]);
+			ok = (hd_hud_get_named_sprite(name, NULL, NULL) != NULL);
+		}
+		icon_hd[i] = ok;
+		if (!ok)
+			// 29x16 erase-rect footprint (JE_drawOptions, varz.c:424).
+			g_cells[g_ncells++] = (HdHudCell){ 284, y, 29, 16 };
+	}
+
+	// Rear-config buttons (JE_drawPortConfigButtons, mainint.c:210-224): 1P ONLY
+	// (it returns for 2P). Left button at (285,44), right at (302,44); which one
+	// shows the "lit" sprite (18) vs "unlit" (19) depends on player[0].weapon_mode
+	// (==1: left lit / right unlit; else: left unlit / right lit). Try HD per
+	// button; punch out only the buttons whose HD asset is missing.
+	bool btn_hd[2] = { false, false };
+	int  btn_sprite[2] = { -1, -1 };
+	const int btn_x[2] = { 285, 302 };
+	if (mode == 0)
+	{
+		int lit = 18, unlit = 19;
+		if (player[0].weapon_mode == 1)
+			{ btn_sprite[0] = lit;   btn_sprite[1] = unlit; }
+		else
+			{ btn_sprite[0] = unlit; btn_sprite[1] = lit;   }
+
+		for (int b = 0; b < 2; ++b)
+		{
+			char name[32];
+			snprintf(name, sizeof name, "hdoption_%02d.dat", btn_sprite[b]);
+			btn_hd[b] = (hd_hud_get_named_sprite(name, NULL, NULL) != NULL);
+			if (!btn_hd[b])
+			{
+				int w = get_sprite_width(OPTION_SHAPES, btn_sprite[b]);
+				int h = get_sprite_height(OPTION_SHAPES, btn_sprite[b]);
+				g_cells[g_ncells++] = (HdHudCell){ btn_x[b], 44, w, h };
+			}
+		}
 	}
 
 	// Message-bar interior (mainint.c:99-109): NO punch-out (phase H3). The
@@ -625,16 +748,32 @@ void hd_hud_draw(SDL_Renderer *renderer, const SDL_Rect *dst_rect)
 	draw_panel_strip(264, 0, 56, 200);
 	draw_panel_strip(0, 184, 264, 16);
 
-	draw_shield_bar();
-	draw_armor_bar();
-	draw_power_bar();
-	draw_weapon_dots();
-	draw_sidekick_gauge(0);
-	draw_sidekick_gauge(1);
+	// HD icons/buttons on top of the baked art (only the cells that loaded).
+	for (int i = 0; i < 2; ++i)
+		if (icon_hd[i])
+		{
+			int y = hud_sidekick_y[mode][i];
+			fill_pal(284, y, 29, 16, 0); // classic black erase (varz.c:424)
+			draw_hd_option(icon_idx[i], 284, y);
+		}
+	for (int b = 0; b < 2; ++b)
+		if (btn_hd[b])
+			draw_hd_option(btn_sprite[b], btn_x[b], 44);
 
-	// Level name on the plate (blank in the baked art; the classic code draws
-	// it separately over VGAScreen too, at the same coordinates).
-	draw_hud_text(268, 118, levelName);
+	draw_shield_bar(mode);
+	draw_armor_bar(mode);
+	if (mode == 0)
+		draw_power_bar(); // classic skips the power bar in 2P (tyrian2.c:1284)
+	draw_weapon_dots(mode);
+	draw_sidekick_gauge(mode, 0);
+	draw_sidekick_gauge(mode, 1);
+	if (mode == 1)
+		draw_option_level_2p(); // 2P-only option-level indicator (varz.c:437)
+
+	// Level name on the plate (blank in the baked art; the classic code draws it
+	// separately over VGAScreen too, at (268, 118) in 1P / (268, 76) in 2P
+	// -- tyrian2.c:825).
+	draw_hud_text(268, mode ? 76 : 118, levelName);
 
 	// Message-bar text: re-emit the shadowed glyphs (populated by the
 	// hd_hud_msg_* hooks at the classic draw sites) as crisp HD glyphs over the
