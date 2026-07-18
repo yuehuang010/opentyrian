@@ -1166,6 +1166,7 @@ void JE_initPlayerData(void)
 	superTyrian = false;
 	twoPlayerMode = false;
 	campaignCoop = false;
+	coopJoinController = -1;
 
 	secretHint = (mt_rand() % 3) + 1;
 

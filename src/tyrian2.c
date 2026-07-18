@@ -785,6 +785,47 @@ start_level_first:
 
 	fade_song();
 
+	// Campaign co-op activation (COOP_JOIN_PLAN.md C1): a pad readied at the
+	// last item screen becomes P2 for this level. Runs before is_alive,
+	// positions, shield/armor init, and the autosave below, all of which
+	// already treat both players uniformly once twoPlayerMode is true.
+	if (coopJoinController >= 0 && !twoPlayerMode)
+	{
+		campaignCoop = true;
+		twoPlayerMode = true;
+
+		int p2_pad = coopJoinController;
+		inputDevice[1] = 3 + p2_pad;
+
+		// Fix P1's device if it was "any" or collides with P2's newly-claimed pad.
+		if (inputDevice[0] == 0 ||
+		    (inputDevice[0] >= 3 && inputDevice[0] - 3 == p2_pad))
+		{
+			int other_pad = -1;
+			for (int c = 0; c < controllers; c++)
+			{
+				if (c != p2_pad)
+				{
+					other_pad = c;
+					break;
+				}
+			}
+			inputDevice[0] = (other_pad >= 0) ? 3 + other_pad : 1; // else keyboard
+		}
+
+		// Derive P2 from P1's purchased loadout: rear-weapon id/power stay P1's
+		// (charge gun/rate derive from it -- same rule as the solo morph, do NOT
+		// force Vulcan). Sidekick defaults match JE_initPlayerData's dragonwing.
+		player[1].items = player[0].items;
+		player[1].items.sidekick_level  = 101; // 101, 102, 103
+		player[1].items.sidekick_series = 0;   // None
+
+		player[1].cash = 0;
+		player[1].is_dragonwing = true;
+
+		coopJoinController = -1; // consumed; campaignCoop now marks the session
+	}
+
 	for (uint i = 0; i < COUNTOF(player); ++i)
 		player[i].is_alive = true;
 
@@ -3478,6 +3519,11 @@ bool titleScreen(void)
 		MENU_ITEM_DEMO,
 		MENU_ITEM_QUIT,
 	};
+
+	// A co-op P2 readied at the shop but never launched (player quit to title)
+	// would otherwise keep that pad muted in menus via the readied-pad skip in
+	// push_controllers_as_keyboard (COOP_JOIN_PLAN.md C1).
+	coopJoinController = -1;
 
 	SDL_strlcpy(menuText[4], "Setup", sizeof menuText[4]);  // override "Ordering Info"
 

@@ -273,6 +273,14 @@ void JE_itemScreen(void)
 {
 	bool quit = false;
 
+	// Campaign co-op: P2's cash is earned in flight but the shop has exactly
+	// one buyer (player[0]); pool it in on every visit (COOP_JOIN_PLAN.md C1).
+	if (campaignCoop)
+	{
+		player[0].cash += player[1].cash;
+		player[1].cash = 0;
+	}
+
 	// The shop has no HD backdrop of its own (see the hd_set_sprite() calls
 	// below, which are already dead in the intended case -- ordinarily reached
 	// with no backdrop active, so they always no-op). But difficulty-select --
@@ -876,6 +884,18 @@ void JE_itemScreen(void)
 
 		JE_drawMainMenuHelpText();
 
+		// Co-op join indicator (COOP_JOIN_PLAN.md C1): drawn every frame like the
+		// rest of this common block, so no HD persistence tricks are needed. Sits
+		// at (166, 20) -- the gap between the centered menu header (y=10, left of
+		// x=150) and the earliest right-column content (menu choices/cube icons
+		// start at y=38) is unused by every full-game submenu reachable while the
+		// join poll below can run (MENU_FULL_GAME, UPGRADES, UPGRADE_SUB, OPTIONS,
+		// PLAY_NEXT_LEVEL, KEYBOARD_CONFIG, CONTROLLER_CONFIG, LOAD_SAVE,
+		// DATA_CUBES, DATA_CUBE_SUB -- verified by auditing every draw call's
+		// coordinates in this file).
+		if (coopJoinController >= 0)
+			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 READY", 14, 1, DARKEN);
+
 		if (newPal > 0) /* can't reindex this :( */
 		{
 			curPal = newPal;
@@ -1068,6 +1088,47 @@ void JE_itemScreen(void)
 							backFromHelp = false;
 						}
 
+					}
+				}
+
+				// Co-op join poll (COOP_JOIN_PLAN.md C1): only in a solo full-game
+				// campaign session (P2 already flying is C2's concern, not this).
+				// Must run *before* waitUntilElapsed() below -- that call (via
+				// push_controllers_as_keyboard()) turns a pad's fire button into a
+				// synthesized "confirm" keypress for menu navigation, and a
+				// newly-readied pad's coopJoinController gate (checked inside
+				// push_controllers_as_keyboard()) has to already be set by the time
+				// that poll runs, or this frame's join press leaks into the menu as
+				// a confirm. Reads controller[c].action_pressed[0] (fire, edge-
+				// triggered) as last set by the previous iteration's polling, which
+				// is safe: nothing else touches it between iterations.
+				coopJoinPollActive = !isNetworkGame && !onePlayerAction && !superTyrian &&
+				                     superArcadeMode == SA_NONE && !twoPlayerMode;
+				if (coopJoinPollActive)
+				{
+					// P1's effective pad: explicit joystick device, or pad 0 when
+					// the device is "any" (JE_moveShip's c = inputDevice ? -3 : 0).
+					const int p1_pad = (inputDevice[0] == 0) ? 0
+					                 : (inputDevice[0] >= 3) ? inputDevice[0] - 3 : -1;
+
+					for (int c = 0; c < controllers; c++)
+					{
+						if (c == p1_pad)
+							continue; // P1's own pad
+
+						if (!controller[c].action_pressed[0]) // fire
+							continue;
+
+						if (coopJoinController == -1)
+						{
+							coopJoinController = c;
+							JE_playSampleNum(S_CLICK);
+						}
+						else if (c == coopJoinController)
+						{
+							coopJoinController = -1;
+							JE_playSampleNum(S_CLICK);
+						}
 					}
 				}
 
@@ -1713,6 +1774,10 @@ void JE_itemScreen(void)
 		}
 
 	} while (!(quit || gameLoaded || jumpSection));
+
+	// The join poll is only live inside this screen's loop; release the pads
+	// reserved for the join gesture (push_controllers_as_keyboard checks this).
+	coopJoinPollActive = false;
 
 	// This screen has no HD backdrop wired yet, so hd_set_sprite() calls above
 	// always no-op; clear defensively so nothing lingers queued once a backdrop

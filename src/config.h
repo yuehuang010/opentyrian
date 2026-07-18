@@ -138,6 +138,17 @@ extern JE_boolean twoPlayerMode, twoPlayerLinked, onePlayerAction, superTyrian, 
 // "full-game campaign with P2 joined", carving arcade semantics out of the
 // otherwise-overloaded twoPlayerMode (which normally means "2-P arcade").
 extern bool campaignCoop;
+// Pad index (0-based, into controller[]) of a readied-but-not-yet-launched P2,
+// or -1 if no one is readied. Set by the item-screen join poll
+// (src/game_menu.c, JE_itemScreen); consumed and reset to -1 at the next
+// level's launch (src/tyrian2.c), where it activates campaignCoop/twoPlayerMode.
+extern int coopJoinController;
+// True only while JE_itemScreen's co-op join poll is live: reserves every pad
+// that isn't P1's effective device for the join gesture, so a join/un-ready
+// fire press can never leak into the shop as a synthesized menu keypress
+// (push_controllers_as_keyboard does its own poll_controllers and is the
+// FIRST observer of a new press -- a readied-pad skip alone acts a frame late).
+extern bool coopJoinPollActive;
 extern JE_byte superArcadeMode;
 extern JE_byte superArcadePowerUp;
 extern JE_real linkGunDirec;

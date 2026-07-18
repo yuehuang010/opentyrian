@@ -251,6 +251,23 @@ void push_controllers_as_keyboard(void)
 
 	for (int c = 0; c < controllers; c++)
 	{
+		// Co-op join (COOP_JOIN_PLAN.md C1): a readied-but-not-yet-launched P2's
+		// pad must not drive menu navigation; and while the item screen's join
+		// poll is live, every pad that isn't P1's effective device is reserved
+		// for the join gesture entirely -- this function's own poll_controllers()
+		// above is the FIRST observer of a new press, so without the blanket
+		// reservation the joining/un-readying fire press would leak here as a
+		// synthesized "confirm" before the join poll ever sees it.
+		if (c == coopJoinController)
+			continue;
+		if (coopJoinPollActive)
+		{
+			int p1_pad = (inputDevice[0] == 0) ? 0
+			           : (inputDevice[0] >= 3) ? inputDevice[0] - 3 : -1;
+			if (c != p1_pad)
+				continue;
+		}
+
 		if (!controller[c].input_pressed)
 			continue;
 

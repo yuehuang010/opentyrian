@@ -219,6 +219,8 @@ JE_boolean twoPlayerMode, twoPlayerLinked, onePlayerAction, superTyrian;
 // "full-game campaign with P2 joined", carving arcade semantics out of the
 // otherwise-overloaded twoPlayerMode (which normally means "2-P arcade").
 bool campaignCoop = false;
+int  coopJoinController = -1;
+bool coopJoinPollActive = false;
 JE_boolean trentWin = false;
 JE_byte    superArcadeMode;
 
