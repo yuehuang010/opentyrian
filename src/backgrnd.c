@@ -561,28 +561,16 @@ void starfield_snapshot_positions(JE_word *out)
 
 void draw_starfield_interp(SDL_Surface *surface, const JE_word *prev, const JE_word *curr, float alpha)
 {
+	// The starfield is deliberately NOT interpolated: holding each star at its
+	// 35 Hz tick position preserves the classic renderer's strobed multi-image
+	// trail, which the original starfield look depends on. Smooth interpolation
+	// destroys it and makes the stars read as fast sharp dots.
+	(void)prev;
+	(void)alpha;
+
 	Uint8 *p = (Uint8 *)surface->pixels;
 	const int pitch = surface->pitch;
-	const long wrap = 65536L; // star->position is a JE_word relying on overflow wrap
 
 	for (int i = MAX_STARS - 1; i >= 0; --i)
-	{
-		long pp = prev[i], cc = curr[i];
-
-		// Unwrap the 16-bit position so a wrap-around this tick interpolates forward
-		// instead of snapping backward across the whole buffer.
-		long delta = cc - pp;
-		if (delta < -wrap / 2)
-			delta += wrap;
-		else if (delta > wrap / 2)
-			delta -= wrap;
-
-		long pos = pp + (long)(delta * alpha + (delta >= 0 ? 0.5f : -0.5f));
-		pos %= wrap;
-		if (pos < 0)
-			pos += wrap;
-
-		if (pos < 177 * pitch)
-			draw_one_star(p, pitch, pos, starfield_stars[i].color);
-	}
+		draw_one_star(p, pitch, curr[i], starfield_stars[i].color);
 }
