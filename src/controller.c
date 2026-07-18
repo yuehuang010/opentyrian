@@ -596,6 +596,8 @@ void reset_controller_assignments(int c)
 
 	set_button(c, 9, 0, SDL_CONTROLLER_BUTTON_BACK);                       // pause
 
+	set_button(c, 10, 0, SDL_CONTROLLER_BUTTON_LEFTSTICK);                 // ship morph
+
 	controller[c].analog = true;
 	controller[c].sensitivity = 5;
 	controller[c].threshold = 5;
@@ -613,6 +615,7 @@ static const char* const assignment_names[] =
 	"right sidekick",
 	"menu",
 	"pause",
+	"ship morph",
 };
 
 bool load_controller_assignments(Config *config, int c)

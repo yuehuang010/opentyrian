@@ -3900,13 +3900,16 @@ redo:
 					}
 				}
 
-				// Single-player Fighter <-> Dragonwing ship-mode switch (SHIP_MODE_SWITCH_PLAN.md, phase M1).
-				// TODO(M2): provisional binding, replace with configurable key
+				// Single-player Fighter <-> Dragonwing ship-mode switch (SHIP_MODE_SWITCH_PLAN.md, phases M1/M2).
 				{
 					static bool ship_mode_key_was_down = false;
-					const bool ship_mode_key_down = keysactive[SDL_SCANCODE_GRAVE];
 
-					if (!twoPlayerMode && !galagaMode && superArcadeMode == SA_NONE && !superTyrian &&
+					bool ship_mode_key_down = keysactive[keySettings[KEY_SETTING_SHIP_MORPH]];
+					for (int c = 0; c < controllers; c++)
+						ship_mode_key_down |= controller[c].action[6];  // "ship morph" assignment slot (controller.c)
+
+					if (ship_mode_switch_enabled &&
+					    !twoPlayerMode && !galagaMode && superArcadeMode == SA_NONE && !superTyrian &&
 					    this_player->is_alive && !endLevel &&
 					    ship_mode_key_down && !ship_mode_key_was_down)
 					{
@@ -4465,7 +4468,7 @@ redo:
 					// removes the old single-player both-ports loop (SHIP_MODE_SWITCH_PLAN.md Decisions #1)
 					// — but only where the ship-mode switch exists: modes that can't switch (Galaga
 					// bonus rounds, Super Arcade, SuperTyrian) keep the legacy both-ports behavior.
-					if (!twoPlayerMode && (galagaMode || superArcadeMode != SA_NONE || superTyrian))
+					if (!twoPlayerMode && (galagaMode || superArcadeMode != SA_NONE || superTyrian || !ship_mode_switch_enabled))
 						min = 1, max = 2;
 					else
 						min = max = this_player->is_dragonwing ? REAR_WEAPON + 1 : FRONT_WEAPON + 1;

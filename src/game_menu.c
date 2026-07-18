@@ -132,6 +132,9 @@ static const Controller_row controller_rows[] =
 	{ ROW_BINDING,     NULL,            6,  5 }, // change fire
 	{ ROW_BINDING,     NULL,            7,  6 }, // left sidekick
 	{ ROW_BINDING,     NULL,            8,  7 }, // right sidekick
+	// "SHIP MORPH" is a literal, not a menuInt[6][] lookup: the data file (tyrian.hdt)
+	// only ships 11 key-name strings and we can't add a 12th without game data to edit.
+	{ ROW_BINDING,     "SHIP MORPH",   -1, 10 },
 	{ ROW_RESET,       NULL,            9, -1 },
 	{ ROW_DONE,        NULL,           10, -1 },
 };
@@ -473,8 +476,14 @@ void JE_itemScreen(void)
 
 		if (curMenu == MENU_KEYBOARD_CONFIG)
 		{
-			for (int x = 2; x <= 11; x++)
+			// rows: 0..8 = the 9 rebindable keys (0..7 come from the tyrian.hdt
+			// "key names" text; row 8, ship morph, is a literal -- the data file
+			// only ships 11 menuInt[6][] strings total and we can't add a 12th
+			// without game data to edit), 9 = reset to defaults, 10 = done.
+			for (int x = 2; x <= 12; x++)
 			{
+				int row = x - 2;
+
 				if (x == curSel[curMenu])
 				{
 					temp2 = 15;
@@ -484,16 +493,24 @@ void JE_itemScreen(void)
 					temp2 = 28;
 				}
 
-				JE_textShade(VGAScreen, 166, 38 + (x - 2)*12, menuInt[curMenu + 1][x-1], temp2 / 16, temp2 % 16 - 8, DARKEN);
+				const char *label;
+				if (row < 8)
+					label = menuInt[curMenu + 1][row + 1];
+				else if (row == 8)
+					label = "SHIP MORPH";
+				else /* row == 9: reset to defaults, row == 10: done */
+					label = menuInt[curMenu + 1][row];
 
-				if (x < 10) /* 10 = reset to defaults, 11 = done */
+				JE_textShade(VGAScreen, 166, 38 + row*12, label, temp2 / 16, temp2 % 16 - 8, DARKEN);
+
+				if (row < 9) /* 9 = reset to defaults, 10 = done */
 				{
 					temp2 = (x == curSel[curMenu]) ? 252 : 250;
-					JE_textShade(VGAScreen, 236, 38 + (x - 2)*12, SDL_GetScancodeName(keySettings[x-2]), temp2 / 16, temp2 % 16 - 8, DARKEN);
+					JE_textShade(VGAScreen, 236, 38 + row*12, SDL_GetScancodeName(keySettings[row]), temp2 / 16, temp2 % 16 - 8, DARKEN);
 				}
 			}
 
-			menuChoices[MENU_KEYBOARD_CONFIG] = 11;
+			menuChoices[MENU_KEYBOARD_CONFIG] = 12;
 		}
 
 		if (curMenu == MENU_CONTROLLER_CONFIG)
@@ -2462,7 +2479,7 @@ void JE_drawMainMenuHelpText(void)
 	temp = curSel[curMenu] - 2;
 	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
-		const int help[COUNTOF(controller_rows)] = { 15, 15, 15, 15, 15, 15, 15, 24, 11 };
+		const int help[COUNTOF(controller_rows)] = { 15, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
 		memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
 	}
 	else if (curMenu < MENU_PLAY_NEXT_LEVEL ||
@@ -2472,7 +2489,7 @@ void JE_drawMainMenuHelpText(void)
 		memcpy(tempStr, mainMenuHelp[(menuHelp[curMenu][temp])-1], sizeof(tempStr));
 	}
 	else if (curMenu == MENU_KEYBOARD_CONFIG &&
-	         curSel[MENU_KEYBOARD_CONFIG] == 10)
+	         curSel[MENU_KEYBOARD_CONFIG] == 11)
 	{
 		memcpy(tempStr, mainMenuHelp[25-1], sizeof(tempStr));
 	}
@@ -2809,11 +2826,11 @@ void JE_menuFunction(JE_byte select)
 		break;
 
 	case MENU_KEYBOARD_CONFIG:
-		if (curSelect == 10) /* reset to defaults */
+		if (curSelect == 11) /* reset to defaults */
 		{
 			memcpy(keySettings, defaultKeySettings, sizeof(keySettings));
 		}
-		else if (curSelect == 11) /* done */
+		else if (curSelect == 12) /* done */
 		{
 			curMenu = isNetworkGame
 				? MENU_LIMITED_OPTIONS

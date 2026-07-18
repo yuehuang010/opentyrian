@@ -43,8 +43,13 @@ enum
 	DIFFICULTY_10,
 };
 
-// NOTE: Do not reorder.  This ordering corresponds to the keyboard
-//       configuration menu and to the bits stored in demo files.
+// NOTE: Do not reorder the first 8.  This ordering corresponds to the keyboard
+//       configuration menu and to the bits stored in demo files (which only
+//       ever read/write the first 8 -- see the literal `8` in mainint.c's
+//       demo record/playback code, not COUNTOF(keySettings)).
+//       KEY_SETTING_SHIP_MORPH is a 9th slot appended after the demo-format
+//       keys; it is persisted separately (OpenTyrian custom config section,
+//       not the fixed-size dosKeySettings[8] DOS-compat save block).
 enum
 {
 	KEY_SETTING_UP,
@@ -55,9 +60,10 @@ enum
 	KEY_SETTING_CHANGE_FIRE,
 	KEY_SETTING_LEFT_SIDEKICK,
 	KEY_SETTING_RIGHT_SIDEKICK,
+	KEY_SETTING_SHIP_MORPH,
 };
 
-typedef SDL_Scancode KeySettings[8];
+typedef SDL_Scancode KeySettings[9];
 
 typedef JE_byte JE_PItemsType[12]; /* [1..12] */
 
@@ -146,6 +152,13 @@ extern JE_EditorItemAvailType editorItemAvail;
 extern JE_word editorLevel;
 
 extern Config opentyrian_config;
+
+// Single-player Fighter <-> Dragonwing ship-mode switch feature toggle
+// (SHIP_MODE_SWITCH_PLAN.md).  Persisted in the OpenTyrian custom config
+// section ("gameplay"/"ship_mode_switch"), default on.  When false, both the
+// keyboard and controller triggers are ignored and the legacy single-player
+// both-ports fire is restored (see the bay-selection branch in mainint.c).
+extern bool ship_mode_switch_enabled;
 
 void JE_initProcessorType(void);
 void JE_setNewGameSpeed(void);

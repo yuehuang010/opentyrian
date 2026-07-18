@@ -141,6 +141,16 @@ breaks with zero HUD work. Additions (phase 3):
   charge sprite above the ship, `mainint.c:4478`, already shows it — HUD copy
   is nice-to-have).
 
+## Known latent trap (found in M1 audit, deliberately not fixed)
+
+`mainint.c:4133` — `if (!twoPlayerMode || shipGr2 != 0)  // if not dragonwing`
+reads the **global** `shipGr2`, so in single player it always takes the
+"not dragonwing" path regardless of `player[0].is_dragonwing`. Benign today:
+the correct dragonwing sidekick placement at `mainint.c:4380` runs later in
+the same call and overwrites the position. If that ordering ever changes,
+style-0 sidekicks will misplace in 1P Dragonwing mode — the real fix is to
+key it on `this_player->is_dragonwing && shipGr_ == 0` like 4380.
+
 ## Implementation phases (delegate per CLAUDE.md agent policy)
 
 - **M0 — mechanical discriminator refactor, zero behavior change** (Sonnet;
