@@ -1,9 +1,12 @@
 # REMASTER_HUD — HD vectorized in-flight HUD
 
-Status: **H0–H2 done (`94bddf9`), H2.5 done (`955bfeb`, 2026-07-17)** — the
-panel is now fully procedural (no hdpic art); static labels + level name are
-HD glyphs via the present-time `hd_hud_queue_glyph()` hook. H3 remaining scope
-shrinks to the message bar (incl. glow); H4 unchanged. — `src/hd_hud.c` implements the
+Status: **H0–H2 (`94bddf9`), H2.5 (`955bfeb`), H2.6 (`d359ee9`) done,
+2026-07-17.** Settled art direction after two user verdicts: AI-upscale = too
+fuzzy, fully procedural = too far from the original — the shipped look is the
+**original PIC #3 art through hq4x** (crisp pixel-art vectorization), with
+vector bars/gauges, the HD-glyph level name (fade-stepped brightness), and
+punch-outs on top. The procedural panel survives only in git (`955bfeb`). H3
+remaining scope: the message bar (incl. glow); H4 unchanged. — `src/hd_hud.c` implements the
 overlay; H3 (HD text) and H4 (icon bitmaps, 2P/galaga) remain. Implementation
 notes vs. this plan: the power bar's classic incremental draw is
 history-dependent; the overlay draws its steady-state result (rows
