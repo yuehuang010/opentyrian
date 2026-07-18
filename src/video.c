@@ -26,6 +26,7 @@
 #include "video.h"
 
 #include "file.h"
+#include "hd_hud.h"
 #include "keyboard.h"
 #include "opentyr.h"
 #include "palette.h"
@@ -659,6 +660,21 @@ bool hd_set_backdrop(int pic_num)
 	hd_backdrop_active = true;
 	hd_backdrop_fade = 0;
 	return true;
+}
+
+/**
+ * Shared HDPX PIC lookup for the in-flight HD HUD overlay (src/hd_hud.c):
+ * reuses load_hd_backdrop's fail-once cache so the HUD panel art doesn't
+ * duplicate the HDPX parsing or maintain a second cache. Unlike
+ * hd_set_backdrop(), this has no side effects on hd_backdrop_active /
+ * hd_backdrop_cur_tex / hd_backdrop_fade -- those belong to the separate
+ * full-screen backdrop compositor and must stay untouched by the HUD path.
+ */
+SDL_Texture *hd_hud_get_panel_texture(int pic_num)
+{
+	if (!load_hd_backdrop(pic_num))
+		return NULL;
+	return hd_backdrop_tex[pic_num];
 }
 
 /**
@@ -2283,6 +2299,13 @@ static void scale_and_flip(SDL_Surface *src_surface)
 		}
 
 		SDL_RenderSetClipRect(main_window_renderer, NULL);
+
+		// HD in-flight HUD overlay (REMASTER_HUD.md, phases H0-H2): sidebar +
+		// bottom-bar panel art and vectorized bars/gauges, drawn above the
+		// flight sprites (which are clipped to the playfield above) and
+		// below the HD text/cursor. No-op (classic panel shows through) if
+		// 2P or the panel asset is unavailable.
+		hd_hud_draw(main_window_renderer, &dst_rect);
 
 		// HD text on top of the flight sprites, HD cursor above the text.
 		draw_hd_font_queue(&dst_rect);

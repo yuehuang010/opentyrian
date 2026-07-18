@@ -56,6 +56,12 @@ bool hd_set_backdrop(int pic_num); // begin HD compositing for PIC pic_num if it
 bool hd_set_backdrop_asset(const char *name); // begin HD compositing for a filename-keyed full-screen asset ("hdpcx_<name>.dat"); returns success
 void hd_clear_backdrop(void);       // stop HD compositing (revert to classic); covers both hd_set_backdrop and hd_set_backdrop_asset
 
+// Shared fail-once cache lookup for the in-flight HD HUD overlay (src/hd_hud.c):
+// looks up (and lazily loads) the same "hdpicNN.dat" PIC texture hd_set_backdrop()
+// uses, without touching hd_backdrop_active/hd_backdrop_cur_tex/hd_backdrop_fade.
+// Returns NULL if the asset is unavailable/malformed (fail-once, never retried).
+SDL_Texture *hd_hud_get_panel_texture(int pic_num);
+
 // HD ending-cutscene streaming compositor (tyrend.anm). Separate from the fail-once
 // PIC/asset backdrop cache: one persistent STREAMING texture, created lazily on the
 // first frame and SDL_UpdateTexture'd in place per frame, routed through the existing
