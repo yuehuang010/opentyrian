@@ -37,6 +37,8 @@
 #include "jukebox.h"
 #include "keyboard.h"
 #include "loudness.h"
+#include "lvledit.h"
+#include "lvledit_io.h"
 #include "mainint.h"
 #include "mouse.h"
 #include "mtrand.h"
@@ -936,6 +938,14 @@ int main(int argc, char *argv[])
 
 	JE_scanForEpisodes();
 
+	if (edit_roundtrip_episode != 0)
+	{
+		// Hidden level-editor archive-I/O self-test (Phase E0): no video/audio
+		// needed, so this runs and exits before any subsystem init below.
+		bool ok = lvledit_run_roundtrip_test(edit_roundtrip_episode);
+		return ok ? 0 : 1;
+	}
+
 	init_video();
 	init_keyboard();
 	init_controllers();
@@ -1004,6 +1014,33 @@ int main(int argc, char *argv[])
 	if (!isNetworkGame)
 		intro_logos();
 #endif
+
+	if (edit_episode != 0)
+	{
+		// Hidden interactive level editor (Phase E1): boots straight into
+		// the editor loop instead of the normal title-screen/game loop, and
+		// exits when the user quits the editor.
+		lvledit_run(edit_episode);
+		return 0;
+	}
+
+	if (edit_shot_requested)
+	{
+		// Hidden headless level-editor screenshot dump: renders a fixed set
+		// of editor screens for one level and saves them as BMPs, with no
+		// interactive loop. Needs video/fonts initialized (done above), same
+		// as --edit, so it's hooked in the same place, before titleScreen.
+		lvledit_dump_screens(edit_shot_episode, edit_shot_level);
+		return 0;
+	}
+
+	if (edit_export_requested)
+	{
+		// Hidden headless full-level PNG map export: same hook point as
+		// --edit-shot (needs video/fonts initialized, no interactive loop).
+		bool ok = lvledit_export_map_cli(edit_export_episode, edit_export_level);
+		return ok ? 0 : 1;
+	}
 
 	for (; ; )
 	{

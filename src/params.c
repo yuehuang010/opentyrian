@@ -41,6 +41,17 @@
 
 JE_boolean richMode = false, constantPlay = false, constantDie = false;
 
+int edit_roundtrip_episode = 0;
+int edit_episode = 0;
+
+bool edit_shot_requested = false;
+int edit_shot_episode = 0;
+int edit_shot_level = 0;
+
+bool edit_export_requested = false;
+int edit_export_episode = 0;
+int edit_export_level = 0;
+
 /* YKS: Note: LOOT cheat had non letters removed. */
 const char pars[][9] = {
 	"LOOT", "RECORD", "NOJOY", "CONSTANT", "DEATH", "NOSOUND", "NOXMAS", "YESXMAS"
@@ -63,7 +74,26 @@ void JE_paramCheck(int argc, char *argv[])
 		{ 257, 0,   "net-player-number", true }, //       be a menu for entering these in the future
 		{ 'p', 'p', "net-port",          true },
 		{ 'd', 'd', "net-delay",         true },
-		
+
+		// Hidden: interactive level editor (Phase E1), not shown in --help.
+		// Listed before edit-roundtrip so an exact "--edit" match short-
+		// circuits before the partial-match ambiguity check (arg_parse.c's
+		// long-option matcher flags ambiguity only among options it hasn't
+		// already resolved with an exact match).
+		{ 259, 0,   "edit",              true },
+		// Hidden: level-editor archive-I/O self-test (Phase E0), not shown in --help.
+		{ 258, 0,   "edit-roundtrip",    true },
+		// Hidden: headless level-editor screenshot dump, not shown in --help.
+		// Shares the "edit" prefix with the two options above, but "edit" is
+		// listed first and is an exact match on its own, so it resolves (and
+		// breaks out of the matcher) before this or edit-roundtrip are ever
+		// considered -- see the ordering note above.
+		{ 260, 0,   "edit-shot",         true },
+		// Hidden: headless full-level PNG map export, not shown in --help.
+		// Shares the "edit" prefix; same short-circuit ordering note as
+		// edit-shot above applies here too.
+		{ 261, 0,   "edit-export",       true },
+
 		{ 'X', 'X', "xmas",              false },
 		{ 'c', 'c', "constant",          false },
 		{ 'k', 'k', "death",             false },
@@ -195,6 +225,66 @@ void JE_paramCheck(int argc, char *argv[])
 			}
 			break;
 		}
+		case 258: // --edit-roundtrip (hidden)
+		{
+			int temp = atoi(option.arg);
+			if (temp >= 1 && temp <= 4)
+				edit_roundtrip_episode = temp;
+			else
+			{
+				fprintf(stderr, "%s: error: invalid --edit-roundtrip episode (expected 1-4)\n", argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			break;
+		}
+		case 259: // --edit (hidden)
+		{
+			int temp = atoi(option.arg);
+			if (temp >= 1 && temp <= 4)
+				edit_episode = temp;
+			else
+			{
+				fprintf(stderr, "%s: error: invalid --edit episode (expected 1-4)\n", argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			break;
+		}
+		case 260: // --edit-shot (hidden)
+		{
+			int temp_episode, temp_level;
+			if (sscanf(option.arg, "%d,%d", &temp_episode, &temp_level) == 2 &&
+			    temp_episode >= 1 && temp_episode <= 4 && temp_level >= 0)
+			{
+				edit_shot_episode = temp_episode;
+				edit_shot_level = temp_level;
+				edit_shot_requested = true;
+			}
+			else
+			{
+				fprintf(stderr, "%s: error: invalid --edit-shot value (expected <episode 1-4>,<level>=0)\n", argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			break;
+		}
+
+		case 261: // --edit-export (hidden)
+		{
+			int temp_episode, temp_level;
+			if (sscanf(option.arg, "%d,%d", &temp_episode, &temp_level) == 2 &&
+			    temp_episode >= 1 && temp_episode <= 4 && temp_level >= 0)
+			{
+				edit_export_episode = temp_episode;
+				edit_export_level = temp_level;
+				edit_export_requested = true;
+			}
+			else
+			{
+				fprintf(stderr, "%s: error: invalid --edit-export value (expected <episode 1-4>,<level>=0)\n", argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			break;
+		}
+
 		case 'X':
 			xmas = true;
 			break;

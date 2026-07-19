@@ -23,6 +23,33 @@
 
 extern JE_boolean richMode, constantPlay, constantDie;
 
+// Hidden level-editor flag (Phase E0): --edit-roundtrip <episode 1-4>.
+// 0 means "not requested"; otherwise the requested episode number.
+extern int edit_roundtrip_episode;
+
+// Hidden level-editor flag (Phase E1): --edit <episode 1-4> boots the
+// interactive editor (lvledit_run()) instead of the normal title screen.
+// 0 means "not requested"; otherwise the requested episode number.
+extern int edit_episode;
+
+// Hidden level-editor flag: --edit-shot <episode>,<level> renders a fixed set
+// of editor screens for one level and saves them as BMPs in the current
+// directory, then exits -- no interactive loop. edit_shot_requested is false
+// unless the flag was given (level 0 is a valid level index, so it can't
+// double as its own "not requested" sentinel the way edit_episode's 0 does).
+extern bool edit_shot_requested;
+extern int edit_shot_episode;
+extern int edit_shot_level;
+
+// Hidden level-editor flag: --edit-export <episode>,<level> renders the
+// entire level as PNGs (one per tile layer plus a composite) and saves them
+// in the current directory, then exits -- no interactive loop. Same
+// "requested" sentinel pattern as edit_shot_requested, for the same reason
+// (level 0 is valid).
+extern bool edit_export_requested;
+extern int edit_export_episode;
+extern int edit_export_level;
+
 void JE_paramCheck(int argc, char *argv[]);
 
 #endif /* PARAMS_H */
