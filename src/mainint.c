@@ -4540,12 +4540,12 @@ redo:
 				{
 					int min, max;
 
-					// Single-player Fighter mode fires FRONT only; Dragonwing mode fires REAR only
-					// (its charge cannon, below, is derived from the REAR weapon id). This intentionally
-					// removes the old single-player both-ports loop (SHIP_MODE_SWITCH_PLAN.md Decisions #1)
-					// — but only where the ship-mode switch exists: modes that can't switch (Galaga
-					// bonus rounds, Super Arcade, SuperTyrian) keep the legacy both-ports behavior.
-					if (!twoPlayerMode && (galagaMode || superArcadeMode != SA_NONE || superTyrian || !ship_mode_switch_enabled))
+					// Single-player Fighter mode keeps the vanilla both-ports loop (front + rear
+					// fire together); the front/rear split only applies in two-player mode, where
+					// each player owns one port. Dragonwing mode still fires REAR only — its charge
+					// cannon, below, is derived from the REAR weapon id. (Overrides the front-only
+					// Fighter rule from SHIP_MODE_SWITCH_PLAN.md Decisions #1 after playtest.)
+					if (!twoPlayerMode && !this_player->is_dragonwing)
 						min = 1, max = 2;
 					else
 						min = max = this_player->is_dragonwing ? REAR_WEAPON + 1 : FRONT_WEAPON + 1;

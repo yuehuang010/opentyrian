@@ -181,13 +181,15 @@ charge path. The M0 refactor *is* attract-testable (2P demo unaffected).
 
 ## Decisions
 
-1. **Fighter mode fires the FRONT port only** (user decision, 2026-07-17).
-   The rear weapon exists solely as the Dragonwing charge-cannon source, so
-   the mode switch is a genuine trade: front-gun DPS vs. charge burst. The
-   1P both-ports loop (`min=1,max=2`) is intentionally removed — a deliberate
-   balance change to the classic campaign. Rear `weapon_mode`/port-configs
-   become irrelevant in flight (charge path ignores them) — hide those
-   HUD buttons in M3.
+1. ~~**Fighter mode fires the FRONT port only** (user decision, 2026-07-17).~~
+   **REVERSED after playtest (user decision, 2026-07-18): Fighter mode fires
+   both ports, exactly like vanilla single player.** The front/rear split now
+   applies only in two-player mode (each player owns one port). Dragonwing
+   mode still fires REAR-only via its charge cannon. Firing condition at the
+   `min`/`max` selection in `JE_playerMovement` is now
+   `!twoPlayerMode && !is_dragonwing → both ports`. Rear `weapon_mode`/
+   port-configs are meaningful again in Fighter flight; the M3 HUD hiding of
+   the rear-config buttons applies only while morphed into Dragonwing.
 2. **Default-on vs. opt-in config flag** — default-on chosen above.
 3. **Switch control defaults** — decide at M2 with the remap screen in front
    of us.
