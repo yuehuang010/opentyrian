@@ -137,9 +137,6 @@ static const Controller_row controller_rows[] =
 	{ ROW_BINDING,     NULL,            6,  5 }, // change fire
 	{ ROW_BINDING,     NULL,            7,  6 }, // left sidekick
 	{ ROW_BINDING,     NULL,            8,  7 }, // right sidekick
-	// "SHIP MORPH" is a literal, not a menuInt[6][] lookup: the data file (tyrian.hdt)
-	// only ships 11 key-name strings and we can't add a 12th without game data to edit.
-	{ ROW_BINDING,     "SHIP MORPH",   -1, 10 },
 	{ ROW_RESET,       NULL,            9, -1 },
 	{ ROW_DONE,        NULL,           10, -1 },
 };
@@ -238,7 +235,7 @@ JE_longint JE_cashLeft(void)
 // it under hd_font_force_classic (see internal/issue/hd-keybind-menu-vanish.md).
 static void JE_drawKeyboardConfigRows(void)
 {
-	for (int x = 2; x <= 12; x++)
+	for (int x = 2; x <= 11; x++)
 	{
 		int row = x - 2;
 
@@ -252,24 +249,70 @@ static void JE_drawKeyboardConfigRows(void)
 			temp2 = 28;
 		}
 
-		const char *label;
-		if (row < 8)
-			label = menuInt[MENU_KEYBOARD_CONFIG + 1][row + 1];
-		else if (row == 8)
-			label = "SHIP MORPH";
-		else /* row == 9: reset to defaults, row == 10: done */
-			label = menuInt[MENU_KEYBOARD_CONFIG + 1][row];
+		JE_textShade(VGAScreen, 166, 38 + row*12, menuInt[MENU_KEYBOARD_CONFIG + 1][x-1], temp2 / 16, temp2 % 16 - 8, DARKEN);
 
-		JE_textShade(VGAScreen, 166, 38 + row*12, label, temp2 / 16, temp2 % 16 - 8, DARKEN);
-
-		if (row < 9) /* 9 = reset to defaults, 10 = done */
+		if (row < 8) /* 8 = reset to defaults, 9 = done */
 		{
 			temp2 = (x == curSel[MENU_KEYBOARD_CONFIG]) ? 252 : 250;
 			JE_textShade(VGAScreen, 236, 38 + row*12, SDL_GetScancodeName(keySettings[row]), temp2 / 16, temp2 % 16 - 8, DARKEN);
 		}
 	}
 
-	menuChoices[MENU_KEYBOARD_CONFIG] = 12;
+	menuChoices[MENU_KEYBOARD_CONFIG] = 11;
+}
+
+/* ===================== Campaign co-op join ===================== */
+
+// Co-op join eligibility (COOP_JOIN_PLAN.md): a solo campaign session that may
+// ready P2, or a campaign session P2 is already flying in. Genuine 2P arcade
+// (twoPlayerMode && !campaignCoop) is excluded. Shared source of truth for the
+// item-screen join poll (coopJoinPollActive) and the "2 PLAYER" Options-menu row.
+static bool coopJoinEligible(void)
+{
+	return !isNetworkGame && !onePlayerAction && !superTyrian &&
+	       superArcadeMode == SA_NONE && (!twoPlayerMode || campaignCoop);
+}
+
+// Label for the "2 PLAYER" Options-menu row, reflecting the current join state.
+static const char *coopJoinRowLabel(void)
+{
+	if (campaignCoop && twoPlayerMode)
+		return "2 PLAYER: LEAVE";  // P2 already joined and flying
+	else if (coopJoinController != -1)
+		return "2 PLAYER: READY";  // readied; activates at the next level launch
+	else
+		return "2 PLAYER: JOIN";
+}
+
+// Activate the "2 PLAYER" Options-menu row: toggle P2's join/ready state for the
+// campaign co-op session, honoring P2's chosen input device (inputDevice[1]).
+static void coopJoinRowActivate(void)
+{
+	if (campaignCoop && twoPlayerMode)
+	{
+		// Already joined -> leave (matches the pad leave gesture in the poll).
+		twoPlayerMode = false;
+		campaignCoop = false;
+	}
+	else if (coopJoinController != -1)
+	{
+		// Readied -> un-ready.
+		coopJoinController = -1;
+	}
+	else
+	{
+		// Not readied -> ready, using P2's chosen device. The keyboard/mouse
+		// sentinels stay distinct from a real pad index; tyrian2.c's level-launch
+		// activation maps each back to inputDevice[1].
+		if (inputDevice[1] >= 3)
+			coopJoinController = inputDevice[1] - 3;  // explicit pad
+		else if (inputDevice[1] == 2)
+			coopJoinController = COOP_JOIN_MOUSE;
+		else
+			coopJoinController = COOP_JOIN_KEYBOARD;  // keyboard, or "any"/unset
+	}
+
+	JE_playSampleNum(S_CLICK);
 }
 
 /* ===================== Item shop screen ===================== */
@@ -449,6 +492,12 @@ void JE_itemScreen(void)
 			JE_drawMenuHeader();
 		}
 
+		// "2 PLAYER" co-op join row (Task B): appended to the Options menu when a
+		// campaign co-op join/leave is possible. Count is dynamic so cursor
+		// nav, mouse hotspots, and back/esc all derive from the same value.
+		if (curMenu == MENU_OPTIONS)
+			menuChoices[MENU_OPTIONS] = coopJoinEligible() ? 9 : 8;
+
 		/* Draw menu choices for simple menus */
 		if ((curMenu >= MENU_FULL_GAME && curMenu <= MENU_PLAY_NEXT_LEVEL) ||
 		    (curMenu >= MENU_2_PLAYER_ARCADE && curMenu <= MENU_LIMITED_OPTIONS) ||
@@ -528,10 +577,8 @@ void JE_itemScreen(void)
 
 		if (curMenu == MENU_KEYBOARD_CONFIG)
 		{
-			// rows: 0..8 = the 9 rebindable keys (0..7 come from the tyrian.hdt
-			// "key names" text; row 8, ship morph, is a literal -- the data file
-			// only ships 11 menuInt[6][] strings total and we can't add a 12th
-			// without game data to edit), 9 = reset to defaults, 10 = done.
+			// rows: 0..7 = the 8 rebindable keys (from the tyrian.hdt "key names"
+			// text), 8 = reset to defaults, 9 = done.
 			JE_drawKeyboardConfigRows();
 		}
 
@@ -1129,8 +1176,7 @@ void JE_itemScreen(void)
 				// a confirm. Reads controller[c].action_pressed[0] (fire, edge-
 				// triggered) as last set by the previous iteration's polling, which
 				// is safe: nothing else touches it between iterations.
-				coopJoinPollActive = !isNetworkGame && !onePlayerAction && !superTyrian &&
-				                     superArcadeMode == SA_NONE && (!twoPlayerMode || campaignCoop);
+				coopJoinPollActive = coopJoinEligible();
 				if (coopJoinPollActive)
 				{
 					// P1's effective pad: explicit joystick device, or pad 0 when
@@ -1140,39 +1186,23 @@ void JE_itemScreen(void)
 
 					// The join/leave gesture depends on the device chosen for P2
 					// in the controller-config menu (ROW_DEVICE, inputDevice[1]):
-					// an explicit pad reserves the gesture to only that pad; the
-					// keyboard uses the ship-morph key (which does nothing in
-					// menus otherwise); mouse/"any" keeps the legacy any-pad
-					// behavior.
+					// an explicit pad reserves the gesture to only that pad;
+					// mouse/"any" keeps the legacy any-pad behavior. Keyboard (and
+					// mouse) P2 join/leave via the explicit "2 PLAYER" row in the
+					// Options menu (see coopJoinRowActivate); there is no keyboard
+					// fire-gesture here.
 					if (campaignCoop && twoPlayerMode)
 					{
-						// P2 reached the shop still joined: the same gesture that
-						// would join now leaves the session outright (unlike a
-						// mid-level drop, campaignCoop is cleared too -- this is
-						// a deliberate exit, not an involuntary drop). After
-						// leaving, the plain join poll above applies again next
-						// frame (twoPlayerMode false) and P2 can re-ready.
-						bool leave = false;
-
-						if (inputDevice[1] == 1)
-						{
-							if (keysactive[keySettings[KEY_SETTING_SHIP_MORPH]])
-							{
-								keysactive[keySettings[KEY_SETTING_SHIP_MORPH]] = false; // consume
-								leave = true;
-							}
-						}
-						else
-						{
-							const int p2_pad = inputDevice[1] - 3;
-							if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
-							    controller[p2_pad].action_pressed[0])
-							{
-								leave = true;
-							}
-						}
-
-						if (leave)
+						// P2 reached the shop still joined: pressing fire on P2's
+						// pad leaves the session outright (unlike a mid-level drop,
+						// campaignCoop is cleared too -- this is a deliberate exit,
+						// not an involuntary drop). After leaving, the plain join
+						// poll above applies again next frame (twoPlayerMode false)
+						// and P2 can re-ready. A keyboard/mouse P2 leaves via the
+						// "2 PLAYER" Options-menu row instead.
+						const int p2_pad = inputDevice[1] - 3;
+						if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
+						    controller[p2_pad].action_pressed[0])
 						{
 							twoPlayerMode = false;
 							campaignCoop = false;
@@ -1199,32 +1229,12 @@ void JE_itemScreen(void)
 							}
 						}
 					}
-					else if (inputDevice[1] == 1 && inputDevice[0] != 1)
-					{
-						// Keyboard chosen for P2 (and P1 isn't also on keyboard):
-						// the ship-morph key toggles ready state. Consumed like
-						// the in-flight morph trigger's key handling so a held
-						// key doesn't repeat every frame.
-						if (keysactive[keySettings[KEY_SETTING_SHIP_MORPH]])
-						{
-							keysactive[keySettings[KEY_SETTING_SHIP_MORPH]] = false; // consume
-
-							if (coopJoinController == -1)
-							{
-								coopJoinController = COOP_JOIN_KEYBOARD;
-								JE_playSampleNum(S_CLICK);
-							}
-							else if (coopJoinController == COOP_JOIN_KEYBOARD)
-							{
-								coopJoinController = -1;
-								JE_playSampleNum(S_CLICK);
-							}
-						}
-					}
-					else
+					else if (inputDevice[1] != 1)
 					{
 						// Mouse or "any" chosen for P2: legacy behavior -- any
-						// pad that isn't P1's claims/toggles P2.
+						// pad that isn't P1's claims/toggles P2. (Keyboard P2 is
+						// excluded: it readies only via the "2 PLAYER" Options-menu
+						// row, so a stray pad press can't hijack the keyboard slot.)
 						for (int c = 0; c < controllers; c++)
 						{
 							if (c == p1_pad)
@@ -2295,15 +2305,25 @@ void JE_drawMenuChoices(void)
 			tempY -= 16;
 		}
 
-		str = malloc(strlen(menuInt[curMenu + 1][x-1])+2);
+		// The "2 PLAYER" co-op row (Task B) is a literal, not a menuInt[] string
+		// (the tyrian.hdt data file ships no string for it); it is inserted just
+		// above Done (x == 8) whenever a co-op join/leave is possible, so Done
+		// stays the last row (shifted down to x == 9).
+		const char *choice;
+		if (curMenu == MENU_OPTIONS && coopJoinEligible() && x >= 8)
+			choice = (x == 8) ? coopJoinRowLabel() : menuInt[curMenu + 1][8-1];
+		else
+			choice = menuInt[curMenu + 1][x-1];
+
+		str = malloc(strlen(choice)+2);
 		if (curSel[curMenu] == x)
 		{
 			str[0] = '~';
-			strcpy(str+1, menuInt[curMenu + 1][x-1]);
+			strcpy(str+1, choice);
 		}
 		else
 		{
-			strcpy(str, menuInt[curMenu + 1][x-1]);
+			strcpy(str, choice);
 		}
 		JE_dString(VGAScreen, 166, tempY, str, SMALL_FONT_SHAPES);
 		free(str);
@@ -2704,24 +2724,38 @@ void JE_drawMainMenuHelpText(void)
 	JE_byte temp;
 
 	temp = curSel[curMenu] - 2;
+
+	// When the "2 PLAYER" co-op row is present it sits at row 8 and Done shifts
+	// to row 9; remap Done back to its data-file help entry (the menuHelp table
+	// only covers the original 7 Options rows).
+	if (curMenu == MENU_OPTIONS && coopJoinEligible() && curSel[MENU_OPTIONS] == 9)
+		temp = 8 - 2;
+
 	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
 		int row_index = curSel[curMenu] - 2;
 		if (row_index >= 0 && (uint)row_index < COUNTOF(controller_rows) &&
 		    controller_rows[row_index].kind == ROW_DEVICE)
 		{
-			// Literal, not a mainMenuHelp[] lookup: same reasoning as the
-			// "SHIP MORPH" label above -- no room in the data file for new
-			// help-text strings.
+			// Literal, not a mainMenuHelp[] lookup: the ROW_DEVICE rows are our
+			// own additions and the data file has no room for new help strings.
 			const char *text = "Choose which device flies this player's ship.";
 			strncpy(tempStr, text, sizeof(tempStr) - 1);
 			tempStr[sizeof(tempStr) - 1] = '\0';
 		}
 		else
 		{
-			const int help[COUNTOF(controller_rows)] = { 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
+			const int help[COUNTOF(controller_rows)] = { 0, 0, 15, 15, 15, 15, 15, 15, 15, 24, 11 };
 			memcpy(tempStr, mainMenuHelp[help[curSel[curMenu] - 2]], sizeof(tempStr));
 		}
+	}
+	else if (curMenu == MENU_OPTIONS && coopJoinEligible() &&
+	         curSel[MENU_OPTIONS] == 8)
+	{
+		// Literal help for our "2 PLAYER" row (no data-file help string exists).
+		const char *text = "Add or drop a second player for co-op campaign.";
+		strncpy(tempStr, text, sizeof(tempStr) - 1);
+		tempStr[sizeof(tempStr) - 1] = '\0';
 	}
 	else if (curMenu < MENU_PLAY_NEXT_LEVEL ||
 	         curMenu == MENU_2_PLAYER_ARCADE ||
@@ -2730,7 +2764,7 @@ void JE_drawMainMenuHelpText(void)
 		memcpy(tempStr, mainMenuHelp[(menuHelp[curMenu][temp])-1], sizeof(tempStr));
 	}
 	else if (curMenu == MENU_KEYBOARD_CONFIG &&
-	         curSel[MENU_KEYBOARD_CONFIG] == 11)
+	         curSel[MENU_KEYBOARD_CONFIG] == 10)
 	{
 		memcpy(tempStr, mainMenuHelp[25-1], sizeof(tempStr));
 	}
@@ -3032,7 +3066,13 @@ void JE_menuFunction(JE_byte select)
 		case 7:
 			curMenu = MENU_KEYBOARD_CONFIG;
 			break;
-		case 8:
+		case 8:  // "2 PLAYER" co-op join/ready/leave row when present, else Done
+			if (coopJoinEligible())
+				coopJoinRowActivate();
+			else
+				curMenu = MENU_FULL_GAME;
+			break;
+		case 9:  // Done, shifted down by the "2 PLAYER" row (only reachable then)
 			curMenu = MENU_FULL_GAME;
 			break;
 		}
@@ -3067,11 +3107,11 @@ void JE_menuFunction(JE_byte select)
 		break;
 
 	case MENU_KEYBOARD_CONFIG:
-		if (curSelect == 11) /* reset to defaults */
+		if (curSelect == 10) /* reset to defaults */
 		{
 			memcpy(keySettings, defaultKeySettings, sizeof(keySettings));
 		}
-		else if (curSelect == 12) /* done */
+		else if (curSelect == 11) /* done */
 		{
 			curMenu = isNetworkGame
 				? MENU_LIMITED_OPTIONS
@@ -3088,9 +3128,8 @@ void JE_menuFunction(JE_byte select)
 			// without this the whole keyboard-config panel (labels, bound
 			// keys, help text) -- including the "waiting for key" blank this
 			// call draws -- would vanish after the loop's first present.
-			// Bake it all as persistent classic pixels instead, same idiom
-			// as JE_drawShipModeIndicator (mainint.c). Gated on hd_mode so
-			// classic rendering is untouched. See
+			// Bake it all as persistent classic pixels instead. Gated on
+			// hd_mode so classic rendering is untouched. See
 			// internal/issue/hd-keybind-menu-vanish.md.
 			bool old_force_classic = hd_font_force_classic;
 			if (hd_mode)

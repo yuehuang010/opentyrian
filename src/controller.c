@@ -258,8 +258,9 @@ void push_controllers_as_keyboard(void)
 		// above is the FIRST observer of a new press, so without the blanket
 		// reservation the joining/un-readying fire press would leak here as a
 		// synthesized "confirm" before the join poll ever sees it. (A
-		// keyboard-readied P2 stores COOP_JOIN_KEYBOARD here, which never
-		// equals a pad index c, so this check stays safe unchanged.)
+		// keyboard- or mouse-readied P2 stores COOP_JOIN_KEYBOARD /
+		// COOP_JOIN_MOUSE here, neither of which ever equals a pad index c,
+		// so this check stays safe unchanged.)
 		if (c == coopJoinController)
 			continue;
 		if (coopJoinPollActive)
@@ -615,8 +616,6 @@ void reset_controller_assignments(int c)
 
 	set_button(c, 9, 0, SDL_CONTROLLER_BUTTON_BACK);                       // pause
 
-	set_button(c, 10, 0, SDL_CONTROLLER_BUTTON_LEFTSTICK);                 // ship morph
-
 	controller[c].analog = true;
 	controller[c].sensitivity = 5;
 	controller[c].threshold = 5;
@@ -634,7 +633,6 @@ static const char* const assignment_names[] =
 	"right sidekick",
 	"menu",
 	"pause",
-	"ship morph",
 };
 
 bool load_controller_assignments(Config *config, int c)

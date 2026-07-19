@@ -1,8 +1,17 @@
 # SHIP_MODE_SWITCH_PLAN.md — single-player Fighter ⇄ Dragonwing mode switch
 
-Status: **implemented** (M0 `78905fc`, M1 `ccf2cf3`, M2 `dff2ddb`, M3 — see git
-log). Awaiting user playtest for visuals/feel; balance pass (charge rates,
-lockout length) deliberately deferred until after playtest.
+Status: **REMOVED 2026-07-18** — the user, after playtest, decided to delete the
+in-flight Fighter ⇄ Dragonwing morph entirely. All of its code (the toggle
+handler, `player_toggle_ship_mode`, the morph flash, the `JE_drawShipModeIndicator`
+HUD label, the `ship_mode_switch` config flag, and the SHIP MORPH keyboard/
+controller bindings) has been reverted from the working tree, restoring vanilla
+single-player behavior byte-for-byte. Transitioning between 1P and 2P now happens
+only at the ship-planning menu (the campaign co-op join/leave flow — see
+[COOP_JOIN_PLAN.md](COOP_JOIN_PLAN.md) and Task B of the removal). The rest of this
+document is kept for the historical record of what the feature was.
+
+Previous status (before removal): **implemented** (M0 `78905fc`, M1 `ccf2cf3`,
+M2 `dff2ddb`, M3 `60b4a68`; Fighter both-ports reversal `b33456e`).
 
 ## Goal
 

@@ -72,7 +72,6 @@ const KeySettings defaultKeySettings =
 	SDL_SCANCODE_RETURN,
 	SDL_SCANCODE_LCTRL,
 	SDL_SCANCODE_LALT,
-	SDL_SCANCODE_GRAVE,
 };
 
 static const char *const keySettingNames[] =
@@ -85,7 +84,6 @@ static const char *const keySettingNames[] =
 	"change fire",
 	"left sidekick",
 	"right sidekick",
-	"ship morph",
 };
 
 static const char defaultHighScoreNames[34][23] = /* [1..34] of string [22] */
@@ -257,8 +255,6 @@ JE_word editorLevel;   /*Initial value 800*/
 
 Config opentyrian_config;  // implicitly initialized
 
-bool ship_mode_switch_enabled = true;
-
 // Fields of TYRIAN.CFG that are preserved for compatibility
 static Uint8 inputDevice_ = 0;  // FKA inputDevice
 static Uint8 jConfigure = 0;  // FKA NortSong.jConfigure
@@ -286,8 +282,7 @@ bool load_opentyrian_config(void)
 	window_height = 0;
 	set_scaler_by_name("Scale2x");
 	memcpy(keySettings, defaultKeySettings, sizeof(keySettings));
-	ship_mode_switch_enabled = true;
-	
+
 	Config *config = &opentyrian_config;
 	
 	FILE *file = dir_fopen_warn(get_user_directory(), "opentyrian.cfg", "r");
@@ -352,12 +347,6 @@ bool load_opentyrian_config(void)
 		config_get_bool_option(section, "hd_music", &hd_music);
 	}
 
-	section = config_find_section(config, "gameplay", NULL);
-	if (section != NULL)
-	{
-		config_get_bool_option(section, "ship_mode_switch", &ship_mode_switch_enabled);
-	}
-
 	fclose(file);
 
 	return true;
@@ -406,12 +395,6 @@ bool save_opentyrian_config(void)
 
 	config_set_bool_option(section, "hd_sfx", hd_sfx, FALSE_TRUE);
 	config_set_bool_option(section, "hd_music", hd_music, FALSE_TRUE);
-
-	section = config_find_or_add_section(config, "gameplay", NULL);
-	if (section == NULL)
-		exit(EXIT_FAILURE);  // out of memory
-
-	config_set_bool_option(section, "ship_mode_switch", ship_mode_switch_enabled, FALSE_TRUE);
 
 #ifndef TARGET_WIN32
 	mkdir(get_user_directory(), 0700);

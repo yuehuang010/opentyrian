@@ -76,14 +76,6 @@ typedef struct
 	uint invulnerable_ticks;  // ticks until ship can be damaged
 	uint exploding_ticks;     // ticks until ship done exploding
 
-	// Ship-morph flash (SHIP_MODE_SWITCH_PLAN.md, phase M3): purely cosmetic,
-	// runtime-only -- NOT serialized (config.c's save/load goes field-by-field
-	// via playeritems_to_pitems/pitems_to_playeritems, never memcpy's Player).
-	// Set on player_toggle_ship_mode(), decremented once per tick in
-	// JE_playerMovement; while nonzero the ship draws with the existing
-	// invulnerability blend variant (mainint.c) purely as an OR-condition --
-	// it does not touch invulnerable_ticks or damage logic.
-	Uint8 morph_flash_ticks;
 	uint shield;
 	uint armor;
 	uint weapon_mode;
@@ -141,6 +133,5 @@ static inline bool all_players_alive(void)
 void calc_purple_balls_needed(Player *);
 bool power_up_weapon(Player *, uint port);
 void handle_got_purple_ball(Player *);
-void player_toggle_ship_mode(Player *);
 
 #endif // PLAYER_H

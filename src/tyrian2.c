@@ -798,10 +798,18 @@ start_level_first:
 		{
 			inputDevice[1] = 1; // keyboard
 
-			// Shouldn't be reachable -- the join poll only offers the keyboard
-			// gesture when inputDevice[0] != 1 -- but guard it anyway.
+			// Defensive: if P1 is also on the keyboard, move P1 off it so the two
+			// players don't share one device.
 			if (inputDevice[0] == 1)
 				inputDevice[0] = (controllers > 0) ? 3 : 2;
+		}
+		else if (coopJoinController == COOP_JOIN_MOUSE)
+		{
+			inputDevice[1] = 2; // mouse
+
+			// Defensive: if P1 is also on the mouse, move P1 off it.
+			if (inputDevice[0] == 2)
+				inputDevice[0] = (controllers > 0) ? 3 : 1;
 		}
 		else
 		{
@@ -826,7 +834,7 @@ start_level_first:
 		}
 
 		// Derive P2 from P1's purchased loadout: rear-weapon id/power stay P1's
-		// (charge gun/rate derive from it -- same rule as the solo morph, do NOT
+		// (the Dragonwing's charge gun/rate derive from the rear weapon, do NOT
 		// force Vulcan). Sidekick defaults match JE_initPlayerData's dragonwing.
 		player[1].items = player[0].items;
 		player[1].items.sidekick_level  = 101; // 101, 102, 103
@@ -840,10 +848,6 @@ start_level_first:
 
 	for (uint i = 0; i < COUNTOF(player); ++i)
 		player[i].is_alive = true;
-
-	// Single-player ship-mode switch (SHIP_MODE_SWITCH_PLAN.md): every level starts in Fighter mode.
-	if (!twoPlayerMode)
-		player[0].is_dragonwing = false;
 
 	oldDifficultyLevel = difficultyLevel;
 	if (episodeNum == EPISODE_AVAILABLE)
@@ -1018,11 +1022,6 @@ start_level_first:
 	play_song(levelSong - 1);
 
 	JE_drawPortConfigButtons();
-
-	// Single-player ship-mode indicator (SHIP_MODE_SWITCH_PLAN.md, phase M3): paint
-	// once here like the level-name text above -- persistent classic pixels (the
-	// function itself forces classic glyphs; see its comment).
-	JE_drawShipModeIndicator();
 
 	/* --- MAIN LOOP --- */
 

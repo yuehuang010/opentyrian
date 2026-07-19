@@ -63,23 +63,3 @@ void handle_got_purple_ball(Player *this_player)
 	else
 		power_up_weapon(this_player, this_player->is_dragonwing ? REAR_WEAPON : FRONT_WEAPON);
 }
-
-// Single-player Fighter <-> Dragonwing mode switch (SHIP_MODE_SWITCH_PLAN.md, phase M1).
-// Flips ship mode and resets the charge-cannon state + applies a brief fire lockout
-// so switching mid-fight isn't a free reload. weapon_mode (rear port config) is preserved.
-void player_toggle_ship_mode(Player *this_player)
-{
-	this_player->is_dragonwing = !this_player->is_dragonwing;
-
-	chargeLevel = 0;
-	chargeWait = 30;
-	shotMultiPos[SHOT_P2_CHARGE] = 0;
-
-	shotRepeat[SHOT_FRONT] = shotRepeat[SHOT_REAR] = shotRepeat[SHOT_P2_CHARGE] = 17;
-
-	// Morph feedback (phase M3): a short mechanical click (not S_POWERUP/S_ITEM --
-	// this isn't a pickup) plus a brief invulnerability-blend flash on the ship
-	// sprite (mainint.c, morph_flash_ticks), purely cosmetic.
-	JE_playSampleNum(S_CLICK);
-	this_player->morph_flash_ticks = 12;
-}

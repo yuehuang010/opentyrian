@@ -49,7 +49,7 @@ typedef struct
 	SDL_GameControllerType type; // drives Xbox vs PlayStation vs Nintendo labels
 	char name[64];                // config section key
 
-	Controller_binding assignment[11][2]; // 0-3: directions, 4-10: actions
+	Controller_binding assignment[10][2]; // 0-3: directions, 4-9: actions
 
 	bool analog;
 	int sensitivity, threshold;
@@ -59,7 +59,7 @@ typedef struct
 	bool direction[4], direction_pressed[4]; // up, right, down, left  (_pressed, for emulating key presses)
 
 	bool confirm, cancel;
-	bool action[7], action_pressed[7]; // fire, change fire, left sidekick, right sidekick, menu, pause, ship morph
+	bool action[6], action_pressed[6]; // fire, change fire, left sidekick, right sidekick, menu, pause
 
 	Uint32 controller_delay;
 	bool input_pressed;

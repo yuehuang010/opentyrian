@@ -172,23 +172,37 @@ player's device up front, and makes the join/leave gesture honor it.
   (`src/controller.c` mute check) stays correct unchanged; every `>= 0` read
   gating join/joined state (`src/game_menu.c` indicator,
   `src/tyrian2.c` activation) became `!= -1` to include the keyboard case.
-- **Device-aware join/leave gesture** (`src/game_menu.c`, the item-screen
-  join poll): the gesture now branches on `inputDevice[1]`:
-  - `>= 3` (explicit pad): only that pad (and only while it's connected and
-    isn't P1's) may claim/toggle P2 — no other pad reacts.
-  - `== 1` (keyboard) and `inputDevice[0] != 1`: the ship-morph key
-    (`KEY_SETTING_SHIP_MORPH`) toggles ready state, consumed the same way
-    the in-flight morph trigger's key press is consumed elsewhere (cleared
-    from `keysactive` so a held key doesn't repeat every frame). The morph
-    key is otherwise inert in menus, so there's no double-action risk.
-  - otherwise (mouse or "any"): unchanged legacy behavior — any pad that
-    isn't P1's claims/toggles P2.
-  The joined-at-the-shop leave branch follows the same split (morph key for
-  keyboard P2, pad check otherwise).
+- **Join/leave gesture** (`src/game_menu.c`):
+  - **Pad quick-join (retained, unchanged):** at the item screen, pressing
+    fire on a pad readies/un-readies P2. When P2's device is an explicit pad
+    (`inputDevice[1] >= 3`) only that pad reacts; when P2's device is mouse or
+    "any", any pad that isn't P1's claims/toggles P2 (legacy behavior). A
+    joined P2 whose device is a pad also leaves by pressing fire on that pad.
+  - **Keyboard/mouse now join via an explicit menu row (2026-07-18).** The old
+    keyboard join gesture reused the in-flight ship-morph key
+    (`KEY_SETTING_SHIP_MORPH`). That key was deleted along with the ship-morph
+    feature (see [SHIP_MODE_SWITCH_PLAN.md](SHIP_MODE_SWITCH_PLAN.md), removed),
+    so joining is now an explicit **"2 PLAYER"** row appended to the shop's
+    Options submenu (`MENU_OPTIONS`, `curMenu == 2`). Its label reflects state
+    (`2 PLAYER: JOIN` / `READY` / `LEAVE`) and selecting it toggles exactly the
+    state the old gestures set, honoring P2's chosen device: pad index for
+    `CONTROLLER n`, `COOP_JOIN_KEYBOARD` for keyboard, `COOP_JOIN_MOUSE` for
+    mouse. The row is shown only under the same eligibility gate as the join
+    poll (`coopJoinEligible()`), and `menuChoices[MENU_OPTIONS]` is computed
+    dynamically (8 → 9) so cursor nav, mouse hotspots, and back/esc all follow.
+    The "PLAYER 2 READY/JOINED" indicator and the menu row read the same
+    `coopJoinController`/`campaignCoop` state — no second source of truth.
+- **Mouse-P2 decision:** a new `COOP_JOIN_MOUSE` sentinel (`-3`,
+  `src/config.h`) was added alongside `COOP_JOIN_KEYBOARD`, rather than
+  reusing the keyboard path. The default device layout is `inputDevice = {1,2}`
+  (P1 keyboard, **P2 mouse**), so mouse is the *common* P2 device; folding it
+  into the keyboard sentinel would force a default-config P2 to fly with the
+  keyboard. `-3` never collides with a real pad index, so `== coopJoinController`
+  pad comparisons (`src/controller.c` mute check) stay correct unchanged.
 - **Activation** (`src/tyrian2.c`, level-launch block): if
-  `coopJoinController == COOP_JOIN_KEYBOARD`, sets `inputDevice[1] = 1`
-  directly (no pad-collision fixup needed) with a defensive fallback if
-  `inputDevice[0]` somehow also ended up on keyboard; otherwise the
+  `coopJoinController == COOP_JOIN_KEYBOARD`, sets `inputDevice[1] = 1`; if
+  `== COOP_JOIN_MOUSE`, sets `inputDevice[1] = 2` — each with a defensive
+  fallback that moves P1 off the device if P1 somehow shares it. Otherwise the
   pre-existing pad path is unchanged.
 - **No new persistence**: `inputDevice[]` already rides the existing
   per-save-slot fields (`saveFiles[].input1`/`.input2`, `src/config.c`), so
