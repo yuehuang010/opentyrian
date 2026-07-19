@@ -3195,7 +3195,9 @@ void JE_inGameDisplays(void)
 		blit_sprite2x2(VGAScreen, 25, 1, spriteSheet10, special[player[0].items.special].itemgraphic);
 
 	/*Lives Left*/
-	if (onePlayerAction || twoPlayerMode)
+	// Arcade-only overlay: campaign co-op players never respawn, so the lives
+	// icons (and their player labels) would be meaningless there.
+	if (onePlayerAction || (twoPlayerMode && !campaignCoop))
 	{
 		for (int temp = 0; temp < (onePlayerAction ? 1 : 2); temp++)
 		{

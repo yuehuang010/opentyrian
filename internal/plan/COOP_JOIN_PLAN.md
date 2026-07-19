@@ -86,9 +86,12 @@ the `'b'` autosave script command computes slot 22/11 but always saves slot
   (`game_menu.c:1089-1135`, `controller[j]` already iterated there).
   Keyboard/mouse join is deferred — the mouse shops and the keyboard is
   usually P1; a pad is the realistic second player. On press:
-  `inputDevice[1] = 2 + pad index`, arm `coopJoinPending`, draw a
-  "PLAYER 2 READY" indicator on the menu. Pressing again un-readies (leave
-  before launch).
+  `inputDevice[1] = 2 + pad index`, arm `coopJoinPending`. Pressing again
+  un-readies (leave before launch). (The "PLAYER 2 READY/JOINED" text
+  indicator this originally drew was removed 2026-07-18 — the "2 PLAYER"
+  Options-menu row's JOIN/READY/LEAVE label shows the state now. The
+  in-flight arcade lives overlay is also suppressed in campaignCoop:
+  campaign players never respawn, so it only draws in true arcade modes.)
 - **Activation at level launch** (not in the menu itself, so the shop stays
   1P-rendered during the visit): when the level starts with
   `coopJoinPending`, set `campaignCoop = twoPlayerMode = true` and init P2:

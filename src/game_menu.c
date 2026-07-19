@@ -953,20 +953,6 @@ void JE_itemScreen(void)
 
 		JE_drawMainMenuHelpText();
 
-		// Co-op join indicator (COOP_JOIN_PLAN.md C1): drawn every frame like the
-		// rest of this common block, so no HD persistence tricks are needed. Sits
-		// at (166, 20) -- the gap between the centered menu header (y=10, left of
-		// x=150) and the earliest right-column content (menu choices/cube icons
-		// start at y=38) is unused by every full-game submenu reachable while the
-		// join poll below can run (MENU_FULL_GAME, UPGRADES, UPGRADE_SUB, OPTIONS,
-		// PLAY_NEXT_LEVEL, KEYBOARD_CONFIG, CONTROLLER_CONFIG, LOAD_SAVE,
-		// DATA_CUBES, DATA_CUBE_SUB -- verified by auditing every draw call's
-		// coordinates in this file).
-		if (coopJoinController != -1) // >= 0 (pad) or COOP_JOIN_KEYBOARD
-			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 READY", 14, 1, DARKEN);
-		else if (campaignCoop && twoPlayerMode)
-			JE_textShade(VGAScreen, 166, 20, "PLAYER 2 JOINED", 14, 1, DARKEN);
-
 		if (newPal > 0) /* can't reindex this :( */
 		{
 			curPal = newPal;
