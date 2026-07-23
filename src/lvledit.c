@@ -1523,7 +1523,7 @@ static void draw_status(bool show_help)
 	if (show_help)
 	{
 		JE_outText(VGAScreen, 4, ED_HELP_Y1, "Arrows move Shift/PgUp/PgDn fast Tab layer Enter/Space place", 0, 0);
-		JE_outText(VGAScreen, 4, ED_HELP_Y2, "P pick [/] tile T panel U/R undo/redo E events F5 play S save Esc", 0, 0);
+		JE_outText(VGAScreen, 4, ED_HELP_Y2, "P pick [/] tile T panel U/R undo E event F5 fly S save Esc", 0, 0);
 	}
 }
 
@@ -2137,7 +2137,7 @@ static void draw_event_screen(bool show_help)
 	else if (show_help)
 	{
 		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y1, "Up/Dn/PgUp/PgDn/Home/End event  Click row/field  L/R field", 0, 0);
-		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "+/-(Sft=10) I ins D del R sort T panel U/Y undo/redo S save Esc", 0, 0);
+		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "+/-(Sft=10) I ins D del R sort T panel U/Y undo S save Esc", 0, 0);
 	}
 }
 
@@ -3472,8 +3472,8 @@ static void draw_script_screen(bool show_help)
 	}
 	else if (show_help)
 	{
-		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y1, "Up/Dn/PgUp/PgDn line  L/R field  +/-(Sft10) edit  Enter type  T panel", 0, 0);
-		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y2, "I ins D del [/] move  N/K sec+/-  U/Y undo/redo  S save  Esc back", 0, 0);
+		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y1, "Up/Dn/PgUp/PgDn line L/R field +/- edit Enter type T panel", 0, 0);
+		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y2, "I ins D del [/] move N/K sec+/- U/Y undo S save Esc", 0, 0);
 	}
 }
 
