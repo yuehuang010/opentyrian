@@ -9,6 +9,15 @@ placeholder. Opcode schema for the script lives in
 Usability pass **2026-07-22**: toggleable tile sidebar + undo/redo, in-app
 episode picker, level-select sort + titles (below). Queued: left mini-map
 scrollbar.
+**F1 collapses the help area** (2026-07-23): F1 already toggled the two-line
+help text off; now the freed space is handed back as content. The event and
+script list editors grow 18→20 visible rows and drop their status line to y=191
+when help is hidden (`event_rows_visible`/`event_status_y` +
+`script_rows_visible`/`script_status_y`, threaded through the draw, clamp,
+PgUp/PgDn and mouse-hit paths). The map editor can't gain a row — a 28px tile
+row won't fit in the ~19px the two help lines free — so its F1 just hides the
+text as before. Status stays at 191 (not lower) so a transient number-entry /
+insert prompt drawn at HELP_Y1 (183) never overlaps it.
 Usage: `./opentyrian --data ./tyrian21 --edit` (hidden flag, no argument --
 boots an in-app episode picker (1-4), then that episode's level-select).
 In-editor: Tab layer, T toggle tile sidebar, `[`/`]` prev/next tile slot,

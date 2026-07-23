@@ -256,6 +256,24 @@ static char level_title[ED_MAX_LEVEL_SUMMARIES][12];
 #define ED_EVENT_HELP_Y1      183
 #define ED_EVENT_HELP_Y2      191
 
+// Collapsed layout: when F1 hides the two help lines, the freed vertical space
+// is handed back to the list instead of left blank -- ROWS_VISIBLE grows by 2
+// and the status line drops toward where the help used to sit. Status sits at
+// 191 (not lower) so a transient input prompt -- number entry / insert mode,
+// always drawn at HELP_Y1 (183, spanning 183..190) -- never shares a pixel row
+// with it; the 20th list row ends at y=181, so nothing overlaps.
+#define ED_EVENT_ROWS_VISIBLE_COLLAPSED 20
+#define ED_EVENT_STATUS_Y_COLLAPSED     191
+
+static int event_rows_visible(bool show_help)
+{
+	return show_help ? ED_EVENT_ROWS_VISIBLE : ED_EVENT_ROWS_VISIBLE_COLLAPSED;
+}
+static int event_status_y(bool show_help)
+{
+	return show_help ? ED_EVENT_STATUS_Y : ED_EVENT_STATUS_Y_COLLAPSED;
+}
+
 static int event_sel = 0;
 static int event_scroll = 0;
 
@@ -2050,8 +2068,9 @@ static bool current_inspector_field(ef_field *out)
 	return true;
 }
 
-static void clamp_event_view(void)
+static void clamp_event_view(bool show_help)
 {
+	int rows = event_rows_visible(show_help);
 	int count = cur_level.event_count;
 
 	if (count == 0)
@@ -2066,9 +2085,9 @@ static void clamp_event_view(void)
 	if (event_sel >= count) event_sel = count - 1;
 
 	if (event_sel < event_scroll) event_scroll = event_sel;
-	if (event_sel >= event_scroll + ED_EVENT_ROWS_VISIBLE) event_scroll = event_sel - ED_EVENT_ROWS_VISIBLE + 1;
+	if (event_sel >= event_scroll + rows) event_scroll = event_sel - rows + 1;
 
-	int max_scroll = count > ED_EVENT_ROWS_VISIBLE ? count - ED_EVENT_ROWS_VISIBLE : 0;
+	int max_scroll = count > rows ? count - rows : 0;
 	if (event_scroll > max_scroll) event_scroll = max_scroll;
 	if (event_scroll < 0) event_scroll = 0;
 
@@ -2100,7 +2119,7 @@ static void draw_event_screen(bool show_help)
 	// divider uses (see draw_map_viewport()'s divider_x). Only when the
 	// inspector sidecar is open (T); closed, the list owns the full width.
 	if (event_sidebar_open)
-		fill_rectangle_xy(VGAScreen, ED_EVENT_DIVIDER_X, 0, ED_EVENT_DIVIDER_X, ED_EVENT_STATUS_Y - 4, 8);
+		fill_rectangle_xy(VGAScreen, ED_EVENT_DIVIDER_X, 0, ED_EVENT_DIVIDER_X, event_status_y(show_help) - 4, 8);
 
 	int count = cur_level.event_count;
 
@@ -2110,7 +2129,7 @@ static void draw_event_screen(bool show_help)
 	}
 	else
 	{
-		for (int row = 0; row < ED_EVENT_ROWS_VISIBLE; ++row)
+		for (int row = 0; row < event_rows_visible(show_help); ++row)
 		{
 			int idx = event_scroll + row;
 			if (idx >= count)
@@ -2126,7 +2145,7 @@ static void draw_event_screen(bool show_help)
 	char status[96];
 	snprintf(status, sizeof(status), "Event %d/%d (cap %d)%s", count > 0 ? event_sel : -1, count, LVLEDIT_MAX_EVENT,
 	         level_dirty ? "  *unsaved*" : "");
-	JE_outText(VGAScreen, 4, ED_EVENT_STATUS_Y, status, 0, 2);
+	JE_outText(VGAScreen, 4, event_status_y(show_help), status, 0, 2);
 
 	if (entering_number)
 	{
@@ -2298,7 +2317,7 @@ static void run_event_editor(void)
 		event_sel = best;
 	}
 
-	clamp_event_view();
+	clamp_event_view(show_help);
 
 	for (;;)
 	{
@@ -2364,10 +2383,10 @@ static void run_event_editor(void)
 				event_sel += 1;
 				break;
 			case SDL_SCANCODE_PAGEUP:
-				event_sel -= ED_EVENT_ROWS_VISIBLE;
+				event_sel -= event_rows_visible(show_help);
 				break;
 			case SDL_SCANCODE_PAGEDOWN:
-				event_sel += ED_EVENT_ROWS_VISIBLE;
+				event_sel += event_rows_visible(show_help);
 				break;
 			case SDL_SCANCODE_HOME:
 				event_sel = 0;
@@ -2477,7 +2496,7 @@ static void run_event_editor(void)
 				if (undo_apply())
 				{
 					level_dirty = true;
-					clamp_event_view();
+					clamp_event_view(show_help);
 					show_message("UNDO", 20);
 				}
 				else
@@ -2492,7 +2511,7 @@ static void run_event_editor(void)
 				if (redo_apply())
 				{
 					level_dirty = true;
-					clamp_event_view();
+					clamp_event_view(show_help);
 					show_message("REDO", 20);
 				}
 				else
@@ -2537,7 +2556,7 @@ static void run_event_editor(void)
 					// math as before, minus the old column->field mapping
 					// (there's nothing to edit on this side anymore; that's
 					// the RIGHT inspector's job, just below).
-					if (row < 0 || row >= ED_EVENT_ROWS_VISIBLE)
+					if (row < 0 || row >= event_rows_visible(show_help))
 						continue;
 					int idx = event_scroll + row;
 					if (idx >= cur_level.event_count)
@@ -2560,7 +2579,7 @@ static void run_event_editor(void)
 			event_sel -= take_wheel_step();
 		}
 
-		clamp_event_view();
+		clamp_event_view(show_help);
 
 		draw_event_screen(show_help);
 		maybe_save_screenshot();
@@ -3130,6 +3149,21 @@ static int row_for_archive_index(int archive_index)
 #define ED_SCRIPT_HELP_Y1       183
 #define ED_SCRIPT_HELP_Y2       191
 
+// Collapsed layout: F1 hides the two help lines and the freed rows go back to
+// the list (see the matching ED_EVENT_*_COLLAPSED note above). Status at 191
+// clears the transient insert/entry prompt drawn at HELP_Y1 (183).
+#define ED_SCRIPT_ROWS_VISIBLE_COLLAPSED 20
+#define ED_SCRIPT_STATUS_Y_COLLAPSED     191
+
+static int script_rows_visible(bool show_help)
+{
+	return show_help ? ED_SCRIPT_ROWS_VISIBLE : ED_SCRIPT_ROWS_VISIBLE_COLLAPSED;
+}
+static int script_status_y(bool show_help)
+{
+	return show_help ? ED_SCRIPT_STATUS_Y : ED_SCRIPT_STATUS_Y_COLLAPSED;
+}
+
 // The document is ~1 MB (LVLEDIT_SCRIPT_MAX_LINES * MAX_LINE); file-static, not
 // on any stack frame, per the plan's explicit instruction.
 static script_doc script_doc_v;
@@ -3393,8 +3427,9 @@ static void draw_script_inspector(void)
 // Clamps selection/scroll/field cursor to the live document, same shape as
 // clamp_event_view(): selection in range, scroll follows selection, and the
 // field cursor re-clamped to the selected line's (variable) field count.
-static void clamp_script_view(void)
+static void clamp_script_view(bool show_help)
 {
+	int rows = script_rows_visible(show_help);
 	int count = script_doc_v.line_count;
 
 	if (count == 0)
@@ -3407,9 +3442,9 @@ static void clamp_script_view(void)
 	if (script_sel >= count) script_sel = count - 1;
 
 	if (script_sel < script_scroll) script_scroll = script_sel;
-	if (script_sel >= script_scroll + ED_SCRIPT_ROWS_VISIBLE) script_scroll = script_sel - ED_SCRIPT_ROWS_VISIBLE + 1;
+	if (script_sel >= script_scroll + rows) script_scroll = script_sel - rows + 1;
 
-	int max_scroll = count > ED_SCRIPT_ROWS_VISIBLE ? count - ED_SCRIPT_ROWS_VISIBLE : 0;
+	int max_scroll = count > rows ? count - rows : 0;
 	if (script_scroll > max_scroll) script_scroll = max_scroll;
 	if (script_scroll < 0) script_scroll = 0;
 
@@ -3431,7 +3466,7 @@ static void draw_script_screen(bool show_help)
 	JE_outText(VGAScreen, 6, 13, "LINE", 0, 2);
 
 	if (script_inspector_open)
-		fill_rectangle_xy(VGAScreen, ED_SCRIPT_DIVIDER_X, 0, ED_SCRIPT_DIVIDER_X, ED_SCRIPT_STATUS_Y - 4, 8);
+		fill_rectangle_xy(VGAScreen, ED_SCRIPT_DIVIDER_X, 0, ED_SCRIPT_DIVIDER_X, script_status_y(show_help) - 4, 8);
 
 	int count = script_doc_v.line_count;
 	if (count == 0)
@@ -3440,7 +3475,7 @@ static void draw_script_screen(bool show_help)
 	}
 	else
 	{
-		for (int row = 0; row < ED_SCRIPT_ROWS_VISIBLE; ++row)
+		for (int row = 0; row < script_rows_visible(show_help); ++row)
 		{
 			int idx = script_scroll + row;
 			if (idx >= count)
@@ -3456,7 +3491,7 @@ static void draw_script_screen(bool show_help)
 	snprintf(status, sizeof(status), "Line %d/%d  sec %d/%d%s", count > 0 ? script_sel : -1, count,
 	         script_current_section(script_sel), lvledit_script_section_count(&script_doc_v),
 	         script_dirty ? "  *unsaved*" : "");
-	JE_outText(VGAScreen, 4, ED_SCRIPT_STATUS_Y, status, 0, 2);
+	JE_outText(VGAScreen, 4, script_status_y(show_help), status, 0, 2);
 
 	if (script_insert_mode)
 	{
@@ -3588,7 +3623,7 @@ static void run_script_editor(int episode)
 		handleSdlEvents();
 
 		script_recompute_children();
-		clamp_script_view();
+		clamp_script_view(show_help);
 
 		bool quit = false;
 
@@ -3682,10 +3717,10 @@ static void run_script_editor(int episode)
 				break;
 
 			case SDL_SCANCODE_PAGEUP:
-				script_sel -= ED_SCRIPT_ROWS_VISIBLE;
+				script_sel -= script_rows_visible(show_help);
 				break;
 			case SDL_SCANCODE_PAGEDOWN:
-				script_sel += ED_SCRIPT_ROWS_VISIBLE;
+				script_sel += script_rows_visible(show_help);
 				break;
 			case SDL_SCANCODE_HOME:
 				script_sel = 0;
@@ -3876,7 +3911,7 @@ static void run_script_editor(int episode)
 				if (mi.y < ED_SCRIPT_ROW_Y0)
 					continue;
 				int row = (mi.y - ED_SCRIPT_ROW_Y0) / ED_SCRIPT_ROW_H;
-				if (row < 0 || row >= ED_SCRIPT_ROWS_VISIBLE)
+				if (row < 0 || row >= script_rows_visible(show_help))
 					continue;
 
 				if (!script_inspector_open || mi.x < ED_SCRIPT_DIVIDER_X)
@@ -3897,7 +3932,7 @@ static void run_script_editor(int episode)
 			script_sel -= take_wheel_step();
 		}
 
-		clamp_script_view();
+		clamp_script_view(show_help);
 
 		draw_script_screen(show_help);
 		maybe_save_screenshot();
@@ -4585,7 +4620,7 @@ void lvledit_dump_screens(int episode, int level_index)
 	// Event editor, first page.
 	event_sel = 0;
 	event_scroll = 0;
-	clamp_event_view();
+	clamp_event_view(show_help);
 
 	draw_event_screen(show_help);
 	JE_showVGA();
