@@ -241,7 +241,16 @@ static char level_title[ED_MAX_LEVEL_SUMMARIES][12];
 
 static int event_sel = 0;
 static int event_scroll = 0;
-static int event_field = 0;  // 0..7: time, type, dat, dat2, dat3, dat4, dat5, dat6
+
+// Index into the SELECTED event's inspector field list (built fresh each
+// time by build_inspector_fields(), just above) -- entry 0 is always TIME,
+// entry 1 always TYPE, and entries 2.. are that event's schema fields (or
+// the raw dat..dat6 fallback for a type the schema table doesn't cover).
+// NOT a raw 0..7 field id anymore -- clamp_event_view() re-clamps this to
+// the current event's list length every frame, since switching to a
+// shorter-schema type (directly, or by editing TYPE) can shrink it out from
+// under an in-range cursor.
+static int event_field = 0;
 
 static bool entering_number = false;
 static char number_entry_buf[8];
@@ -345,6 +354,481 @@ static const char *event_type_name(int type)
 		return "?";
 
 	return names[type];
+}
+
+// Field ranges, matching lvledit_event's on-disk types (lvledit_io.h).
+// Moved up here (out of the "Event editor screen" section below, where
+// these historically lived) because the schema/inspector machinery just
+// below reuses them directly -- see the schema section's own comment for
+// why it reuses rather than duplicates get/set/range/undo.
+static void event_field_range(int field, long *out_min, long *out_max)
+{
+	switch (field)
+	{
+	case 0: *out_min = 0;      *out_max = 65535; break;  // time  (u16)
+	case 1: *out_min = 0;      *out_max = 255;   break;  // type  (u8)
+	case 2: *out_min = -32768; *out_max = 32767; break;  // dat   (s16)
+	case 3: *out_min = -32768; *out_max = 32767; break;  // dat2  (s16)
+	case 4: *out_min = -128;   *out_max = 127;   break;  // dat3  (s8)
+	case 5: *out_min = 0;      *out_max = 255;   break;  // dat4  (u8)
+	case 6: *out_min = -128;   *out_max = 127;   break;  // dat5  (s8)
+	default:
+	case 7: *out_min = -128;   *out_max = 127;   break;  // dat6  (s8)
+	}
+}
+
+static long event_field_get(const lvledit_event *ev, int field)
+{
+	switch (field)
+	{
+	case 0:  return ev->time;
+	case 1:  return ev->type;
+	case 2:  return ev->dat;
+	case 3:  return ev->dat2;
+	case 4:  return ev->dat3;
+	case 5:  return ev->dat4;
+	case 6:  return ev->dat5;
+	default:
+	case 7:  return ev->dat6;
+	}
+}
+
+static void event_field_set(lvledit_event *ev, int field, long v)
+{
+	long lo, hi;
+	event_field_range(field, &lo, &hi);
+	if (v < lo) v = lo;
+	if (v > hi) v = hi;
+
+	switch (field)
+	{
+	case 0: ev->time = (Uint16)v; break;
+	case 1: ev->type = (Uint8)v;  break;
+	case 2: ev->dat  = (Sint16)v; break;
+	case 3: ev->dat2 = (Sint16)v; break;
+	case 4: ev->dat3 = (Sint8)v;  break;
+	case 5: ev->dat4 = (Uint8)v;  break;
+	case 6: ev->dat5 = (Sint8)v;  break;
+	case 7: ev->dat6 = (Sint8)v;  break;
+	}
+}
+
+// ---------------------------------------------------------------------
+// Event field schema (Phase E2.1: semantic event editor)
+// ---------------------------------------------------------------------
+//
+// The raw event record is 8 generic fields (time, type, dat..dat6 -- see
+// event_field_get/set/range() just above); on its own "dat3=-1"
+// means nothing to a human. This table maps each event TYPE to the subset
+// of dat fields JE_eventSystem() (tyrian2.c, cases ~4599-5457) actually
+// reads for that type, with a short human label and (for the handful of
+// true booleans/small enums) a name for each value.
+//
+// This is purely a display/edit convenience layered on top of the existing
+// event_field_get/set/range() -- every field it exposes is still read and
+// written through those exact functions, so it can never change what ends
+// up on disk (save_current_level()/lvledit_io.c are untouched). If a
+// mapping below ever looks wrong, JE_eventSystem()'s switch is the ground
+// truth, not this table.
+
+// EF_ENUM is used sparingly, for the clear small enums (type 4's layer
+// choice, type 11's end mode, type 12's spawn layer, and the plain on/off
+// toggles) -- everywhere else a field just reads as a signed/unsigned
+// number (EF_INT), which is the honest thing to show when the reference
+// doesn't name a closed set of values.
+typedef enum { EF_INT, EF_ENUM } ef_kind;
+
+// One named value of an EF_ENUM field, e.g. { 1, "Force End" }.
+typedef struct
+{
+	long        value;
+	const char *name;
+} ef_enumval;
+
+// One field a given event TYPE exposes in the inspector. `field_id` is one
+// of event_field_get/set/range()'s own ids (2=dat .. 7=dat6 -- mind the
+// disk-order quirk noted on those functions below), so editing a schema
+// field always goes through the existing, already-clamped get/set/range/
+// undo machinery; this struct only adds a label and (optionally) an enum
+// decoding on top of that.
+typedef struct
+{
+	int               field_id;
+	const char       *label;      // <=10 chars: the sidebar is ~104px wide
+	ef_kind           kind;
+	const ef_enumval *enums;      // NULL unless kind==EF_ENUM
+	int               enum_count;
+} ef_field;
+
+// The set of fields (in display order) a given TYPE uses, or {NULL,0} for a
+// type that genuinely takes no dat fields at all (e.g. "BG MOVE RESET").
+// NOT the same thing as a type this table doesn't cover -- see
+// event_schema_for()'s NULL return, which raw-fallback handles separately.
+typedef struct
+{
+	const ef_field *fields;
+	int              field_count;
+} ef_schema;
+
+// Shorthand for the two kinds of table entry above.
+#define EF(id, label)          { (id), (label), EF_INT,  NULL, 0 }
+#define EFE(id, label, enumar) { (id), (label), EF_ENUM, (enumar), (int)COUNTOF(enumar) }
+
+// --- small enums (see the spec list: types 4, 11, 12, and the plain on/off
+// toggles 53, 60(dat2), 65, 67, 68, 72, 73) --------------------------------
+
+// Type 4 (STOP BG): dat selects which background layer keeps scrolling; 0
+// and 1 both mean "layer 1" (JE_eventSystem() doesn't distinguish them).
+static const ef_enumval en_stopbg_layer[] =
+{
+	{ 0, "Layer 1" }, { 1, "Layer 1" }, { 2, "Layer 2" }, { 3, "Layer 3" },
+};
+
+// Type 11 (END LEVEL): dat==1 forces an immediate end; anything else starts
+// the normal end sequence. Only 1 and 0 are named; any other stored value
+// (never written by this editor, but tolerated on read) just falls back to
+// showing the raw number -- see ef_enum_name()'s "no match" case.
+static const ef_enumval en_endmode[] =
+{
+	{ 1, "Force End" }, { 0, "Normal" },
+};
+
+// Type 12 (GROUND 4X4): dat6 picks the spawn layer/offset, then
+// JE_eventSystem() zeroes dat6 back to 0 right after spawning -- so from
+// the editor's POV this is a "which layer" choice made at edit time, same
+// as the enemyOffset the plain spawn types (6/7/10/15/etc.) bake in as a
+// literal 0/25/50/75 rather than a stored field.
+static const ef_enumval en_spawnlayer[] =
+{
+	{ 0, "Ground" }, { 1, "Ground" }, { 2, "Sky" }, { 3, "Top" }, { 4, "Ground2" },
+};
+
+// The plain on/off toggle types differ only in which raw value means "on"
+// vs "off"; three small tables cover every one of them.
+static const ef_enumval en_onoff_1on[] = { { 1, "On" }, { 0, "Off" } };   // types 60(dat2),67,68,72,73
+static const ef_enumval en_onoff_0on[] = { { 0, "On" }, { 1, "Off" } };   // type 65
+static const ef_enumval en_off99[]     = { { 99, "Off" }, { 0, "On" } };  // type 53 (99 is the off sentinel)
+
+// --- field sets shared verbatim across several types ----------------------
+
+// Types 6,7,10,15 (Ground/Top/Ground2/Sky enemy spawn) and their
+// "...Bottom" variants 17,18,23, which only change how dat5 combines with a
+// fixed Y base inside JE_createNewEventEnemy() -- the same six fields
+// either way, per JE_createNewEventEnemy()'s dat->dat6 reading (see the
+// reference doc's header note).
+static const ef_field fl_enemy_spawn[] =
+{
+	EF(2, "Enemy #"), EF(3, "X pos"), EF(4, "Y vel"),
+	EF(5, "Link"),    EF(6, "Y off"), EF(7, "Move"),
+};
+
+// Types 32,56: forced-bottom spawn variants where JE_eventSystem() sets ey
+// to a fixed constant, so dat5 (Y off) is read but never applied -- omitted
+// here rather than shown as a field that visibly does nothing.
+static const ef_field fl_enemy_spawn_noyoff[] =
+{
+	EF(2, "Enemy #"), EF(3, "X pos"), EF(4, "Y vel"),
+	EF(5, "Link"),    EF(7, "Move"),
+};
+
+// Types 49-52 (Custom Ground/Sky/Top/Ground2 enemy): a temporary-override
+// spawn that restores dat/dat3/dat6 afterward, but from the editor's point
+// of view it's just these six fields.
+static const ef_field fl_enemy_custom[] =
+{
+	EF(2, "Graphic"), EF(3, "X pos"), EF(4, "Shape Idx"),
+	EF(5, "Link"),    EF(6, "Y off"), EF(7, "Armor"),
+};
+
+// Types 2,30: identical background-speed triple (30 is the same effect
+// without type 2's extra guard/reset-delay logic).
+static const ef_field fl_bg_speed[] =
+{
+	EF(2, "BG1 Spd"), EF(3, "BG2 Spd"), EF(4, "BG3 Spd"),
+};
+
+// Types 33,45 (Enemy From Other Enemies; 45 is the arcade-only variant).
+static const ef_field fl_enemy_diefrom[] =
+{
+	EF(2, "Spawn Die"), EF(5, "Link"),
+};
+
+// Types 25,47 (Enemy Global Damage set: difficulty-scaled vs. direct).
+static const ef_field fl_enemy_armor[] =
+{
+	EF(2, "Armor"), EF(5, "Link"),
+};
+
+// --- one-off field sets, one per type --------------------------------------
+
+static const ef_field fl_1[]  = { EF(2, "Speed") };                                                                    // STARFIELD SPD
+static const ef_field fl_4[]  = { EFE(2, "Layer", en_stopbg_layer) };                                                  // STOP BG
+static const ef_field fl_5[]  = { EF(2, "Bank 1"), EF(3, "Bank 2"), EF(4, "Bank 3"), EF(5, "Bank 4") };                // ENEMY SHAPES
+static const ef_field fl_11[] = { EFE(2, "End Mode", en_endmode) };                                                    // END LEVEL
+static const ef_field fl_12[] = { EF(2, "Enemy #"), EF(3, "X pos"), EF(4, "Y vel"), EF(5, "Link"), EF(6, "Y off"), EFE(7, "Layer", en_spawnlayer) }; // GROUND 4X4
+static const ef_field fl_16[] = { EF(2, "Window") };                                                                   // TEXT WINDOW
+static const ef_field fl_19[] = { EF(2, "X vel"), EF(3, "Y vel"), EF(4, "Scope"), EF(5, "Link"), EF(6, "Cycle"), EF(7, "Move") };  // ENEMY GLB MOVE
+static const ef_field fl_20[] = { EF(2, "X acc"), EF(3, "Y acc"), EF(4, "Scope"), EF(5, "Link"), EF(6, "Cycle"), EF(7, "Anim") };  // ENEMY GLB ACC
+static const ef_field fl_24[] = { EF(2, "Anim"), EF(3, "Cycle"), EF(4, "Mode"), EF(5, "Link") };                       // ENEMY GLB ANIM
+static const ef_field fl_26[] = { EF(2, "Adjust") };                                                                   // SM ENEMY ADJ
+static const ef_field fl_27[] = { EF(2, "X rev"), EF(3, "Y rev"), EF(4, "Scope"), EF(5, "Link") };                     // ENEMY GLB ACCR
+static const ef_field fl_31[] = { EF(2, "Freq 1"), EF(3, "Freq 2"), EF(4, "Freq 3"), EF(5, "Link"), EF(6, "LnchFreq") }; // ENEMY FIRE OVR
+static const ef_field fl_35[] = { EF(2, "Song") };                                                                     // PLAY SONG
+static const ef_field fl_37[] = { EF(2, "Freq") };                                                                     // ENEMY FREQ
+static const ef_field fl_38[] = { EF(2, "Tgt Time") };                                                                 // JUMP TO TIME
+static const ef_field fl_39[] = { EF(2, "Old Link"), EF(3, "New Link") };                                              // ENEMY LINK CHG
+static const ef_field fl_41[] = { EF(2, "Scope") };                                                                    // ENEMY AVAIL RST
+static const ef_field fl_43[] = { EF(2, "BG2 Over") };                                                                 // BG2 OVER
+static const ef_field fl_44[] = { EF(2, "Filter"), EF(3, "LvlFilter"), EF(4, "Bright"), EF(5, "TgtFilt"), EF(6, "BrtStep"), EF(7, "FadeStart") }; // SCREEN FILTER
+static const ef_field fl_46[] = { EF(2, "DiffDelta"), EF(3, "Gate"), EF(4, "DmgRate") };                               // DIFFICULTY CHG
+static const ef_field fl_53[] = { EFE(2, "State", en_off99) };                                                         // FORCE EVENTS
+static const ef_field fl_54[] = { EF(2, "Jump To") };                                                                  // EVENT JUMP
+static const ef_field fl_55[] = { EF(2, "X Accel"), EF(3, "Y Accel"), EF(4, "Scope"), EF(5, "Link") };                 // ENEMY GLB ACC2
+static const ef_field fl_57[] = { EF(2, "Value") };                                                                    // ENEMY254 JUMP
+static const ef_field fl_60[] = { EF(2, "Flag #"), EFE(3, "Value", en_onoff_1on), EF(5, "Link") };                     // ENEMY SPECIAL
+static const ef_field fl_61[] = { EF(2, "Flag #"), EF(3, "Compare"), EF(4, "Skip") };                                  // FLAG SKIP
+static const ef_field fl_62[] = { EF(2, "Sound") };                                                                    // PLAY SOUND
+static const ef_field fl_63[] = { EF(2, "Skip") };                                                                     // SKIP NOT 2P
+static const ef_field fl_64[] = { EF(2, "Index"), EF(3, "Value"), EF(4, "Extra") };                                    // SMOOTHIE
+static const ef_field fl_65[] = { EFE(2, "State", en_onoff_0on) };                                                     // BG3 X1
+static const ef_field fl_66[] = { EF(2, "Diff Thr"), EF(3, "Skip") };                                                  // SKIP DIFFCLTY
+static const ef_field fl_67[] = { EFE(2, "Timer", en_onoff_1on), EF(3, "Jump To"), EF(4, "Ticks") };                   // LEVEL TIMER
+static const ef_field fl_68[] = { EFE(2, "State", en_onoff_1on) };                                                     // RANDOM EXPLODE
+static const ef_field fl_69[] = { EF(2, "Ticks") };                                                                    // PLAYER INVULN
+static const ef_field fl_70[] = { EF(2, "Jump To"), EF(3, "Mode"), EF(4, "Type A"), EF(5, "Type B") };                 // JUMP IF GONE
+static const ef_field fl_71[] = { EF(2, "Jump To"), EF(3, "Map Y") };                                                  // JUMP MAPY POS
+static const ef_field fl_72[] = { EFE(2, "State", en_onoff_1on) };                                                     // BG3 X1B
+static const ef_field fl_73[] = { EFE(2, "State", en_onoff_1on) };                                                     // SKY OVER ALL
+static const ef_field fl_74[] = { EF(2, "X Max"), EF(3, "Y Max"), EF(5, "Link"), EF(6, "X Min"), EF(7, "Y Min") };     // ENEMY GLB BNCE
+static const ef_field fl_75[] = { EF(2, "Link Lo"), EF(3, "Link Hi"), EF(4, "Var Slot"), EF(5, "Skip") };              // RAND LINK PICK
+static const ef_field fl_77[] = { EF(2, "BG1 Off"), EF(3, "BG2 Off") };                                                // MAPY POS SET
+static const ef_field fl_79[] = { EF(2, "Bar0 Link"), EF(3, "Bar1 Link") };                                            // BOSS BAR LINK
+static const ef_field fl_80[] = { EF(2, "Skip") };                                                                     // SKIP IF 2P
+static const ef_field fl_81[] = { EF(2, "Wrap Start"), EF(3, "Wrap End") };                                            // WRAP2
+static const ef_field fl_82[] = { EF(2, "Weapon") };                                                                   // GIVE SPECIAL
+
+// Generic raw fallback: dat..dat6 as plain "dat".."dat6" rows. Used for any
+// type event_schema_for() returns NULL for (currently just 58 and 59, which
+// JE_eventSystem()'s switch never handles at all -- see the reference doc's
+// closing note) -- this guarantees every field of every event stays
+// reachable even for a type this table doesn't know the meaning of.
+static const ef_field fl_raw_fallback[] =
+{
+	EF(2, "dat"), EF(3, "dat2"), EF(4, "dat3"), EF(5, "dat4"), EF(6, "dat5"), EF(7, "dat6"),
+};
+
+// Maps an event TYPE to its ef_schema, or NULL if this table doesn't cover
+// the type at all (event_summary()/build_inspector_fields() then fall back
+// to fl_raw_fallback above). A schema with field_count==0 is a *confirmed*
+// "no fields" type (JE_eventSystem() reads none of dat..dat6 for it) --
+// deliberately distinct from the NULL/unmapped case.
+//
+// A lookup function rather than a plain indexed table (the two alternatives
+// the spec allows) because C's array designated-initializer defaults would
+// otherwise make "not covered" indistinguishable from "confirmed 0 fields"
+// (both zero-initialize to {NULL,0}); a switch keeps that distinction
+// explicit at each case.
+static const ef_schema *event_schema_for(int type)
+{
+	static const ef_schema empty = { NULL, 0 };
+
+#define SCHEMA(arr) do { static const ef_schema s = { (arr), (int)COUNTOF(arr) }; return &s; } while (0)
+
+	switch (type)
+	{
+	case 1:  SCHEMA(fl_1);
+	case 2:  SCHEMA(fl_bg_speed);
+	case 3:  return &empty;
+	case 4:  SCHEMA(fl_4);
+	case 5:  SCHEMA(fl_5);
+	case 6:  SCHEMA(fl_enemy_spawn);
+	case 7:  SCHEMA(fl_enemy_spawn);
+	case 8:  return &empty;
+	case 9:  return &empty;
+	case 10: SCHEMA(fl_enemy_spawn);
+	case 11: SCHEMA(fl_11);
+	case 12: SCHEMA(fl_12);
+	case 13: return &empty;
+	case 14: return &empty;
+	case 15: SCHEMA(fl_enemy_spawn);
+	case 16: SCHEMA(fl_16);
+	case 17: SCHEMA(fl_enemy_spawn);
+	case 18: SCHEMA(fl_enemy_spawn);
+	case 19: SCHEMA(fl_19);
+	case 20: SCHEMA(fl_20);
+	case 21: return &empty;
+	case 22: return &empty;
+	case 23: SCHEMA(fl_enemy_spawn);
+	case 24: SCHEMA(fl_24);
+	case 25: SCHEMA(fl_enemy_armor);
+	case 26: SCHEMA(fl_26);
+	case 27: SCHEMA(fl_27);
+	case 28: return &empty;
+	case 29: return &empty;
+	case 30: SCHEMA(fl_bg_speed);
+	case 31: SCHEMA(fl_31);
+	case 32: SCHEMA(fl_enemy_spawn_noyoff);
+	case 33: SCHEMA(fl_enemy_diefrom);
+	case 34: return &empty;
+	case 35: SCHEMA(fl_35);
+	case 36: return &empty;
+	case 37: SCHEMA(fl_37);
+	case 38: SCHEMA(fl_38);
+	case 39: SCHEMA(fl_39);
+	case 40: return &empty;
+	case 41: SCHEMA(fl_41);
+	case 42: return &empty;
+	case 43: SCHEMA(fl_43);
+	case 44: SCHEMA(fl_44);
+	case 45: SCHEMA(fl_enemy_diefrom);
+	case 46: SCHEMA(fl_46);
+	case 47: SCHEMA(fl_enemy_armor);
+	case 48: return &empty;
+	case 49: SCHEMA(fl_enemy_custom);
+	case 50: SCHEMA(fl_enemy_custom);
+	case 51: SCHEMA(fl_enemy_custom);
+	case 52: SCHEMA(fl_enemy_custom);
+	case 53: SCHEMA(fl_53);
+	case 54: SCHEMA(fl_54);
+	case 55: SCHEMA(fl_55);
+	case 56: SCHEMA(fl_enemy_spawn_noyoff);
+	case 57: SCHEMA(fl_57);
+	// 58,59: genuinely not handled by JE_eventSystem()'s switch -- fall
+	// through to the raw dat..dat6 fallback (default, below).
+	case 60: SCHEMA(fl_60);
+	case 61: SCHEMA(fl_61);
+	case 62: SCHEMA(fl_62);
+	case 63: SCHEMA(fl_63);
+	case 64: SCHEMA(fl_64);
+	case 65: SCHEMA(fl_65);
+	case 66: SCHEMA(fl_66);
+	case 67: SCHEMA(fl_67);
+	case 68: SCHEMA(fl_68);
+	case 69: SCHEMA(fl_69);
+	case 70: SCHEMA(fl_70);
+	case 71: SCHEMA(fl_71);
+	case 72: SCHEMA(fl_72);
+	case 73: SCHEMA(fl_73);
+	case 74: SCHEMA(fl_74);
+	case 75: SCHEMA(fl_75);
+	case 76: return &empty;
+	case 77: SCHEMA(fl_77);
+	case 78: return &empty;
+	case 79: SCHEMA(fl_79);
+	case 80: SCHEMA(fl_80);
+	case 81: SCHEMA(fl_81);
+	case 82: SCHEMA(fl_82);
+	default: return NULL;  // unmapped (58, 59, 0, or >82) -> raw fallback
+	}
+
+#undef SCHEMA
+}
+
+// Returns the enum member name matching `v`, or NULL if none match (the
+// caller then falls back to printing the raw number -- see ef_format_value).
+static const char *ef_enum_name(const ef_field *f, long v)
+{
+	for (int i = 0; i < f->enum_count; ++i)
+		if (f->enums[i].value == v)
+			return f->enums[i].name;
+
+	return NULL;
+}
+
+// Formats field `f`'s current value on `ev`: the decoded enum name if it's
+// an EF_ENUM field and the stored value matches one of its entries,
+// otherwise the plain signed decimal (which also covers every EF_INT field,
+// and any EF_ENUM value the enum table doesn't happen to name).
+static void ef_format_value(const lvledit_event *ev, const ef_field *f, char *buf, size_t buf_sz)
+{
+	long v = event_field_get(ev, f->field_id);
+
+	if (f->kind == EF_ENUM)
+	{
+		const char *name = ef_enum_name(f, v);
+		if (name != NULL)
+		{
+			snprintf(buf, buf_sz, "%s", name);
+			return;
+		}
+	}
+
+	snprintf(buf, buf_sz, "%ld", v);
+}
+
+// TIME and TYPE are always the first two inspector rows, ahead of whatever
+// the schema (or raw fallback) contributes -- editing TYPE changes which
+// schema applies, so the rest of the list is rebuilt fresh every call
+// rather than cached.
+#define ED_EVENT_MAX_INSPECTOR_FIELDS (2 + 6)  // TIME, TYPE, + up to 6 dat fields
+
+// Builds the ordered field list the inspector sidebar shows/edits for `ev`
+// into `out` (caller-owned, must hold at least ED_EVENT_MAX_INSPECTOR_
+// FIELDS entries) and returns how many entries it wrote. Always >=2: TIME
+// and TYPE are unconditional, followed by either ev->type's schema fields
+// or (event_schema_for() returned NULL) the raw dat..dat6 fallback -- see
+// event_schema_for()'s own comment for what "returned NULL" means here.
+static int build_inspector_fields(const lvledit_event *ev, ef_field out[ED_EVENT_MAX_INSPECTOR_FIELDS])
+{
+	static const ef_field f_time = EF(0, "Time");
+	static const ef_field f_type = EF(1, "Type");
+
+	int n = 0;
+	out[n++] = f_time;
+	out[n++] = f_type;
+
+	const ef_schema *schema = event_schema_for(ev->type);
+
+	if (schema != NULL)
+	{
+		for (int i = 0; i < schema->field_count; ++i)
+			out[n++] = schema->fields[i];
+	}
+	else
+	{
+		for (size_t i = 0; i < COUNTOF(fl_raw_fallback); ++i)
+			out[n++] = fl_raw_fallback[i];
+	}
+
+	return n;
+}
+
+// Plain-language one-line summary for the LEFT list: "<type name>" alone
+// for a confirmed-empty-schema type, or "<type name>: <label> <val>,
+// <label> <val>, ..." over the type's schema fields (a type this table
+// doesn't cover gets "<type name>: dat <val>, dat2 <val>, ..." via the raw
+// fallback, same as the inspector). Truncated (no ellipsis -- matches
+// fit_name()'s reasoning, TINY_FONT has no glyph reserved for one) to fit
+// `max_w` pixels.
+static void event_summary(const lvledit_event *ev, char *buf, size_t buf_sz, int max_w)
+{
+	snprintf(buf, buf_sz, "%s", event_type_name(ev->type));
+
+	const ef_schema *schema = event_schema_for(ev->type);
+
+	const ef_field *fields = fl_raw_fallback;
+	int field_count = (int)COUNTOF(fl_raw_fallback);
+
+	if (schema != NULL)
+	{
+		fields = schema->fields;
+		field_count = schema->field_count;
+	}
+
+	for (int i = 0; i < field_count; ++i)
+	{
+		char val[16];
+		ef_format_value(ev, &fields[i], val, sizeof(val));
+
+		char piece[32];
+		snprintf(piece, sizeof(piece), "%s %s %s", i == 0 ? ":" : ",", fields[i].label, val);
+
+		size_t len = strlen(buf);
+		snprintf(buf + len, buf_sz - len, "%s", piece);
+	}
+
+	while (strlen(buf) > 0 && JE_textWidth(buf, TINY_FONT) > max_w)
+		buf[strlen(buf) - 1] = '\0';
 }
 
 // ---------------------------------------------------------------------
@@ -1304,108 +1788,33 @@ static bool save_current_level(void)
 // Event editor screen (Phase E2)
 // ---------------------------------------------------------------------
 
-// Field ranges, matching lvledit_event's on-disk types (lvledit_io.h).
-static void event_field_range(int field, long *out_min, long *out_max)
-{
-	switch (field)
-	{
-	case 0: *out_min = 0;      *out_max = 65535; break;  // time  (u16)
-	case 1: *out_min = 0;      *out_max = 255;   break;  // type  (u8)
-	case 2: *out_min = -32768; *out_max = 32767; break;  // dat   (s16)
-	case 3: *out_min = -32768; *out_max = 32767; break;  // dat2  (s16)
-	case 4: *out_min = -128;   *out_max = 127;   break;  // dat3  (s8)
-	case 5: *out_min = 0;      *out_max = 255;   break;  // dat4  (u8)
-	case 6: *out_min = -128;   *out_max = 127;   break;  // dat5  (s8)
-	default:
-	case 7: *out_min = -128;   *out_max = 127;   break;  // dat6  (s8)
-	}
-}
-
-static long event_field_get(const lvledit_event *ev, int field)
-{
-	switch (field)
-	{
-	case 0:  return ev->time;
-	case 1:  return ev->type;
-	case 2:  return ev->dat;
-	case 3:  return ev->dat2;
-	case 4:  return ev->dat3;
-	case 5:  return ev->dat4;
-	case 6:  return ev->dat5;
-	default:
-	case 7:  return ev->dat6;
-	}
-}
-
-static void event_field_set(lvledit_event *ev, int field, long v)
-{
-	long lo, hi;
-	event_field_range(field, &lo, &hi);
-	if (v < lo) v = lo;
-	if (v > hi) v = hi;
-
-	switch (field)
-	{
-	case 0: ev->time = (Uint16)v; break;
-	case 1: ev->type = (Uint8)v;  break;
-	case 2: ev->dat  = (Sint16)v; break;
-	case 3: ev->dat2 = (Sint16)v; break;
-	case 4: ev->dat3 = (Sint8)v;  break;
-	case 5: ev->dat4 = (Uint8)v;  break;
-	case 6: ev->dat5 = (Sint8)v;  break;
-	case 7: ev->dat6 = (Sint8)v;  break;
-	}
-}
-
-// Fixed pixel columns for the event table. The header row (draw_event_screen)
-// and every data row (draw_event_row) draw from this single table, so they
-// cannot drift apart the way the old sequential-x layout did (column x used
-// to depend on the rendered width of *every preceding cell's content*, so
-// no two rows lined up).
+// Fixed pixel geometry for the two-pane event screen. The header row
+// (draw_event_screen), every LEFT-list row (draw_event_list_row) and the
+// RIGHT inspector (draw_inspector_sidebar) all draw from these same
+// constants, so they cannot drift apart.
 //
 // Usable x is 4..316 (312px of the 320px-wide VGAScreen). TINY_FONT is a
 // proportional bitmap font (JE_outText advances by sprite->width + 1 per
-// glyph -- see fonthand.c), so widths below are measured via JE_textWidth()
-// against real worst-case content, not guessed:
-//   IDX   4 digits, event cap is LVLEDIT_MAX_EVENT (2500) -> max index 2499  => 20px
-//   TIME  u16 0..65535, 5 digits                                            => 25px
-//   TY    u8 event type 0..255, 3 digits                                    => 15px
-//   NAME  event_type_name(): longest entries are 15 chars; measured every
-//         type slot 0..89 for the true worst pixel width, not just char
-//         count (proportional font, so char count alone doesn't determine
-//         width) -- "ENEMY GLB ARMOR" is the widest at                      => 80px
-//   DAT   dat,  s16 -32768..32767, worst case "-32768"                      => 29px
-//   D2    dat2, s16 -32768..32767, same worst case                         => 29px
-//   D3    dat3, s8  -128..127, worst case "-128"                            => 18px
-//   D4    dat4, u8  0..255, worst case "255"                                => 15px
-//   D5    dat5, s8  -128..127, worst case "-128"                            => 18px
-//   D6    dat6, s8  -128..127, worst case "-128"                            => 18px
-// Content sums to 267px; the remaining 45px of the 312px budget is spent as
-// a flat 5px gap after each of the 9 non-final columns, which lands the
-// last column's right edge exactly on x=316 -- the fit is exact, not
-// comfortable, so don't add columns or widen any of these without
-// re-measuring. Every header title (incl. the DAT2->D2 etc. shortening)
-// already fits inside its column's w, so NAME is never truncated in
-// practice; fit_name() below is just a defensive backstop.
-static const struct { int x, w; const char *title; } ED_EVENT_COLS[10] =
-{
-	{   4, 20, "IDX"  },
-	{  29, 25, "TIME" },
-	{  59, 15, "TY"   },
-	{  79, 80, "NAME" },
-	{ 164, 29, "DAT"  },
-	{ 198, 29, "D2"   },
-	{ 232, 18, "D3"   },
-	{ 255, 15, "D4"   },
-	{ 275, 18, "D5"   },
-	{ 298, 18, "D6"   },
-};
+// glyph -- see fonthand.c):
+//   TIME     right-aligned in a narrow fixed column; u16 0..65535, 5 digits
+//            measures 25px, so 28px leaves a little breathing room.
+//   SUMMARY  the rest of the left pane, out to just short of the divider.
+//   divider  a single-pixel vertical rule (see fill_rectangle_xy() below).
+//   sidebar  label left-aligned at its left edge, value right-aligned 2px
+//            short of the screen's own right edge (316).
+#define ED_EVENT_TIME_X             4
+#define ED_EVENT_TIME_W             28
+#define ED_EVENT_SUMMARY_X          (ED_EVENT_TIME_X + ED_EVENT_TIME_W + 4)
+#define ED_EVENT_DIVIDER_X          208
+#define ED_EVENT_SUMMARY_W          (ED_EVENT_DIVIDER_X - 4 - ED_EVENT_SUMMARY_X)
+#define ED_EVENT_SIDEBAR_LABEL_X    212
+#define ED_EVENT_SIDEBAR_VALUE_RIGHT 314
 
-// Defensive backstop for the NAME column: measurement shows no current
-// event_type_name() entry exceeds the 80px column width, but if a future
-// entry ever did, silently overflowing past x=316 would be worse than a
-// clipped label. Trims from the end until it fits (no ellipsis -- TINY_FONT
-// has no glyph reserved for one).
+// Defensive backstop for any label/name text that might overflow its box:
+// measurement shows no current event_type_name() entry exceeds the space
+// available, but if a future entry ever did, silently overflowing would be
+// worse than a clipped label. Trims from the end until it fits (no
+// ellipsis -- TINY_FONT has no glyph reserved for one).
 static void fit_name(char *buf, int max_w)
 {
 	size_t len = strlen(buf);
@@ -1415,59 +1824,87 @@ static void fit_name(char *buf, int max_w)
 	}
 }
 
-// Draws one event row, highlighting the field cursor (if this is the
-// selected row) by redrawing just that field's text in a brighter color.
-// Numeric columns are right-aligned within their column box (x + w -
-// textwidth); NAME is left-aligned. The cursor highlight rectangle snaps to
-// the column box (col.x-1 .. col.x+col.w), not to the text's rendered
-// width, so it stays put as the value's digit count changes.
-static void draw_event_row(int index, int y, bool selected)
+// Renders the LEFT-list row for event `index` at row-top `y`: TIME
+// (right-aligned in its narrow column) and a plain-language SUMMARY
+// synthesized from the event's type + whichever dat fields that type uses
+// (event_summary(), above). This pane is a pure picker now -- editing
+// happens in the RIGHT inspector (draw_inspector_sidebar()) -- so a
+// selected row is just brightened; there's no per-column field cursor here
+// anymore (that was the old raw-grid design's job).
+static void draw_event_list_row(int index, int y, bool selected)
 {
 	const lvledit_event *ev = &cur_level.event[index];
 
-	char prefix[8], f_time[8], f_type[6], name_buf[20], f_dat[8], f_dat2[8], f_dat3[6], f_dat4[6], f_dat5[6], f_dat6[6];
-
-	snprintf(prefix, sizeof(prefix), "%d", index);
+	char f_time[8];
 	snprintf(f_time, sizeof(f_time), "%u", ev->time);
-	snprintf(f_type, sizeof(f_type), "%u", ev->type);
-	snprintf(name_buf, sizeof(name_buf), "%s", event_type_name(ev->type));
-	snprintf(f_dat, sizeof(f_dat), "%d", ev->dat);
-	snprintf(f_dat2, sizeof(f_dat2), "%d", ev->dat2);
-	snprintf(f_dat3, sizeof(f_dat3), "%d", ev->dat3);
-	snprintf(f_dat4, sizeof(f_dat4), "%u", ev->dat4);
-	snprintf(f_dat5, sizeof(f_dat5), "%d", ev->dat5);
-	snprintf(f_dat6, sizeof(f_dat6), "%d", ev->dat6);
 
-	// parts[i]/field[i] line up 1:1 with ED_EVENT_COLS[i]. field[i] is the
-	// editable field index (0-7), or -1 for non-editable columns (IDX
-	// prefix, NAME label).
-	const char *parts[] = { prefix, f_time, f_type, name_buf, f_dat, f_dat2, f_dat3, f_dat4, f_dat5, f_dat6 };
-	const int   field[] = { -1,     0,      1,      -1,       2,     3,      4,      5,      6,      7      };
-	const bool  left_align[] = { false, false, false, true, false, false, false, false, false, false };
+	char summary[128];
+	event_summary(ev, summary, sizeof(summary), ED_EVENT_SUMMARY_W);
 
-	fit_name(name_buf, ED_EVENT_COLS[3].w);
+	int bright = selected ? 4 : 0;
 
-	int base_bright = selected ? 4 : 0;
+	int time_w = JE_textWidth(f_time, TINY_FONT);
+	JE_outText(VGAScreen, ED_EVENT_TIME_X + ED_EVENT_TIME_W - time_w, y, f_time, 0, bright);
+	JE_outText(VGAScreen, ED_EVENT_SUMMARY_X, y, summary, 0, bright);
+}
 
-	for (size_t i = 0; i < COUNTOF(parts); ++i)
+// Renders the RIGHT-hand inspector for the selected event `ev`: a header
+// naming its type, then one row per field build_inspector_fields() returns
+// for it (TIME, TYPE, then that type's schema fields, or the raw
+// dat..dat6 fallback for a type the schema table doesn't cover). Label
+// left-aligned at the sidebar's left edge, value right-aligned at its right
+// edge; the row at `event_field` gets the same box+bright(8) cursor style
+// draw_event_row() used to give individual columns in the old layout, since
+// this is now the ONLY place a field cursor exists.
+static void draw_inspector_sidebar(const lvledit_event *ev)
+{
+	char header[24];
+	snprintf(header, sizeof(header), "%s", event_type_name(ev->type));
+	fit_name(header, ED_EVENT_SIDEBAR_VALUE_RIGHT + 2 - ED_EVENT_SIDEBAR_LABEL_X);
+	JE_outText(VGAScreen, ED_EVENT_SIDEBAR_LABEL_X, 13, header, 0, 4);
+
+	ef_field fields[ED_EVENT_MAX_INSPECTOR_FIELDS];
+	int count = build_inspector_fields(ev, fields);
+
+	for (int i = 0; i < count; ++i)
 	{
-		const int col_x = ED_EVENT_COLS[i].x;
-		const int col_w = ED_EVENT_COLS[i].w;
-		bool is_cursor_field = selected && field[i] == event_field;
+		int y = ED_EVENT_ROW_Y0 + i * ED_EVENT_ROW_H;
+		bool is_cursor = (i == event_field);
 
-		int text_w = JE_textWidth(parts[i], TINY_FONT);
-		int x = left_align[i] ? col_x : col_x + col_w - text_w;
+		char val[16];
+		ef_format_value(ev, &fields[i], val, sizeof(val));
 
-		if (is_cursor_field)
-		{
-			JE_rectangle(VGAScreen, col_x - 1, y - 1, col_x + col_w, y + 7, 15);
-			JE_outText(VGAScreen, x, y, parts[i], 0, 8);
-		}
-		else
-		{
-			JE_outText(VGAScreen, x, y, parts[i], 0, base_bright);
-		}
+		int val_w = JE_textWidth(val, TINY_FONT);
+		int val_x = ED_EVENT_SIDEBAR_VALUE_RIGHT - val_w;
+
+		int bright = is_cursor ? 8 : 0;
+
+		if (is_cursor)
+			JE_rectangle(VGAScreen, ED_EVENT_SIDEBAR_LABEL_X - 1, y - 1, ED_EVENT_SIDEBAR_VALUE_RIGHT, y + 7, 15);
+
+		JE_outText(VGAScreen, ED_EVENT_SIDEBAR_LABEL_X, y, fields[i].label, 0, bright);
+		JE_outText(VGAScreen, val_x, y, val, 0, bright);
 	}
+}
+
+// Returns the SELECTED event's inspector field at `event_field` (clamped by
+// clamp_event_view() every frame, but re-checked here defensively), or
+// false if there's no event to inspect at all. Used by every place that
+// edits "the current field" (+/-, Enter-to-type) so they all agree on what
+// that means with the caller who does the actual get/set.
+static bool current_inspector_field(ef_field *out)
+{
+	if (cur_level.event_count == 0)
+		return false;
+
+	ef_field fields[ED_EVENT_MAX_INSPECTOR_FIELDS];
+	int count = build_inspector_fields(&cur_level.event[event_sel], fields);
+
+	if (event_field < 0 || event_field >= count)
+		return false;
+
+	*out = fields[event_field];
+	return true;
 }
 
 static void clamp_event_view(void)
@@ -1478,6 +1915,7 @@ static void clamp_event_view(void)
 	{
 		event_sel = 0;
 		event_scroll = 0;
+		event_field = 0;
 		return;
 	}
 
@@ -1490,6 +1928,17 @@ static void clamp_event_view(void)
 	int max_scroll = count > ED_EVENT_ROWS_VISIBLE ? count - ED_EVENT_ROWS_VISIBLE : 0;
 	if (event_scroll > max_scroll) event_scroll = max_scroll;
 	if (event_scroll < 0) event_scroll = 0;
+
+	// event_field indexes the SELECTED event's inspector list, which is
+	// shorter than the old fixed 8 for most types; re-clamp here (called
+	// every frame, and specifically right after any event_sel change) so
+	// switching to a shorter-schema type -- directly, via Up/Down/PgUp/...,
+	// or by editing TYPE into one -- can never leave the cursor pointing
+	// past the end of the new list.
+	ef_field fields[ED_EVENT_MAX_INSPECTOR_FIELDS];
+	int field_count = build_inspector_fields(&cur_level.event[event_sel], fields);
+	if (event_field < 0) event_field = 0;
+	if (event_field >= field_count) event_field = field_count - 1;
 }
 
 static void draw_event_screen(bool show_help)
@@ -1500,10 +1949,13 @@ static void draw_event_screen(bool show_help)
 	snprintf(title, sizeof(title), "Event Editor - Lvl %d", cur_level_index);
 	JE_outText(VGAScreen, 4, 4, title, 0, 4);
 
-	// Same ED_EVENT_COLS table the data rows draw from (draw_event_row), so
-	// the header can't drift out of alignment with the columns below it.
-	for (size_t i = 0; i < COUNTOF(ED_EVENT_COLS); ++i)
-		JE_outText(VGAScreen, ED_EVENT_COLS[i].x, 13, ED_EVENT_COLS[i].title, 0, 2);
+	JE_outText(VGAScreen, ED_EVENT_TIME_X, 13, "TIME", 0, 2);
+	JE_outText(VGAScreen, ED_EVENT_SUMMARY_X, 13, "EVENT", 0, 2);
+
+	// Vertical divider between the LEFT event list and the RIGHT inspector --
+	// same "1px-wide filled rect" trick the map editor's own tile-sidebar
+	// divider uses (see draw_map_viewport()'s divider_x).
+	fill_rectangle_xy(VGAScreen, ED_EVENT_DIVIDER_X, 0, ED_EVENT_DIVIDER_X, ED_EVENT_STATUS_Y - 4, 8);
 
 	int count = cur_level.event_count;
 
@@ -1519,8 +1971,10 @@ static void draw_event_screen(bool show_help)
 			if (idx >= count)
 				break;
 
-			draw_event_row(idx, ED_EVENT_ROW_Y0 + row * ED_EVENT_ROW_H, idx == event_sel);
+			draw_event_list_row(idx, ED_EVENT_ROW_Y0 + row * ED_EVENT_ROW_H, idx == event_sel);
 		}
+
+		draw_inspector_sidebar(&cur_level.event[event_sel]);
 	}
 
 	char status[96];
@@ -1536,35 +1990,38 @@ static void draw_event_screen(bool show_help)
 	}
 	else if (show_help)
 	{
-		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y1, "Up/Dn/PgUp/PgDn/Home/End row L/R field +/- (Shift=10) adj", 0, 0);
-		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "Enter val I ins D del R sort U undo Y redo S save Esc back", 0, 0);
+		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y1, "Up/Dn/PgUp/PgDn/Home/End event  Click row/field  L/R field", 0, 0);
+		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "+/-(Sft=10) I ins D del R sort U/Y undo/redo S save Esc back", 0, 0);
 	}
 }
 
-// Applies the pending numeric-entry buffer to the selected event's current
-// field, clamped to that field's real range. No-op if the buffer is empty
-// (bare Enter, or everything got backspaced away).
+// Applies the pending numeric-entry buffer to the SELECTED event's current
+// inspector field (event_field, an index -- see current_inspector_field()),
+// clamped to that field's real range. No-op if the buffer is empty (bare
+// Enter, or everything got backspaced away) or there's no field to apply to.
 static void commit_number_entry(void)
 {
-	if (number_entry_len > 0 && cur_level.event_count > 0)
+	ef_field f;
+
+	if (number_entry_len > 0 && current_inspector_field(&f))
 	{
 		long v = strtol(number_entry_buf, NULL, 10);
 		lvledit_event *ev = &cur_level.event[event_sel];
-		long before = event_field_get(ev, event_field);
+		long before = event_field_get(ev, f.field_id);
 
 		// Pre-clamp so we can tell (before mutating anything) whether this
 		// will actually change the field -- mirrors event_field_set()'s own
 		// clamping, so a no-op entry (e.g. re-entering the same value, or a
 		// value that clamps back to `before`) pushes no undo step.
 		long lo, hi;
-		event_field_range(event_field, &lo, &hi);
+		event_field_range(f.field_id, &lo, &hi);
 		if (v < lo) v = lo;
 		if (v > hi) v = hi;
 
 		if (v != before)
 		{
 			undo_push();
-			event_field_set(ev, event_field, v);
+			event_field_set(ev, f.field_id, v);
 			level_dirty = true;
 		}
 	}
@@ -1750,22 +2207,38 @@ static void run_event_editor(void)
 				event_sel = cur_level.event_count - 1;
 				break;
 
+			// Moves the field cursor within the SELECTED event's inspector
+			// list -- its length varies per type (2 for a no-fields type up
+			// to 8), so the wrap modulus is computed fresh each press rather
+			// than the old fixed "% 8".
 			case SDL_SCANCODE_LEFT:
-				event_field = (event_field + 7) % 8;
+				if (cur_level.event_count > 0)
+				{
+					ef_field fields[ED_EVENT_MAX_INSPECTOR_FIELDS];
+					int field_count = build_inspector_fields(&cur_level.event[event_sel], fields);
+					event_field = (event_field + field_count - 1) % field_count;
+				}
 				break;
 			case SDL_SCANCODE_RIGHT:
-				event_field = (event_field + 1) % 8;
+				if (cur_level.event_count > 0)
+				{
+					ef_field fields[ED_EVENT_MAX_INSPECTOR_FIELDS];
+					int field_count = build_inspector_fields(&cur_level.event[event_sel], fields);
+					event_field = (event_field + 1) % field_count;
+				}
 				break;
 
 			case SDL_SCANCODE_EQUALS:
 			case SDL_SCANCODE_KP_PLUS:
-				if (cur_level.event_count > 0)
+			{
+				ef_field f;
+				if (current_inspector_field(&f))
 				{
 					lvledit_event *ev = &cur_level.event[event_sel];
-					long before = event_field_get(ev, event_field);
+					long before = event_field_get(ev, f.field_id);
 
 					long lo, hi;
-					event_field_range(event_field, &lo, &hi);
+					event_field_range(f.field_id, &lo, &hi);
 					long want = before + (fast ? 10 : 1);
 					if (want < lo) want = lo;
 					if (want > hi) want = hi;
@@ -1773,21 +2246,24 @@ static void run_event_editor(void)
 					if (want != before)
 					{
 						undo_push();
-						event_field_set(ev, event_field, want);
+						event_field_set(ev, f.field_id, want);
 						level_dirty = true;
 					}
 				}
 				break;
+			}
 
 			case SDL_SCANCODE_MINUS:
 			case SDL_SCANCODE_KP_MINUS:
-				if (cur_level.event_count > 0)
+			{
+				ef_field f;
+				if (current_inspector_field(&f))
 				{
 					lvledit_event *ev = &cur_level.event[event_sel];
-					long before = event_field_get(ev, event_field);
+					long before = event_field_get(ev, f.field_id);
 
 					long lo, hi;
-					event_field_range(event_field, &lo, &hi);
+					event_field_range(f.field_id, &lo, &hi);
 					long want = before - (fast ? 10 : 1);
 					if (want < lo) want = lo;
 					if (want > hi) want = hi;
@@ -1795,11 +2271,12 @@ static void run_event_editor(void)
 					if (want != before)
 					{
 						undo_push();
-						event_field_set(ev, event_field, want);
+						event_field_set(ev, f.field_id, want);
 						level_dirty = true;
 					}
 				}
 				break;
+			}
 
 			case SDL_SCANCODE_RETURN:
 			case SDL_SCANCODE_KP_ENTER:
@@ -1875,23 +2352,32 @@ static void run_event_editor(void)
 					continue;
 				if (mi.y < ED_EVENT_ROW_Y0)
 					continue;
+
 				int row = (mi.y - ED_EVENT_ROW_Y0) / ED_EVENT_ROW_H;
-				if (row < 0 || row >= ED_EVENT_ROWS_VISIBLE)
-					continue;
-				int idx = event_scroll + row;
-				if (idx >= cur_level.event_count)
-					continue;
-				event_sel = idx;
-				// If the click landed in an editable field column, select that field too.
-				for (size_t c = 0; c < COUNTOF(ED_EVENT_COLS); ++c)
+
+				if (mi.x < ED_EVENT_DIVIDER_X)
 				{
-					if (mi.x >= ED_EVENT_COLS[c].x && mi.x < ED_EVENT_COLS[c].x + ED_EVENT_COLS[c].w)
-					{
-						static const int col_field[10] = { -1, 0, 1, -1, 2, 3, 4, 5, 6, 7 };
-						if (col_field[c] >= 0)
-							event_field = col_field[c];
-						break;
-					}
+					// LEFT list: pick the event under the click -- same row
+					// math as before, minus the old column->field mapping
+					// (there's nothing to edit on this side anymore; that's
+					// the RIGHT inspector's job, just below).
+					if (row < 0 || row >= ED_EVENT_ROWS_VISIBLE)
+						continue;
+					int idx = event_scroll + row;
+					if (idx >= cur_level.event_count)
+						continue;
+					event_sel = idx;
+				}
+				else
+				{
+					// RIGHT inspector: pick the field row under the click
+					// (TIME, TYPE, or one of the selected event's schema
+					// fields) -- clamped the same way clamp_event_view()
+					// clamps event_field every frame.
+					ef_field fields[ED_EVENT_MAX_INSPECTOR_FIELDS];
+					int field_count = build_inspector_fields(&cur_level.event[event_sel], fields);
+					if (row >= 0 && row < field_count)
+						event_field = row;
 				}
 			}
 
