@@ -1,10 +1,25 @@
 # Enemy Preview in the Event Editor
 
-Status: **Design** (2026-07-23). Scope chosen: **Option A only** — an enemy
-sprite thumbnail + a few decoded stats in the event editor's inspector panel.
-Options B (full enemy browser/picker) and C (shape-bank-loaded check) are
-recorded at the end as follow-ups; the A renderer is written to be reusable by
+Status: **Option A done** (2026-07-23). An enemy sprite thumbnail + decoded
+stats now render in the event editor's inspector panel. Options B (full enemy
+browser/picker) and C (shape-bank-loaded check) are recorded at the end as
+follow-ups; the A renderer (`draw_enemy_thumb`) is written to be reusable by
 both.
+
+**Correction found during implementation:** the "What the data is" section
+below originally claimed `enemyDat` was already populated in the editor via the
+`JE_initEpisode()` call at `lvledit.c:2653`. That call is inside
+`playtest_current_level()` (F5) — **not** the normal load path — so on a fresh
+session `enemyDat` was all-zero and the preview showed only "Bank 0 n/a". Fixed
+by forcing the load in `load_episode_archive()` (the editor's per-episode entry,
+covering both the interactive and the `--edit-shot`/`--edit-export` headless
+paths): `episodeNum = 0; JE_initEpisode(episode);` — the same trick playtest
+uses, which runs `JE_analyzeLevel()` + `JE_loadItemDat()`. It also sets the game
+globals `levelFile`/`lvlPos`/`episodeNum`, which the editor otherwise ignores
+(it drives everything off `cur_lvl_filename`), so it's a harmless superset of
+what F5 already did. Verified with lldb: after entry `enemyDat[275].shapebank ==
+23`, `egraphic[0] == 153`, and bank 23 (`newshs.shp`) has 304 sprites, so 153 is
+in range and blits valid data.
 
 ## Problem
 

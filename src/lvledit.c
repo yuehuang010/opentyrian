@@ -765,6 +765,33 @@ static const ef_schema *event_schema_for(int type)
 #undef SCHEMA
 }
 
+// Returns true (and sets *out_n to the event's "Enemy #" field, i.e. ev->dat,
+// field id 2 -- see event_field_get()) for exactly the event types whose
+// inspector schema is one of the three plain enemy-spawn tables above:
+// fl_enemy_spawn, fl_enemy_spawn_noyoff, or fl_12. Comparing schema->fields
+// against those arrays' own addresses is safe even though event_schema_for()
+// materializes a fresh `static const ef_schema` wrapper per SCHEMA() call
+// site -- every one of those wrappers for a given array still points its
+// `.fields` at that same array, so pointer identity on `.fields` (not on
+// the ef_schema itself) is exactly "which field table does this type use".
+//
+// Deliberately excludes fl_enemy_custom (types 49-52): its field 2 is a raw
+// "Graphic" override, not an enemyDat[] row index (see ENEMY_PREVIEW.md).
+static bool event_preview_enemy_num(const lvledit_event *ev, int *out_n)
+{
+	const ef_schema *schema = event_schema_for(ev->type);
+	if (schema == NULL)
+		return false;
+
+	if (schema->fields != fl_enemy_spawn &&
+	    schema->fields != fl_enemy_spawn_noyoff &&
+	    schema->fields != fl_12)
+		return false;
+
+	*out_n = ev->dat;
+	return true;
+}
+
 // Returns the enum member name matching `v`, or NULL if none match (the
 // caller then falls back to printing the raw number -- see ef_format_value).
 static const char *ef_enum_name(const ef_field *f, long v)
@@ -905,6 +932,97 @@ static void load_tileset(char shapeFile)
 
 	tileset_loaded = true;
 	tileset_shape_char = c;
+}
+
+// ---------------------------------------------------------------------
+// Enemy preview (Option A -- internal/plan/ENEMY_PREVIEW.md)
+// ---------------------------------------------------------------------
+//
+// Sprite bank cache for the event inspector's enemy thumbnail. Keyed by the
+// resolved bank CHAR (shapeFile[shapebank-1], same char JE_loadCompShapes()
+// turns into "newsh<c>.shp"), mirroring load_tileset()'s pattern just above.
+//
+// Deliberately NOT JE_loadCompShapes() itself: that loader calls
+// dir_fopen_die() and assert()s the target slot is already NULL, both wrong
+// for a preview that may be asked to resolve a missing/garbage bank purely
+// from event data -- a bad bank must skip the sprite, never crash the editor.
+static Sprite2_array enemy_preview_bank;
+static bool enemy_preview_loaded = false;
+static char enemy_preview_bank_char = 0;
+
+static void load_enemy_preview_bank(char c)
+{
+	c = (char)tolower((unsigned char)c);
+
+	if (enemy_preview_loaded && enemy_preview_bank_char == c)
+		return;
+
+	free_sprite2s(&enemy_preview_bank);  // also satisfies JE_loadCompShapesB()'s data==NULL assert
+	enemy_preview_loaded = false;
+
+	char fname[20];
+	snprintf(fname, sizeof(fname), "newsh%c.shp", c);
+
+	FILE *f = dir_fopen(data_dir(), fname, "rb");  // dir_fopen, NOT _die -- a missing bank must not kill the editor
+	if (f == NULL)
+		return;  // leave the cache empty; draw_enemy_thumb() below just skips the sprite
+
+	enemy_preview_bank.size = ftell_eof(f);
+	JE_loadCompShapesB(&enemy_preview_bank, f);  // same body JE_loadCompShapes() uses (sprite.c)
+	fclose(f);
+
+	enemy_preview_loaded = true;
+	enemy_preview_bank_char = c;
+}
+
+// Frees the cached bank; called on editor exit (lvledit_run()) so a full
+// interactive session doesn't leak the last-viewed bank. (Not required by
+// the one-shot CLI/headless entry points below -- process exit reclaims it
+// -- but harmless to call there too if ever needed.)
+static void free_enemy_preview_bank(void)
+{
+	free_sprite2s(&enemy_preview_bank);
+	enemy_preview_loaded = false;
+	enemy_preview_bank_char = 0;
+}
+
+// Renders enemyDat[enemy_num]'s base frame at (x,y), replicating the single
+// blit the real flight loop uses for enemy graphics (blit_enemy(),
+// tyrian2.c ~210: blit_sprite2(surface, x, y, *enemy[i].sprite2s,
+// enemy[i].egr[enemy[i].enemycycle-1] + sprite_offset)) for a static
+// thumbnail of egraphic[0] instead of the animated cycle enemy[i] tracks
+// in-flight. Multi-cell (esize>=1) enemies only show their primary cell --
+// acceptable for a thumbnail (see ENEMY_PREVIEW.md).
+//
+// Returns whether a sprite was actually drawn; callers should still show
+// the (always-valid) stat lines when this returns false.
+static bool draw_enemy_thumb(int enemy_num, int x, int y)
+{
+	if (enemy_num < 1 || enemy_num > ENEMY_NUM)
+		return false;
+
+	int bank = enemyDat[enemy_num].shapebank;
+	if (bank < 1 || bank > 34)
+		return false;  // shapeFile[] is only defined for banks 1..34
+
+	load_enemy_preview_bank(shapeFile[bank - 1]);
+
+	if (enemy_preview_bank.data == NULL)
+		return false;  // newsh<c>.shp missing/unreadable
+
+	int idx = enemyDat[enemy_num].egraphic[0];
+	if (idx == 0)
+		return false;  // 0 means "no base frame" for this row, not a real sprite index
+
+	// blit_sprite2() does no bounds-check of its own (sprite.c): the sheet's
+	// first Uint16 is the byte offset to sprite #1's data, i.e. the end of
+	// the offset table, so offset[0]/2 is the sheet's sprite count.
+	int count = SDL_SwapLE16(((Uint16 *)enemy_preview_bank.data)[0]) / 2;
+	if (idx < 1 || idx > count)
+		return false;
+
+	blit_sprite2(VGAScreen, x, y, enemy_preview_bank, (unsigned int)idx);
+	return true;
 }
 
 // ---------------------------------------------------------------------
@@ -1963,6 +2081,20 @@ static bool save_current_level(void)
 #define ED_EVENT_SIDEBAR_LABEL_X    212
 #define ED_EVENT_SIDEBAR_VALUE_RIGHT 314
 
+// Enemy preview block (Option A, ENEMY_PREVIEW.md): the inspector fields
+// above occupy y 13..~78 (header + up to 8 rows of ED_EVENT_ROW_H each), and
+// nothing else uses the panel down to the status line (ED_EVENT_STATUS_Y,
+// 174) -- put the sprite box + stat lines there. Box is 16px (2px margin +
+// blit_sprite2's 12px-wide row cadence + 2px margin) square; stat text sits
+// to its right for the first two lines, then spans the full panel width
+// below it.
+#define ED_ENEMY_PREVIEW_Y0    96
+#define ED_ENEMY_PREVIEW_BOX_X ED_EVENT_SIDEBAR_LABEL_X
+#define ED_ENEMY_PREVIEW_BOX_Y (ED_ENEMY_PREVIEW_Y0 + 8)
+#define ED_ENEMY_PREVIEW_BOX_W 16
+#define ED_ENEMY_PREVIEW_BOX_H 16
+#define ED_ENEMY_PREVIEW_TEXT_X (ED_ENEMY_PREVIEW_BOX_X + ED_ENEMY_PREVIEW_BOX_W + 4)
+
 // Pixel width the summary column gets: the narrow "stops before the divider"
 // value above when the inspector sidecar is open, or the full run out to the
 // screen's usable right edge (316) when T has closed it.
@@ -2045,6 +2177,49 @@ static void draw_inspector_sidebar(const lvledit_event *ev)
 
 		JE_outText(VGAScreen, ED_EVENT_SIDEBAR_LABEL_X, y, fields[i].label, 0, bright);
 		JE_outText(VGAScreen, val_x, y, val, 0, bright);
+	}
+
+	// Enemy preview (Option A -- internal/plan/ENEMY_PREVIEW.md): a sprite
+	// thumbnail + a few decoded enemyDat[] stats, for exactly the event
+	// types whose "Enemy #" field names an enemyDat[] row.
+	int enemy_num;
+	if (event_preview_enemy_num(ev, &enemy_num))
+	{
+		char line[40];
+
+		snprintf(line, sizeof(line), "Enemy #%d", enemy_num);
+		JE_outText(VGAScreen, ED_EVENT_SIDEBAR_LABEL_X, ED_ENEMY_PREVIEW_Y0, line, 0, 0);
+
+		JE_rectangle(VGAScreen, ED_ENEMY_PREVIEW_BOX_X, ED_ENEMY_PREVIEW_BOX_Y,
+		             ED_ENEMY_PREVIEW_BOX_X + ED_ENEMY_PREVIEW_BOX_W - 1,
+		             ED_ENEMY_PREVIEW_BOX_Y + ED_ENEMY_PREVIEW_BOX_H - 1, 15);
+
+		bool valid_n = (enemy_num >= 1 && enemy_num <= ENEMY_NUM);  // dat is a signed 16-bit field; guard before indexing enemyDat[]
+
+		if (valid_n)
+		{
+			int bank = enemyDat[enemy_num].shapebank;
+			bool drew = draw_enemy_thumb(enemy_num, ED_ENEMY_PREVIEW_BOX_X + 2, ED_ENEMY_PREVIEW_BOX_Y + 2);
+
+			if (bank >= 1 && bank <= 34)
+				snprintf(line, sizeof(line), "Bank %d '%c'%s", bank, shapeFile[bank - 1], drew ? "" : " n/a");
+			else
+				snprintf(line, sizeof(line), "Bank %d n/a", bank);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y, line, 0, 0);
+
+			snprintf(line, sizeof(line), "Ar%d Sz%d", enemyDat[enemy_num].armor, enemyDat[enemy_num].esize);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y + 8, line, 0, 0);
+
+			snprintf(line, sizeof(line), "Val %d  Ex%d", enemyDat[enemy_num].value, enemyDat[enemy_num].explosiontype);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_BOX_X, ED_ENEMY_PREVIEW_BOX_Y + ED_ENEMY_PREVIEW_BOX_H + 2, line, 0, 0);
+
+			snprintf(line, sizeof(line), "Mv %d,%d", enemyDat[enemy_num].xmove, enemyDat[enemy_num].ymove);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_BOX_X, ED_ENEMY_PREVIEW_BOX_Y + ED_ENEMY_PREVIEW_BOX_H + 10, line, 0, 0);
+		}
+		else
+		{
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y, "(out of range)", 0, 0);
+		}
 	}
 }
 
@@ -4173,6 +4348,19 @@ static bool load_episode_archive(int episode)
 		return false;
 	}
 
+	// Populate this episode's enemy/item tables (enemyDat[] etc.) so the event
+	// editor's enemy-model preview has real data to render. The editor's own
+	// archive loader above only fills cur_level's tilemap/events -- it never
+	// touches enemyDat, which lives in tyrian.hdt (ep <=3) or the archive's
+	// trailing blob (ep >=4) and is read by JE_loadItemDat() via
+	// JE_initEpisode(). JE_initEpisode() early-returns unless episodeNum
+	// actually changes, so force it (same trick playtest_current_level() uses).
+	// It also sets the game globals levelFile/lvlPos/episodeNum, which the
+	// editor otherwise ignores (it drives everything off cur_lvl_filename), so
+	// this is a harmless superset of what F5 playtest already does on entry.
+	episodeNum = 0;
+	JE_initEpisode(episode);
+
 	// Flight tilesets are always drawn under palette index 5 (palette.dat),
 	// not palette 0. Traced via JE_loadMap()'s caller: JE_main() (tyrian2.c
 	// ~878) does `JE_loadPic(VGAScreen, twoPlayerMode ? 6 : 3, false)`
@@ -4534,6 +4722,7 @@ void lvledit_run(int episode)
 		ep = 0;  // back out to the episode picker after leaving level-select
 	}
 
+	free_enemy_preview_bank();  // drop the last-viewed enemy-preview sprite bank on editor exit
 	hd_mode = saved_hd_mode;
 }
 
