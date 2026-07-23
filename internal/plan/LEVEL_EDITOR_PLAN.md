@@ -89,7 +89,7 @@ One level record, all little-endian:
 | levelEnemyMax | u16 |
 | levelEnemy[] | u16 × levelEnemyMax |
 | maxEvent | u16 |
-| events[] | maxEvent × **11 bytes**: u16 time, u8 type, s16 dat, s16 dat2, s8 dat3, s8 dat5, s8 dat6, u8 dat4 (this order; verified byte-exact against all 62 records) |
+| events[] | maxEvent × **11 bytes**: u16 time, u8 type, s16 dat, s16 dat2, s8 dat3, s8 dat5, s8 dat6, u8 dat4 (this order; verified byte-exact against all 62 records). For what `type` + the `dat` fields *mean*, see [EVENT_REFERENCE.md](EVENT_REFERENCE.md) |
 | mapSh[3][128] | u16 — per-layer slot→shape# (1..600 into `shapes?.dat`, 0 = unused) |
 | map1 | 14×300 bytes, slot indices 0..71 |
 | map2 | 14×600 bytes |
