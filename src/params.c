@@ -42,7 +42,7 @@
 JE_boolean richMode = false, constantPlay = false, constantDie = false;
 
 int edit_roundtrip_episode = 0;
-int edit_episode = 0;
+bool edit_requested = false;
 
 bool edit_shot_requested = false;
 int edit_shot_episode = 0;
@@ -80,7 +80,7 @@ void JE_paramCheck(int argc, char *argv[])
 		// circuits before the partial-match ambiguity check (arg_parse.c's
 		// long-option matcher flags ambiguity only among options it hasn't
 		// already resolved with an exact match).
-		{ 259, 0,   "edit",              true },
+		{ 259, 0,   "edit",              false },
 		// Hidden: level-editor archive-I/O self-test (Phase E0), not shown in --help.
 		{ 258, 0,   "edit-roundtrip",    true },
 		// Hidden: headless level-editor screenshot dump, not shown in --help.
@@ -238,17 +238,8 @@ void JE_paramCheck(int argc, char *argv[])
 			break;
 		}
 		case 259: // --edit (hidden)
-		{
-			int temp = atoi(option.arg);
-			if (temp >= 1 && temp <= 4)
-				edit_episode = temp;
-			else
-			{
-				fprintf(stderr, "%s: error: invalid --edit episode (expected 1-4)\n", argv[0]);
-				exit(EXIT_FAILURE);
-			}
+			edit_requested = true;
 			break;
-		}
 		case 260: // --edit-shot (hidden)
 		{
 			int temp_episode, temp_level;

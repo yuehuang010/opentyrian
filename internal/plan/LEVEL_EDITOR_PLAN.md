@@ -1,9 +1,41 @@
 # Level Editor Plan
 
 Status: **E0–E2 done** (2026-07-19); E3 (in-editor playtest) not started.
-Usage: `./opentyrian --data ./tyrian21 --edit <episode 1-4>` (hidden flag).
-In-editor: Tab layer, T tile palette, Enter/Space place, P pick, E event
-editor, S save (one-time `tyrian?.lvl.bak` backup), Esc back.
+Usability pass **2026-07-22**: toggleable tile sidebar + undo/redo, in-app
+episode picker, level-select sort + titles (below). Queued: left mini-map
+scrollbar.
+Usage: `./opentyrian --data ./tyrian21 --edit` (hidden flag, no argument --
+boots an in-app episode picker (1-4), then that episode's level-select).
+In-editor: Tab layer, T toggle tile sidebar, `[`/`]` prev/next tile slot,
+Enter/Space place, P pick, U undo, R redo, E event editor, S save (one-time
+`tyrian?.lvl.bak` backup), X export, Esc back.
+
+Tile sidebar (T): right-hand 2-col scrolling grid of the active layer's 72
+slots (replaces the old modal palette overlay). Open shrinks the map
+viewport 13→11 cols (`view_cols()`); `[`/`]` step the brush through usable
+slots with the highlight auto-scrolling to follow. Undo/redo: bounded
+whole-level snapshot ring (`ED_UNDO_CAP` 64, static BSS ~6.6MB), `undo_push()`
+before each real mutation (tile place + all event edits); event editor uses
+`Y` for redo since `R` is sort-by-time there. All in `src/lvledit.c` only.
+
+Level-select sort + titles: the list defaults to **play order** and `O`
+toggles to raw archive-index order. Play order and the shown level titles are
+parsed from the episode script `levels<ep>.dat` (encrypted pascal strings;
+`read_script_line()` is a non-dying decrypt copy of helptext.c's, since
+`read_encrypted_pascal_string` exits at EOF). Play-level lines are `]L…`
+(two-char prefix; `s[1]=='L'`): `lvlFileNum = atoi(s+25)` (1-based) → archive
+index `lvlFileNum-1`; title = 9 chars at `s+13`. Order is by first script
+appearance, orphan records appended by index, identity fallback if the script
+is missing. Sorting is **display-only** (`display_order[row]→archive_index`);
+on-disk record order is never touched (the script references records by
+index). `last_level_sel` tracks the archive index so the highlight sticks
+across re-sorts/episode switches.
+
+Queued (task chip): **left mini-map scrollbar** — slim left-edge vertical
+mini-map of the active layer showing full level height, a band for the current
+6-row viewport, and a cursor tick. Main risk: the map viewport is anchored at
+x=0 today, so it needs a left-origin offset + a recomputed `view_cols()` that
+fits left strip + map + right sidebar within 320px.
 Self-test: `--edit-roundtrip <ep>` byte-verifies parse/serialize of every level.
 Extras beyond E0–E2: F12 BMP screenshots + headless `--edit-shot <ep>,<lvl>`;
 full-map PNG export (X key, or `--edit-export <ep>,<lvl>`) via a

@@ -27,16 +27,17 @@ extern JE_boolean richMode, constantPlay, constantDie;
 // 0 means "not requested"; otherwise the requested episode number.
 extern int edit_roundtrip_episode;
 
-// Hidden level-editor flag (Phase E1): --edit <episode 1-4> boots the
+// Hidden level-editor flag (Phase E1): --edit (no argument) boots the
 // interactive editor (lvledit_run()) instead of the normal title screen.
-// 0 means "not requested"; otherwise the requested episode number.
-extern int edit_episode;
+// The editor now presents its own in-app episode picker followed by the
+// existing per-episode level-select, so no episode need be given here.
+extern bool edit_requested;
 
 // Hidden level-editor flag: --edit-shot <episode>,<level> renders a fixed set
 // of editor screens for one level and saves them as BMPs in the current
 // directory, then exits -- no interactive loop. edit_shot_requested is false
 // unless the flag was given (level 0 is a valid level index, so it can't
-// double as its own "not requested" sentinel the way edit_episode's 0 does).
+// double as its own "not requested" sentinel the way a plain int would).
 extern bool edit_shot_requested;
 extern int edit_shot_episode;
 extern int edit_shot_level;

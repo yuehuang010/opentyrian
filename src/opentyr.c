@@ -1015,12 +1015,14 @@ int main(int argc, char *argv[])
 		intro_logos();
 #endif
 
-	if (edit_episode != 0)
+	if (edit_requested)
 	{
 		// Hidden interactive level editor (Phase E1): boots straight into
-		// the editor loop instead of the normal title-screen/game loop, and
-		// exits when the user quits the editor.
-		lvledit_run(edit_episode);
+		// the editor loop instead of the normal title-screen/game loop.
+		// lvledit_run(0) starts at the in-app episode picker, which then
+		// leads into the existing per-episode level-select; exits when the
+		// user quits the editor.
+		lvledit_run(0);
 		return 0;
 	}
 

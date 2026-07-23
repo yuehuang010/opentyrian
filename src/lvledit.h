@@ -29,9 +29,11 @@
 
 #include <stdbool.h>
 
-// Runs the interactive level editor over tyrian<episode>.lvl (episode 1-4)
-// until the user quits back out. Assumes video/keyboard/font/palette
-// subsystems are already initialized (same prerequisites as titleScreen()).
+// Runs the interactive level editor until the user quits back out. episode
+// selects tyrian<episode>.lvl directly (1-4); pass 0 (or any out-of-range
+// value) to start at the in-app episode picker instead. Assumes
+// video/keyboard/font/palette subsystems are already initialized (same
+// prerequisites as titleScreen()).
 void lvledit_run(int episode);
 
 // Headless screenshot dump: loads tyrian<episode>.lvl (episode 1-4), parses

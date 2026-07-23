@@ -75,10 +75,93 @@ static lvledit_level cur_level;
 static int cur_level_index = -1;
 static bool level_dirty = false;
 
+// ---------------------------------------------------------------------
+// Undo / redo
+// ---------------------------------------------------------------------
+//
+// Bounded history of whole-level snapshots. lvledit_level is ~52KB
+// (mostly map1/map2/map3 + the event table), so ED_UNDO_CAP*2 static
+// snapshots land around 6.6MB of BSS -- cheap enough next to export_rgb_buf
+// (~18MB) below to just keep as plain static arrays rather than malloc/free
+// them (no allocation-failure path to reason about, no leak to avoid).
+#define ED_UNDO_CAP 64
+
+static lvledit_level undo_stack[ED_UNDO_CAP];
+static int undo_count = 0;
+static lvledit_level redo_stack[ED_UNDO_CAP];
+static int redo_count = 0;
+
+// Clears both stacks. Call whenever a level is freshly parsed into
+// cur_level -- there's nothing meaningful to undo/redo across a fresh load.
+static void undo_reset(void)
+{
+	undo_count = 0;
+	redo_count = 0;
+}
+
+// Pushes `level` onto `stack`/`*count` (capacity ED_UNDO_CAP), dropping the
+// oldest entry (ring behavior) once full.
+static void snapshot_push(lvledit_level *stack, int *count, const lvledit_level *level)
+{
+	if (*count < ED_UNDO_CAP)
+	{
+		stack[*count] = *level;
+		++*count;
+	}
+	else
+	{
+		memmove(&stack[0], &stack[1], sizeof(lvledit_level) * (ED_UNDO_CAP - 1));
+		stack[ED_UNDO_CAP - 1] = *level;
+	}
+}
+
+// Records the CURRENT cur_level as an undo point (the "before" state) and
+// clears the redo stack (a fresh edit invalidates any prior redo history).
+// Call this immediately BEFORE applying any real mutation to cur_level.
+static void undo_push(void)
+{
+	snapshot_push(undo_stack, &undo_count, &cur_level);
+	redo_count = 0;
+}
+
+// Pops the most recent undo snapshot into cur_level, pushing the current
+// state onto the redo stack first. Returns false (no-op) if there's nothing
+// to undo.
+static bool undo_apply(void)
+{
+	if (undo_count == 0)
+		return false;
+
+	snapshot_push(redo_stack, &redo_count, &cur_level);
+	cur_level = undo_stack[--undo_count];
+	return true;
+}
+
+// Symmetric with undo_apply(): pops the most recent redo snapshot into
+// cur_level, pushing the current state onto the undo stack first. Returns
+// false (no-op) if there's nothing to redo.
+static bool redo_apply(void)
+{
+	if (redo_count == 0)
+		return false;
+
+	snapshot_push(undo_stack, &undo_count, &cur_level);
+	cur_level = redo_stack[--redo_count];
+	return true;
+}
+
 static int active_layer = 0;  // 0 = map1, 1 = map2, 2 = map3
 static int cursor_x = 0, cursor_y = 0;
 static int scroll_x = 0, scroll_y = 0;
 static int brush_slot[3] = { 0, 0, 0 };
+
+// Toggleable right-hand tile-slot sidebar (T key), see draw_sidebar()/
+// view_cols() below. Persistent across frames but starts closed.
+static bool sidebar_open = false;
+
+// Row scroll for the sidebar's 2-column slot grid; auto-scrolled by
+// draw_sidebar() to keep the active layer's current brush slot in view.
+static int sidebar_scroll = 0;
 
 // Cheap per-level summary (just enough to list levels without keeping every
 // parsed record around at once).
@@ -91,10 +174,36 @@ typedef struct
 static LevelSummary level_summaries[ED_MAX_LEVEL_SUMMARIES];
 static int level_summary_count = 0;
 
-// Remembers the last-selected row across re-entries into run_level_select()
-// within one editor session (e.g. after Esc-ing out of the map/event editor
-// back to the level list), so the list doesn't keep jumping back to the top.
+// Remembers the last-selected ARCHIVE INDEX (a record's permanent identity,
+// not a row number) across re-entries into run_level_select() within one
+// editor session (e.g. after Esc-ing out of the map/event editor back to the
+// level list, or after toggling sort mode), so the list doesn't keep jumping
+// back to the top and a remembered selection survives a re-sort.
 static int last_level_sel = 0;
+
+// Level list can be displayed sorted by in-game play order (default) or by
+// raw archive index. Either way the *archive index is always the record's
+// real, permanent identity* -- sorting only changes which row of the list
+// shows which record; it never reorders anything on disk.
+typedef enum { SORT_PLAY_ORDER, SORT_ARCHIVE_INDEX } lvledit_sort_mode;
+static lvledit_sort_mode sort_mode = SORT_PLAY_ORDER;
+
+// display_order[row] = archive index shown at that row of the level list,
+// per the current sort_mode. play_order[] is the SORT_PLAY_ORDER permutation
+// computed by compute_play_order(); display_order[] is rebuilt from it (or
+// from the identity permutation) by build_display_order() below.
+static int play_order[ED_MAX_LEVEL_SUMMARIES];
+static int display_order[ED_MAX_LEVEL_SUMMARIES];
+
+// level_title[archive_index] = the level's in-game title, captured from the
+// SAME ]L script line compute_play_order() already parses for play order
+// (levelName = s+13, up to 9 chars, per tyrian2.c's `SDL_strlcpy(levelName,
+// s + 13, 10)`), trimmed of the trailing space-padding the field is stored
+// with. Keyed by archive index (not by row/sort), so it reads the same in
+// both sort modes. FIRST script appearance wins, same rule as play_order.
+// Left empty ("") for archive records the script never references -- shown
+// as "(unnamed)" in the level list.
+static char level_title[ED_MAX_LEVEL_SUMMARIES][12];
 
 // ---------------------------------------------------------------------
 // Event editor state (Phase E2)
@@ -365,17 +474,27 @@ static void draw_checker_cell(SDL_Surface *screen, int dst_x, int dst_y)
 	}
 }
 
+// Map viewport width in tile columns: narrower when the tile sidebar (T
+// key) is open, to leave room for it on the right; full width when closed.
+// ED_VIEW_COLS itself stays the fixed max/closed-state constant that the
+// sidebar geometry (ED_SIDEBAR_*, below) is measured against.
+static int view_cols(void)
+{
+	return sidebar_open ? ED_VIEW_COLS - 2 : ED_VIEW_COLS;
+}
+
 static void clamp_view(void)
 {
 	int w = layer_width(active_layer);
 	int h = layer_height(active_layer);
+	int cols = view_cols();
 
 	if (cursor_x < 0) cursor_x = 0;
 	if (cursor_x >= w) cursor_x = w - 1;
 	if (cursor_y < 0) cursor_y = 0;
 	if (cursor_y >= h) cursor_y = h - 1;
 
-	int max_scroll_x = w > ED_VIEW_COLS ? w - ED_VIEW_COLS : 0;
+	int max_scroll_x = w > cols ? w - cols : 0;
 	int max_scroll_y = h > ED_VIEW_ROWS ? h - ED_VIEW_ROWS : 0;
 
 	if (scroll_x > max_scroll_x) scroll_x = max_scroll_x;
@@ -384,7 +503,7 @@ static void clamp_view(void)
 	if (scroll_y < 0) scroll_y = 0;
 
 	if (cursor_x < scroll_x) scroll_x = cursor_x;
-	if (cursor_x >= scroll_x + ED_VIEW_COLS) scroll_x = cursor_x - ED_VIEW_COLS + 1;
+	if (cursor_x >= scroll_x + cols) scroll_x = cursor_x - cols + 1;
 	if (cursor_y < scroll_y) scroll_y = cursor_y;
 	if (cursor_y >= scroll_y + ED_VIEW_ROWS) scroll_y = cursor_y - ED_VIEW_ROWS + 1;
 }
@@ -395,13 +514,14 @@ static void draw_map_viewport(void)
 {
 	int w = layer_width(active_layer);
 	int h = layer_height(active_layer);
+	int cols = view_cols();
 
 	for (int row = 0; row < ED_VIEW_ROWS; ++row)
 	{
 		int my = scroll_y + row;
 		int dy = row * ED_TILE_H;
 
-		for (int col = 0; col < ED_VIEW_COLS; ++col)
+		for (int col = 0; col < cols; ++col)
 		{
 			int mx = scroll_x + col;
 			int dx = col * ED_TILE_W;
@@ -433,6 +553,79 @@ static void draw_map_viewport(void)
 	}
 }
 
+// ---------------------------------------------------------------------
+// Tile sidebar (T toggle) -- the map-editor-resident replacement for the
+// old modal tile palette overlay.
+// ---------------------------------------------------------------------
+//
+// Geometry: the viewport is view_cols()*ED_TILE_W wide when the sidebar is
+// open (11*24 = 264px), leaving a 1px divider at x=264 and the sidebar
+// itself in x=268..319 (52px: two ED_TILE_W-wide columns plus a small
+// inter-column gap). Vertically it stops at the same y as the viewport
+// (ED_VIEW_ROWS*ED_TILE_H = 168px), well above ED_STATUS_Y/ED_HELP_Y1/Y2.
+#define ED_SIDEBAR_DIVIDER_X ((ED_VIEW_COLS - 2) * ED_TILE_W)         // 264
+#define ED_SIDEBAR_X0        (ED_SIDEBAR_DIVIDER_X + 4)               // 268
+#define ED_SIDEBAR_COL_W     (ED_TILE_W + 2)                          // 26
+#define ED_SIDEBAR_COLS      2
+#define ED_SIDEBAR_ROWS_VISIBLE ED_VIEW_ROWS                          // 6 (12 slots/window)
+#define ED_SIDEBAR_TOTAL_ROWS   ((72 + ED_SIDEBAR_COLS - 1) / ED_SIDEBAR_COLS)  // 36
+
+// Draws the active layer's 72 tile slots as a scrolling 2-column grid in
+// the right sidebar (only called when sidebar_open). All 72 slots are
+// shown, with unusable ones (slot_usable()) hatched out exactly like the
+// old modal overlay did; the current brush_slot[active_layer] gets a
+// bright (color 15) highlight box, and the grid auto-scrolls to keep it in
+// view.
+static void draw_sidebar(void)
+{
+	fill_rectangle_xy(VGAScreen, ED_SIDEBAR_DIVIDER_X, 0, ED_SIDEBAR_DIVIDER_X, ED_VIEW_ROWS * ED_TILE_H - 1, 8);
+
+	int brush = brush_slot[active_layer];
+	int brush_row = brush / ED_SIDEBAR_COLS;
+
+	if (brush_row < sidebar_scroll)
+		sidebar_scroll = brush_row;
+	if (brush_row >= sidebar_scroll + ED_SIDEBAR_ROWS_VISIBLE)
+		sidebar_scroll = brush_row - ED_SIDEBAR_ROWS_VISIBLE + 1;
+
+	int max_scroll = ED_SIDEBAR_TOTAL_ROWS > ED_SIDEBAR_ROWS_VISIBLE ? ED_SIDEBAR_TOTAL_ROWS - ED_SIDEBAR_ROWS_VISIBLE : 0;
+	if (sidebar_scroll > max_scroll) sidebar_scroll = max_scroll;
+	if (sidebar_scroll < 0) sidebar_scroll = 0;
+
+	for (int row = 0; row < ED_SIDEBAR_ROWS_VISIBLE; ++row)
+	{
+		int slot_row = sidebar_scroll + row;
+		int dy = row * ED_TILE_H;
+
+		for (int col = 0; col < ED_SIDEBAR_COLS; ++col)
+		{
+			int slot = slot_row * ED_SIDEBAR_COLS + col;
+			if (slot >= 72)
+				continue;
+
+			int dx = ED_SIDEBAR_X0 + col * ED_SIDEBAR_COL_W;
+
+			const EditorTile *tile = resolve_slot_tile(active_layer, slot);
+			if (tile != NULL)
+				blit_tile(VGAScreen, tile, dx, dy, active_layer == 0);
+			else
+				draw_checker_cell(VGAScreen, dx, dy);
+
+			if (!slot_usable(active_layer, slot))
+			{
+				// Hatch out unusable slots so they read as off-limits, same
+				// as the old modal overlay.
+				for (int ty = 0; ty < ED_TILE_H; ty += 2)
+					for (int tx = 0; tx < ED_TILE_W; tx += 2)
+						JE_pix(VGAScreen, dx + tx, dy + ty, 0);
+			}
+
+			if (slot == brush)
+				JE_rectangle(VGAScreen, dx, dy, dx + ED_TILE_W - 1, dy + ED_TILE_H - 1, 15);
+		}
+	}
+}
+
 // The game plays a map from the bottom row upward (mapY starts at
 // `height - 8` in JE_main() and is decremented as the level scrolls;
 // draw_background_*() in backgrnd.c likewise walk mapYPos *backwards*
@@ -459,7 +652,7 @@ static void draw_status(bool show_help)
 	if (show_help)
 	{
 		JE_outText(VGAScreen, 4, ED_HELP_Y1, "Arrows move Shift/PgUp/PgDn fast Tab layer Enter/Space place", 0, 0);
-		JE_outText(VGAScreen, 4, ED_HELP_Y2, "P pick T tile palette E events S save X export F1 help Esc back", 0, 0);
+		JE_outText(VGAScreen, 4, ED_HELP_Y2, "P pick [/] tile T panel U undo R redo E events S save Esc back", 0, 0);
 	}
 }
 
@@ -467,93 +660,29 @@ static void render_map_screen(bool show_help)
 {
 	SDL_FillRect(VGAScreen, NULL, 0);
 	draw_map_viewport();
+	if (sidebar_open)
+		draw_sidebar();
 	draw_status(show_help);
 }
 
 // ---------------------------------------------------------------------
-// Modal sub-screens (tile palette overlay, unsaved-changes confirm, toast)
+// Modal sub-screens (unsaved-changes confirm, toast)
 // ---------------------------------------------------------------------
 
-// Grid of the active layer's 72 slots (12 cols x 6 rows, one screen's worth
-// at native tile size). Returns the chosen slot, or -1 if the user canceled
-// (Esc) without making a selection. Unusable slots (see slot_usable) are
-// skipped by cursor movement and cannot be selected.
-static int run_tile_palette_overlay(int layer, int initial_slot)
+// Steps brush_slot[active_layer] to the previous (dir < 0) or next (dir >
+// 0) USABLE slot (see slot_usable()), skipping over unusable ones. Does not
+// wrap past slot 0/71; a no-usable-neighbor situation (or dir being neither
+// -1 nor 1) is simply a no-op -- it never lands on an unusable slot and the
+// loop is bounded by the fixed 0..71 slot range, so it can't spin forever.
+// Only changes the brush -- does not place a tile or touch level_dirty.
+static void step_brush_slot(int dir)
 {
-	const int cols = 12;  // 12 * 6 = 72 slots
-
-	int sel = (initial_slot >= 0 && initial_slot < 72) ? initial_slot : 0;
-	while (!slot_usable(layer, sel) && sel < 71)
-		++sel;
-
-	for (;;)
+	for (int s = brush_slot[active_layer] + dir; s >= 0 && s < 72; s += dir)
 	{
-		setFrameCount(1);
-		handleSdlEvents();
-
-		SDL_FillRect(VGAScreen, NULL, 0);
-
-		for (int slot = 0; slot < 72; ++slot)
+		if (slot_usable(active_layer, s))
 		{
-			int col = slot % cols;
-			int row = slot / cols;
-			int dx = col * ED_TILE_W;
-			int dy = row * ED_TILE_H;
-
-			const EditorTile *tile = resolve_slot_tile(layer, slot);
-			if (tile != NULL)
-				blit_tile(VGAScreen, tile, dx, dy, layer == 0);
-			else
-				draw_checker_cell(VGAScreen, dx, dy);
-
-			if (!slot_usable(layer, slot))
-			{
-				// Hatch out unusable slots so they read as off-limits.
-				for (int ty = 0; ty < ED_TILE_H; ty += 2)
-					for (int tx = 0; tx < ED_TILE_W; tx += 2)
-						JE_pix(VGAScreen, dx + tx, dy + ty, 0);
-			}
-
-			if (slot == sel)
-				JE_rectangle(VGAScreen, dx, dy, dx + ED_TILE_W - 1, dy + ED_TILE_H - 1, 15);
-		}
-
-		JE_outText(VGAScreen, 4, ED_STATUS_Y, "Tile palette -- arrows move, Enter select, Esc cancel", 0, 2);
-
-		JE_showVGA();
-		waitUntilElapsed();
-
-		KeyboardInput ki;
-		while (keyboardGetInput(&ki))
-		{
-			switch (ki.scancode)
-			{
-			case SDL_SCANCODE_ESCAPE:
-				return -1;
-
-			case SDL_SCANCODE_LEFT:
-				if (sel % cols > 0) --sel;
-				break;
-			case SDL_SCANCODE_RIGHT:
-				if (sel % cols < cols - 1 && sel + 1 < 72) ++sel;
-				break;
-			case SDL_SCANCODE_UP:
-				if (sel - cols >= 0) sel -= cols;
-				break;
-			case SDL_SCANCODE_DOWN:
-				if (sel + cols < 72) sel += cols;
-				break;
-
-			case SDL_SCANCODE_RETURN:
-			case SDL_SCANCODE_KP_ENTER:
-			case SDL_SCANCODE_SPACE:
-				if (slot_usable(layer, sel))
-					return sel;
-				break;
-
-			default:
-				break;
-			}
+			brush_slot[active_layer] = s;
+			return;
 		}
 	}
 }
@@ -1147,7 +1276,7 @@ static void draw_event_screen(bool show_help)
 	else if (show_help)
 	{
 		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y1, "Up/Dn/PgUp/PgDn/Home/End row L/R field +/- (Shift=10) adj", 0, 0);
-		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "Enter type value I ins D del R sort-by-time S save Esc back", 0, 0);
+		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "Enter val I ins D del R sort U undo Y redo S save Esc back", 0, 0);
 	}
 }
 
@@ -1161,9 +1290,22 @@ static void commit_number_entry(void)
 		long v = strtol(number_entry_buf, NULL, 10);
 		lvledit_event *ev = &cur_level.event[event_sel];
 		long before = event_field_get(ev, event_field);
-		event_field_set(ev, event_field, v);
-		if (event_field_get(ev, event_field) != before)
+
+		// Pre-clamp so we can tell (before mutating anything) whether this
+		// will actually change the field -- mirrors event_field_set()'s own
+		// clamping, so a no-op entry (e.g. re-entering the same value, or a
+		// value that clamps back to `before`) pushes no undo step.
+		long lo, hi;
+		event_field_range(event_field, &lo, &hi);
+		if (v < lo) v = lo;
+		if (v > hi) v = hi;
+
+		if (v != before)
+		{
+			undo_push();
+			event_field_set(ev, event_field, v);
 			level_dirty = true;
+		}
 	}
 
 	entering_number = false;
@@ -1178,6 +1320,8 @@ static void insert_event(void)
 {
 	if (cur_level.event_count >= LVLEDIT_MAX_EVENT)
 		return;
+
+	undo_push();
 
 	int insert_at;
 	lvledit_event new_event;
@@ -1209,6 +1353,8 @@ static void delete_event(void)
 	if (cur_level.event_count == 0)
 		return;
 
+	undo_push();
+
 	for (int i = event_sel; i + 1 < cur_level.event_count; ++i)
 		cur_level.event[i] = cur_level.event[i + 1];
 
@@ -1231,6 +1377,8 @@ static void sort_events_by_time(void)
 	int n = cur_level.event_count;
 	if (n < 2)
 		return;
+
+	undo_push();
 
 	// Simple stable insertion sort -- n is capped at LVLEDIT_MAX_EVENT (2500)
 	// and this only runs on an explicit keypress, so O(n^2) is acceptable.
@@ -1351,9 +1499,19 @@ static void run_event_editor(void)
 				{
 					lvledit_event *ev = &cur_level.event[event_sel];
 					long before = event_field_get(ev, event_field);
-					event_field_set(ev, event_field, before + (fast ? 10 : 1));
-					if (event_field_get(ev, event_field) != before)
+
+					long lo, hi;
+					event_field_range(event_field, &lo, &hi);
+					long want = before + (fast ? 10 : 1);
+					if (want < lo) want = lo;
+					if (want > hi) want = hi;
+
+					if (want != before)
+					{
+						undo_push();
+						event_field_set(ev, event_field, want);
 						level_dirty = true;
+					}
 				}
 				break;
 
@@ -1363,9 +1521,19 @@ static void run_event_editor(void)
 				{
 					lvledit_event *ev = &cur_level.event[event_sel];
 					long before = event_field_get(ev, event_field);
-					event_field_set(ev, event_field, before - (fast ? 10 : 1));
-					if (event_field_get(ev, event_field) != before)
+
+					long lo, hi;
+					event_field_range(event_field, &lo, &hi);
+					long want = before - (fast ? 10 : 1);
+					if (want < lo) want = lo;
+					if (want > hi) want = hi;
+
+					if (want != before)
+					{
+						undo_push();
+						event_field_set(ev, event_field, want);
 						level_dirty = true;
+					}
 				}
 				break;
 
@@ -1389,6 +1557,34 @@ static void run_event_editor(void)
 
 			case SDL_SCANCODE_R:
 				sort_events_by_time();
+				break;
+
+			case SDL_SCANCODE_U:
+				if (undo_apply())
+				{
+					level_dirty = true;
+					clamp_event_view();
+					show_message("UNDO", 20);
+				}
+				else
+				{
+					show_message("NOTHING TO UNDO", 20);
+				}
+				break;
+
+			// R is already taken by sort_events_by_time() above, so redo
+			// uses Y here instead (unlike the map editor, where R is free).
+			case SDL_SCANCODE_Y:
+				if (redo_apply())
+				{
+					level_dirty = true;
+					clamp_event_view();
+					show_message("REDO", 20);
+				}
+				else
+				{
+					show_message("NOTHING TO REDO", 20);
+				}
 				break;
 
 			case SDL_SCANCODE_S:
@@ -1427,6 +1623,7 @@ static bool load_level_for_edit(int level_index)
 
 	cur_level_index = level_index;
 	level_dirty = false;
+	undo_reset();  // fresh parse -- nothing meaningful to undo/redo yet
 
 	load_tileset(cur_level.shapeFile);
 
@@ -1487,10 +1684,10 @@ static void run_map_editor(int level_index)
 				cursor_y += fast ? ED_VIEW_ROWS : 1;
 				break;
 			case SDL_SCANCODE_LEFT:
-				cursor_x -= fast ? ED_VIEW_COLS : 1;
+				cursor_x -= fast ? view_cols() : 1;
 				break;
 			case SDL_SCANCODE_RIGHT:
-				cursor_x += fast ? ED_VIEW_COLS : 1;
+				cursor_x += fast ? view_cols() : 1;
 				break;
 			case SDL_SCANCODE_PAGEUP:
 				cursor_y -= ED_VIEW_ROWS;
@@ -1524,6 +1721,7 @@ static void run_map_editor(int level_index)
 				Uint8 wanted = (Uint8)brush_slot[active_layer];
 				if (get_cell(active_layer, cursor_y, cursor_x) != wanted)
 				{
+					undo_push();
 					set_cell(active_layer, cursor_y, cursor_x, wanted);
 					level_dirty = true;
 				}
@@ -1535,12 +1733,42 @@ static void run_map_editor(int level_index)
 				break;
 
 			case SDL_SCANCODE_T:
-			{
-				int chosen = run_tile_palette_overlay(active_layer, brush_slot[active_layer]);
-				if (chosen >= 0)
-					brush_slot[active_layer] = chosen;
+				sidebar_open = !sidebar_open;
 				break;
-			}
+
+			case SDL_SCANCODE_LEFTBRACKET:
+				step_brush_slot(-1);
+				break;
+
+			case SDL_SCANCODE_RIGHTBRACKET:
+				step_brush_slot(1);
+				break;
+
+			case SDL_SCANCODE_U:
+				if (undo_apply())
+				{
+					level_dirty = true;
+					clamp_view();
+					show_message("UNDO", 20);
+				}
+				else
+				{
+					show_message("NOTHING TO UNDO", 20);
+				}
+				break;
+
+			case SDL_SCANCODE_R:
+				if (redo_apply())
+				{
+					level_dirty = true;
+					clamp_view();
+					show_message("REDO", 20);
+				}
+				else
+				{
+					show_message("NOTHING TO REDO", 20);
+				}
+				break;
 
 			case SDL_SCANCODE_S:
 				show_message(save_current_level() ? "SAVED" : "SAVE FAILED", 30);
@@ -1609,7 +1837,179 @@ static void build_level_summaries(void)
 	}
 }
 
-// Returns the chosen level index, or -1 if the user quit the editor.
+// ---------------------------------------------------------------------
+// Play-order derivation (levels<episode>.dat episode script)
+// ---------------------------------------------------------------------
+//
+// The .lvl archive itself has no level name and no play order -- that only
+// exists in the episode script, as the sequence of 'L' ("play level")
+// commands it issues (see tyrian2.c's script interpreter, case 'L' around
+// tyrian2.c:2865). This section re-scans that script independently, purely
+// to recover a sensible default ordering for the level-select list; nothing
+// here feeds back into gameplay, saving, or the archive itself.
+
+// XOR key + descramble copied byte-for-byte from helptext.c's
+// decrypt_string() (that function is static to helptext.c, so not directly
+// reusable, and it's paired there with fread_*_die() helpers that call
+// exit() at EOF -- fine for the real game loading a known-good script, fatal
+// for a scanner that must run a whole file to a clean EOF). Must stay
+// identical to helptext.c's copy since it is undoing the same on-disk
+// scramble.
+static const unsigned char crypt_key[] = { 204, 129, 63, 255, 71, 19, 25, 62, 1, 99 };
+
+// Non-dying analog of read_encrypted_pascal_string() (helptext.c): reads one
+// length-prefixed encrypted "pascal string" (1 length byte + `len` payload
+// bytes) from `f`, descrambles it, and copies min(len, size-1) bytes into
+// `s` (NUL-terminated). Returns false on EOF or a short read (no partial
+// data written to `s`) instead of dying, so a scan can simply stop at a
+// script's real end.
+static bool read_script_line(char *s, size_t size, FILE *f)
+{
+	Uint8 len;
+	if (fread(&len, 1, 1, f) != 1)
+		return false;
+
+	char buf[255];
+	if (len > 0 && fread(buf, 1, len, f) != (size_t)len)
+		return false;
+
+	if (len > 0)
+	{
+		for (int i = (int)len - 1; ; --i)
+		{
+			buf[i] ^= crypt_key[i % (int)sizeof(crypt_key)];
+			if (i == 0)
+				break;
+			buf[i] ^= buf[i - 1];
+		}
+	}
+
+	if (size > 0)
+	{
+		size_t n = MIN((size_t)len, size - 1);
+		memcpy(s, buf, n);
+		s[n] = '\0';
+	}
+
+	return true;
+}
+
+// Fills play_order[] (paired with level_summary_count, which the caller
+// must already have set via build_level_summaries()): the archive index of
+// every level the episode script plays, in FIRST-APPEARANCE order, followed
+// by any archive indices the script never references ("orphans" -- e.g.
+// unused maps), appended in ascending index order. The result is always a
+// full permutation of [0, level_summary_count). Also fills level_title[]
+// (indexed by archive index, not by play_order position) from the same ]L
+// lines -- first appearance wins there too, and orphan records are left
+// with an empty title.
+//
+// A "play level" script line is `]L...` -- tyrian2.c's interpreter (2710:
+// `if (s[0] == ']') switch (s[1]) { ... case 'L': ...`) dispatches on s[1]
+// once s[0] == ']' has already selected the command block, so the two-char
+// prefix (not a bare leading 'L') is what actually marks this command;
+// checked against tyrian21's levels1.dat directly (script lines there read
+// like "]L[ 9999 004 TYRIAN   18 09", confirming both the prefix and that
+// s+25 lands on the lvlFileNum field, "09").
+//
+// This is play order by first script appearance, not a strict runtime
+// trace: the script can jump/branch between sections (the ']'-prefixed
+// commands in tyrian2.c's interpreter), and this scan just walks the file
+// top-to-bottom without resolving any of that, so a level reachable only
+// through a branch still gets *a* position (wherever its 'L' line sits in
+// the file), just not necessarily its true in-game turn order. That's good
+// enough and fully deterministic for editor navigation, which is all this
+// is for. Falls back to identity order (0,1,2,...) if the script can't be
+// opened or read at all -- the "append orphans in ascending order" pass
+// below runs unconditionally and covers that case on its own, since nothing
+// will have been marked seen.
+// Extracts a ]L script line's level title into `out` (must be at least 10
+// bytes): 9 chars at s+13, mirroring tyrian2.c's own
+// `SDL_strlcpy(levelName, s + 13, 10)`, trimmed of the trailing
+// space-padding the field is stored with. No-op (leaves `out` untouched) if
+// `s` is too short to carry a title field at all -- caller is expected to
+// have already pre-cleared `out` (compute_play_order() does, once per
+// archive index, before scanning).
+static void extract_level_title(const char *s, char *out)
+{
+	if (strlen(s) <= 13)
+		return;
+
+	size_t n = MIN((size_t)9, strlen(s) - 13);
+	memcpy(out, s + 13, n);
+	out[n] = '\0';
+
+	while (n > 0 && out[n - 1] == ' ')
+		out[--n] = '\0';
+}
+
+static void compute_play_order(void)
+{
+	int play_order_count = 0;
+	bool seen[ED_MAX_LEVEL_SUMMARIES] = { false };
+
+	for (int i = 0; i < level_summary_count; ++i)
+		level_title[i][0] = '\0';
+
+	char fname[32];
+	snprintf(fname, sizeof(fname), "levels%d.dat", cur_episode);
+
+	FILE *f = dir_fopen(data_dir(), fname, "rb");
+	if (f != NULL)
+	{
+		char s[256];
+		while (read_script_line(s, sizeof(s), f))
+		{
+			if (s[0] != ']' || s[1] != 'L' || strlen(s) <= 25)
+				continue;
+
+			int lvl_file_num = atoi(s + 25);
+			int idx = lvl_file_num - 1;  // script's 1-based record # -> editor's 0-based archive index
+
+			if (idx < 0 || idx >= level_summary_count || seen[idx])
+				continue;
+
+			seen[idx] = true;
+			extract_level_title(s, level_title[idx]);
+			if (play_order_count < ED_MAX_LEVEL_SUMMARIES)
+				play_order[play_order_count++] = idx;
+		}
+
+		fclose(f);
+	}
+
+	for (int i = 0; i < level_summary_count && play_order_count < ED_MAX_LEVEL_SUMMARIES; ++i)
+	{
+		if (!seen[i])
+			play_order[play_order_count++] = i;
+	}
+}
+
+// Rebuilds display_order[] (length level_summary_count) from the current
+// sort_mode. Caller must have already refreshed play_order[] via
+// compute_play_order() for this episode/summary set.
+static void build_display_order(void)
+{
+	for (int i = 0; i < level_summary_count; ++i)
+		display_order[i] = (sort_mode == SORT_PLAY_ORDER) ? play_order[i] : i;
+}
+
+// Row in display_order[] whose archive index is `archive_index`, or 0 if
+// not found (e.g. a stale last_level_sel left over from a different episode
+// or archive size).
+static int row_for_archive_index(int archive_index)
+{
+	for (int row = 0; row < level_summary_count; ++row)
+		if (display_order[row] == archive_index)
+			return row;
+	return 0;
+}
+
+// Returns the chosen level ARCHIVE INDEX, or -1 if the user quit the editor.
+// The list itself is rendered/navigated via display_order[] (row -> archive
+// index) so it can be shown in play order or archive order, but every
+// record is always identified by -- and this always returns -- its real
+// archive index; sorting is display-only.
 static int run_level_select(void)
 {
 	build_level_summaries();
@@ -1618,9 +2018,10 @@ static int run_level_select(void)
 	if (count == 0)
 		return -1;
 
-	int sel = last_level_sel;
-	if (sel < 0) sel = 0;
-	if (sel > count - 1) sel = count - 1;
+	compute_play_order();
+	build_display_order();
+
+	int sel = row_for_archive_index(last_level_sel);
 	int scroll = 0;
 	const int rows_visible = 19;
 	const int row_h = 8;
@@ -1635,24 +2036,28 @@ static int run_level_select(void)
 
 		SDL_FillRect(VGAScreen, NULL, 0);
 
-		char title[64];
-		snprintf(title, sizeof(title), "Level Editor - tyrian%d.lvl - %d level(s)", cur_episode, count);
+		char title[80];
+		snprintf(title, sizeof(title), "Level Editor - tyrian%d.lvl - %d level(s) - sort:%s", cur_episode, count,
+		         sort_mode == SORT_PLAY_ORDER ? "play" : "arch");
 		JE_outText(VGAScreen, 8, 4, title, 0, 4);
 
 		for (int row = 0; row < rows_visible; ++row)
 		{
-			int idx = scroll + row;
-			if (idx >= count)
+			int r = scroll + row;
+			if (r >= count)
 				break;
 
+			int idx = display_order[r];
+			const char *title = (level_title[idx][0] != '\0') ? level_title[idx] : "(unnamed)";
+
 			char line[64];
-			snprintf(line, sizeof(line), "Level %2d   mapFile=%c shapeFile=%c", idx,
+			snprintf(line, sizeof(line), "%2d  %-9s  map=%c shp=%c", idx, title,
 			         level_summaries[idx].mapFile, level_summaries[idx].shapeFile);
 
-			JE_outText(VGAScreen, 16, 16 + row * row_h, line, 0, idx == sel ? 4 : 0);
+			JE_outText(VGAScreen, 16, 16 + row * row_h, line, 0, r == sel ? 4 : 0);
 		}
 
-		JE_outText(VGAScreen, 8, 190, "Up/Down select, PgUp/PgDn page, Enter open, Esc quit editor", 0, 0);
+		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, Enter open, Esc quit", 0, 0);
 
 		JE_showVGA();
 		waitUntilElapsed();
@@ -1663,7 +2068,7 @@ static int run_level_select(void)
 			switch (ki.scancode)
 			{
 			case SDL_SCANCODE_ESCAPE:
-				last_level_sel = sel;
+				last_level_sel = display_order[sel];
 				return -1;
 
 			case SDL_SCANCODE_UP:
@@ -1681,10 +2086,19 @@ static int run_level_select(void)
 				if (sel > count - 1) sel = count - 1;
 				break;
 
+			case SDL_SCANCODE_O:
+			{
+				int cur_archive_index = display_order[sel];
+				sort_mode = (sort_mode == SORT_PLAY_ORDER) ? SORT_ARCHIVE_INDEX : SORT_PLAY_ORDER;
+				build_display_order();
+				sel = row_for_archive_index(cur_archive_index);
+				break;
+			}
+
 			case SDL_SCANCODE_RETURN:
 			case SDL_SCANCODE_KP_ENTER:
-				last_level_sel = sel;
-				return sel;
+				last_level_sel = display_order[sel];
+				return display_order[sel];
 
 			default:
 				break;
@@ -1694,22 +2108,22 @@ static int run_level_select(void)
 }
 
 // ---------------------------------------------------------------------
-// Entry point
+// Episode select screen
 // ---------------------------------------------------------------------
 
-void lvledit_run(int episode)
+// Loads episode's archive as the "current" one (cur_episode/cur_lvl_filename),
+// applies the fixed flight-tileset palette, and resets the level-parse state
+// so a fresh run_level_select()/run_map_editor() start clean. Shared by the
+// interactive lvledit_run() and the headless CLI entry points below.
+static bool load_episode_archive(int episode)
 {
-	bool saved_hd_mode = hd_mode;
-	hd_mode = false;  // classic 320x200 tool only, regardless of config
-
 	cur_episode = episode;
 	snprintf(cur_lvl_filename, sizeof(cur_lvl_filename), "tyrian%d.lvl", episode);
 
 	if (!lvledit_load_archive(cur_lvl_filename))
 	{
 		fprintf(stderr, "lvledit: failed to load %s\n", cur_lvl_filename);
-		hd_mode = saved_hd_mode;
-		return;
+		return false;
 	}
 
 	// Flight tilesets are always drawn under palette index 5 (palette.dat),
@@ -1729,13 +2143,130 @@ void lvledit_run(int episode)
 	cur_level_index = -1;
 	tileset_loaded = false;
 
+	return true;
+}
+
+// Remembers the last-selected row across re-entries into run_episode_select()
+// within one editor session, same rationale as last_level_sel above.
+static int last_episode_sel = 1;
+
+// Returns the chosen episode (1-4), or -1 if the user quit the editor.
+static int run_episode_select(void)
+{
+	// Per-episode level counts, probed once per entry into this screen, for
+	// display only ("(N levels)" / "(?)" on failure). This clobbers the
+	// shared archive blob/cur_episode/cur_lvl_filename as a side effect, but
+	// that's harmless: whichever episode the user picks gets reloaded fresh
+	// by load_episode_archive() right after this function returns.
+	int counts[5]; // index by episode 1..4; counts[0] unused
+	for (int e = 1; e <= 4; ++e)
+	{
+		char fname[32];
+		snprintf(fname, sizeof(fname), "tyrian%d.lvl", e);
+		counts[e] = lvledit_load_archive(fname) ? lvledit_level_count() : -1;
+	}
+
+	int sel = last_episode_sel;
+	if (sel < 1) sel = 1;
+	if (sel > 4) sel = 4;
+
 	for (;;)
 	{
-		int idx = run_level_select();
-		if (idx < 0)
-			break;
+		setFrameCount(1);
+		handleSdlEvents();
 
-		run_map_editor(idx);
+		SDL_FillRect(VGAScreen, NULL, 0);
+
+		JE_outText(VGAScreen, 8, 4, "Level Editor - select episode", 0, 4);
+
+		for (int e = 1; e <= 4; ++e)
+		{
+			char line[64];
+			if (counts[e] >= 0)
+				snprintf(line, sizeof(line), "Episode %d   tyrian%d.lvl  (%d levels)", e, e, counts[e]);
+			else
+				snprintf(line, sizeof(line), "Episode %d   tyrian%d.lvl  (?)", e, e);
+
+			JE_outText(VGAScreen, 16, 16 + (e - 1) * 8, line, 0, e == sel ? 4 : 0);
+		}
+
+		JE_outText(VGAScreen, 8, 190, "Up/Down select, Enter open, Esc quit editor", 0, 0);
+
+		JE_showVGA();
+		waitUntilElapsed();
+
+		KeyboardInput ki;
+		while (keyboardGetInput(&ki))
+		{
+			switch (ki.scancode)
+			{
+			case SDL_SCANCODE_ESCAPE:
+				last_episode_sel = sel;
+				return -1;
+
+			case SDL_SCANCODE_UP:
+				if (sel > 1) --sel;
+				break;
+			case SDL_SCANCODE_DOWN:
+				if (sel < 4) ++sel;
+				break;
+
+			case SDL_SCANCODE_RETURN:
+			case SDL_SCANCODE_KP_ENTER:
+				last_episode_sel = sel;
+				return sel;
+
+			default:
+				break;
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------
+
+// episode: 1-4 to boot straight into that episode's level-select, or 0 (or
+// any out-of-range value) to start at the in-app episode picker instead.
+void lvledit_run(int episode)
+{
+	bool saved_hd_mode = hd_mode;
+	hd_mode = false;  // classic 320x200 tool only, regardless of config
+
+	// Render the episode picker under a known palette even before any
+	// archive has been loaded; load_episode_archive() re-applies this same
+	// palette once an episode is chosen, which is harmless.
+	set_palette(palettes[5], 0, 255);
+
+	int ep = episode;
+	for (;;)
+	{
+		if (ep < 1 || ep > 4)
+		{
+			ep = run_episode_select();
+			if (ep < 0)
+				break;  // Esc from the episode picker => quit editor
+		}
+
+		if (!load_episode_archive(ep))
+		{
+			ep = 0;  // failed load => back to the episode picker
+			continue;
+		}
+
+		last_level_sel = 0;  // fresh episode: don't carry a stale selection
+
+		for (;;)
+		{
+			int idx = run_level_select();
+			if (idx < 0)
+				break;  // Esc from level-select => back to episode picker
+
+			run_map_editor(idx);
+		}
+
+		ep = 0;  // back out to the episode picker after leaving level-select
 	}
 
 	hd_mode = saved_hd_mode;
@@ -1746,10 +2277,10 @@ void lvledit_run(int episode)
 // ---------------------------------------------------------------------
 
 // Common preamble for the headless CLI entry points below: forces classic
-// mode, loads the archive, applies the fixed flight-tileset palette (see the
-// comment above lvledit_run()'s set_palette() call for why palette 5
-// specifically), and parses+tileset-loads level_index into cur_level via
-// load_level_for_edit(). On success, *out_saved_hd_mode carries the caller's
+// mode, loads the archive via load_episode_archive() (see the comment above
+// its set_palette() call for why palette 5 specifically), and parses+
+// tileset-loads level_index into cur_level via load_level_for_edit(). On
+// success, *out_saved_hd_mode carries the caller's
 // original hd_mode (to be restored when the caller is done) and the function
 // returns true. On any failure, hd_mode is already restored before
 // returning false, so the caller should just propagate the failure.
@@ -1758,20 +2289,11 @@ static bool headless_load_for_export(int episode, int level_index, bool *out_sav
 	*out_saved_hd_mode = hd_mode;
 	hd_mode = false;  // classic 320x200 tool only, regardless of config
 
-	cur_episode = episode;
-	snprintf(cur_lvl_filename, sizeof(cur_lvl_filename), "tyrian%d.lvl", episode);
-
-	if (!lvledit_load_archive(cur_lvl_filename))
+	if (!load_episode_archive(episode))
 	{
-		fprintf(stderr, "lvledit: failed to load %s\n", cur_lvl_filename);
 		hd_mode = *out_saved_hd_mode;
 		return false;
 	}
-
-	set_palette(palettes[5], 0, 255);
-
-	cur_level_index = -1;
-	tileset_loaded = false;
 
 	if (!load_level_for_edit(level_index))
 	{
