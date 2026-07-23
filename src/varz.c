@@ -1048,6 +1048,14 @@ void JE_wipeShieldArmorBars(void)
 JE_byte JE_playerDamage(JE_byte temp,
                         Player *this_player)
 {
+	// Level-editor F5 playtest (LEVEL_EDITOR_PLAN.md E7): the player is
+	// invincible so the level can be flown/inspected freely. This is the sole
+	// normal in-flight damage path (the only other armor-drain, mainint.c's
+	// off-screen drain, is gated on constantDie, off during a playtest), so a
+	// single no-op here keeps shield/armor full and prevents death outright.
+	if (editorPlaytest)
+		return 0;
+
 	int playerDamage = 0;
 	soundQueue[7] = S_SHIELD_HIT;
 

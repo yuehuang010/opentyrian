@@ -39,6 +39,7 @@
 #include "file.h"
 #include "fonthand.h"
 #include "keyboard.h"
+#include "loudness.h"
 #include "lvllib.h"
 #include "mainint.h"
 #include "mouse.h"
@@ -2652,6 +2653,11 @@ static void playtest_current_level(void)
 	JE_main();  // returns at level end via the editorPlaytest carve-out
 
 	editorPlaytest = false;
+
+	// Stop the level music: JE_main() only fades/stops the song on its
+	// play_demo path (tyrian2.c ~727), which the editorPlaytest early return
+	// skips, so without this the flight track keeps playing back in the editor.
+	stop_song();
 
 	// Restore the editor: drop the scratch archive, put the mouse back to
 	// absolute, re-apply the fixed tileset palette (flight loaded its own) and
