@@ -43,6 +43,7 @@ JE_boolean richMode = false, constantPlay = false, constantDie = false;
 
 int edit_roundtrip_episode = 0;
 int edit_addlevel_episode = 0;
+int edit_script_roundtrip_episode = 0;
 bool edit_requested = false;
 
 bool edit_shot_requested = false;
@@ -98,6 +99,10 @@ void JE_paramCheck(int argc, char *argv[])
 		// not shown in --help. Shares the "edit" prefix; same short-circuit
 		// ordering note as edit-shot above applies here too.
 		{ 262, 0,   "edit-addlevel",     true },
+		// Hidden: levels<ep>.dat script-codec round-trip self-test
+		// (Phase E5a), not shown in --help. Shares the "edit" prefix; same
+		// short-circuit ordering note as edit-shot above applies here too.
+		{ 263, 0,   "edit-script-roundtrip", true },
 
 		{ 'X', 'X', "xmas",              false },
 		{ 'c', 'c', "constant",          false },
@@ -289,6 +294,19 @@ void JE_paramCheck(int argc, char *argv[])
 			else
 			{
 				fprintf(stderr, "%s: error: invalid --edit-addlevel episode (expected 1-4)\n", argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			break;
+		}
+
+		case 263: // --edit-script-roundtrip (hidden)
+		{
+			int temp = atoi(option.arg);
+			if (temp >= 1 && temp <= 4)
+				edit_script_roundtrip_episode = temp;
+			else
+			{
+				fprintf(stderr, "%s: error: invalid --edit-script-roundtrip episode (expected 1-4)\n", argv[0]);
 				exit(EXIT_FAILURE);
 			}
 			break;

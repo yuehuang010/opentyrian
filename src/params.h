@@ -31,6 +31,11 @@ extern int edit_roundtrip_episode;
 // "0 means not requested" sentinel as edit_roundtrip_episode above.
 extern int edit_addlevel_episode;
 
+// Hidden level-editor flag (Phase E5a): --edit-script-roundtrip <episode
+// 1-4>, the levels<ep>.dat script-codec round-trip self-test. Same "0 means
+// not requested" sentinel as edit_roundtrip_episode above.
+extern int edit_script_roundtrip_episode;
+
 // Hidden level-editor flag (Phase E1): --edit (no argument) boots the
 // interactive editor (lvledit_run()) instead of the normal title screen.
 // The editor now presents its own in-app episode picker followed by the

@@ -39,6 +39,7 @@
 #include "loudness.h"
 #include "lvledit.h"
 #include "lvledit_io.h"
+#include "lvledit_script.h"
 #include "mainint.h"
 #include "mouse.h"
 #include "mtrand.h"
@@ -951,6 +952,15 @@ int main(int argc, char *argv[])
 		// Hidden level-editor add-level self-test (Phase E4): same rationale
 		// as edit_roundtrip_episode above -- no video/audio needed.
 		bool ok = lvledit_run_addlevel_test(edit_addlevel_episode);
+		return ok ? 0 : 1;
+	}
+
+	if (edit_script_roundtrip_episode != 0)
+	{
+		// Hidden level-editor script-codec round-trip self-test (Phase
+		// E5a): same rationale as edit_roundtrip_episode above -- no
+		// video/audio needed.
+		bool ok = lvledit_script_run_roundtrip_test(edit_script_roundtrip_episode);
 		return ok ? 0 : 1;
 	}
 
