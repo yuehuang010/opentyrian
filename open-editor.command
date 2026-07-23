@@ -44,6 +44,7 @@ echo "Launching editor..."
 echo "(You'll pick an episode, then a level, inside the editor itself.)"
 echo "(In-editor: T tile sidebar, [ ] pick tile, Enter place, U/R undo/redo,"
 echo " E events, S save, X export, Esc back. F1 toggles the help lines.)"
+echo "(Mouse: click/drag selects the cell, right-click picks; click the left strip to scroll, wheel scrolls. Place with Enter/Space.)"
 echo
 
 "$BINARY" --data "$DATA_DIR" --edit

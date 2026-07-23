@@ -58,6 +58,7 @@ static size_t keyboardInputsCount;
 Sint32 mouseX;
 Sint32 mouseY;
 Uint8 mouseButtonsDown;
+Sint32 mouseWheelY;
 
 static MouseInput mouseInputs[4];
 static size_t mouseInputsFront;
@@ -375,6 +376,15 @@ void handleSdlEvents(void)
 
 				mouseButtonsDown &= ~SDL_BUTTON(ev.button.button);
 				break;
+
+			case SDL_MOUSEWHEEL:
+			{
+				int wy = ev.wheel.y;
+				if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED)
+					wy = -wy;
+				mouseWheelY += wy;
+				break;
+			}
 
 			case SDL_CONTROLLERDEVICEADDED:
 				// ev.cdevice.which is a device index here, NOT an instance id

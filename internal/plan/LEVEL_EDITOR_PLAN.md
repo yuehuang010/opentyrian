@@ -31,6 +31,31 @@ on-disk record order is never touched (the script references records by
 index). `last_level_sel` tracks the archive index so the highlight sticks
 across re-sorts/episode switches.
 
+Mouse support (2026-07-22): the mouse **selects and scrolls only -- it never
+places a tile**, so a stray click (e.g. right after opening a level) can't
+drop an asset by accident; placement stays on Enter/Space. Left-click/drag in
+the map viewport moves the cursor to that cell; right-click is the eyedropper
+(same as `P`). The left mini-map strip is click/drag-to-scroll (jumps
+`cursor_y` to the clicked row). The tile sidebar is click-to-select. Drag
+continuation is gated on a `mouse_dragging` flag that is only armed by a press
+INSIDE the map screen and cleared at map-editor entry, so a button still
+physically held from the level selector as the map opens (mouseClearInput()
+flushes queued click events but NOT the held-button bitmask) can't hijack the
+cursor on the first frame -- this was the "clicking a level jumps to the top
+of the map" bug. The level-select and episode-select screens are
+click-to-highlight-a-row, click-again-to-open; the event editor is
+click-to-select-row-and-field. Mouse wheel scrolls vertically everywhere (map
+cursor, event selection, level/episode list). A drawn crosshair (`draw_mouse_
+pointer()`, suppressed while `mouseInactive`) stands in for the OS cursor,
+which stays hidden inside the 320x200 area (see keyboard.c's `SDL_ShowCursor`
+toggle) — kept out of `render_map_screen()`/`draw_event_screen()` so the
+headless `--edit-shot` BMPs and F12 screenshots stay pointer-free. One
+shared-file change outside `lvledit.c`: a `mouseWheelY` accumulator
+(`SDL_MOUSEWHEEL` case) in `keyboard.c`/`keyboard.h`, read and zeroed once per
+editor frame. The level-select list draws its columns (NUM/NAME/MAP/SHP) at
+fixed pixel x's under a header row, since JE_outText's proportional font made
+the old space-padded single-string layout never line up.
+
 Queued (task chip): **left mini-map scrollbar** — slim left-edge vertical
 mini-map of the active layer showing full level height, a band for the current
 6-row viewport, and a cursor tick. Main risk: the map viewport is anchored at

@@ -36,6 +36,7 @@
 #include "file.h"
 #include "fonthand.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "nortsong.h"
 #include "opentyr.h"
 #include "palette.h"
@@ -736,6 +737,147 @@ static void draw_sidebar(void)
 	}
 }
 
+// ---------------------------------------------------------------------
+// Mouse input (map editor screen)
+// ---------------------------------------------------------------------
+
+// True iff screen point (px,py) sits over a real, in-bounds map cell of the
+// viewport (not the mini-map strip, not the sidebar, not past the layer's
+// real width/height); writes that cell's map coordinates to *out_mx/*out_my.
+static bool point_in_viewport(int px, int py, int *out_mx, int *out_my)
+{
+	if (px < ED_MINIMAP_W)
+		return false;
+	if (py < 0 || py >= ED_VIEW_ROWS * ED_TILE_H)
+		return false;
+
+	int col = (px - ED_MINIMAP_W) / ED_TILE_W;
+	if (col < 0 || col >= view_cols())
+		return false;
+
+	int row = py / ED_TILE_H;
+
+	int mx = scroll_x + col;
+	int my = scroll_y + row;
+
+	if (mx >= layer_width(active_layer) || my >= layer_height(active_layer))
+		return false;
+
+	*out_mx = mx;
+	*out_my = my;
+	return true;
+}
+
+// True iff screen point (px,py) sits over the left mini-map strip (its
+// divider column at x = ED_MINIMAP_W - 1 counts as part of the strip).
+static bool point_in_minimap(int px, int py)
+{
+	return px >= 0 && px < ED_MINIMAP_W && py >= 0 && py < ED_MINIMAP_H;
+}
+
+// Inverse of draw_minimap()'s row scaling: maps a mini-map-strip screen y
+// back to a map row of the active layer, clamped to a valid row index.
+static int minimap_row(int py)
+{
+	int h = layer_height(active_layer);
+	int row = py * h / ED_MINIMAP_H;
+	if (row < 0) row = 0;
+	if (row >= h) row = h - 1;
+	return row;
+}
+
+// True iff screen point (px,py) sits over a sidebar tile slot (only
+// meaningful while sidebar_open), writing the slot number to *out_slot.
+// Rejects the inter-column gap and any row/column past the fixed 2-column,
+// 72-slot grid -- caller still needs to check slot_usable() itself.
+static bool sidebar_slot_at(int px, int py, int *out_slot)
+{
+	int divider_x = ED_MINIMAP_W + view_cols() * ED_TILE_W;
+	int x0 = divider_x + ED_SIDEBAR_GAP;
+
+	if (px < x0)
+		return false;
+
+	int within_x = px - x0;
+	int col = within_x / ED_SIDEBAR_COL_W;
+	if (col < 0 || col >= ED_SIDEBAR_COLS)
+		return false;
+
+	int within = within_x % ED_SIDEBAR_COL_W;
+	if (within >= ED_TILE_W)
+		return false;  // the 2px inter-column gap
+
+	if (py < 0 || py >= ED_SIDEBAR_ROWS_VISIBLE * ED_TILE_H)
+		return false;
+
+	int row = py / ED_TILE_H;
+	int slot = (sidebar_scroll + row) * ED_SIDEBAR_COLS + col;
+	if (slot >= 72)
+		return false;
+
+	*out_slot = slot;
+	return true;
+}
+
+// Draws a small crosshair at the current mouse position: color-15 arms
+// spanning d=-3..3 (skipping the center, which is drawn as color 0
+// separately), so the pointer is always visible against any background.
+// JE_pix() only clips the upper bound, so every pixel is guarded against
+// negative coordinates and >=vga_width/vga_height here as well; a pointer
+// fully off-screen simply draws nothing.
+//
+// Suppressed entirely while the mouse is inactive (mouseInactive, set true by
+// any keypress and cleared on mouse motion/click -- keyboard.c): a
+// keyboard-only user never sees a stray pointer, and the startup (0,0)
+// crosshair doesn't sit in the corner until the mouse is first moved.
+static void draw_mouse_pointer(void)
+{
+	if (mouseInactive)
+		return;
+
+	for (int d = -3; d <= 3; ++d)
+	{
+		if (d == 0)
+			continue;
+
+		int hx = mouseX + d, hy = mouseY;
+		if (hx >= 0 && hx < vga_width && hy >= 0 && hy < vga_height)
+			JE_pix(VGAScreen, hx, hy, 15);
+
+		int vx = mouseX, vy = mouseY + d;
+		if (vx >= 0 && vx < vga_width && vy >= 0 && vy < vga_height)
+			JE_pix(VGAScreen, vx, vy, 15);
+	}
+
+	if (mouseX >= 0 && mouseX < vga_width && mouseY >= 0 && mouseY < vga_height)
+		JE_pix(VGAScreen, mouseX, mouseY, 0);
+}
+
+// True while a left-button drag started by a press INSIDE the map screen is
+// in progress. The drag-continuation block only follows the held button when
+// this is set, so a button still physically held from the level selector as
+// the map editor opens (mouseClearInput() flushes queued click events but not
+// the held-button bitmask) can't hijack the cursor on the first frame. Armed
+// by an in-screen left press over the viewport/mini-map, cleared on release.
+//
+// The mouse only ever MOVES the cursor (select) or scrolls -- it never places
+// a tile. Placement stays on Enter/Space so a stray click (e.g. right after
+// opening a level) can't drop an asset by accident.
+static bool mouse_dragging = false;
+
+// Consumes the accumulated wheel delta as a SINGLE step in the scroll
+// direction (-1/0/+1), zeroing mouseWheelY. A macOS trackpad / high-res wheel
+// queues many wheel events per frame that sum to a large mouseWheelY, so
+// scaling by it (worse, times a multiplier) scrolled whole pages per notch;
+// clamping to one row-per-frame keeps wheel scrolling to a controllable pace
+// (the mini-map drag remains the tool for big jumps).
+static int take_wheel_step(void)
+{
+	int w = mouseWheelY;
+	mouseWheelY = 0;
+	return w > 0 ? 1 : (w < 0 ? -1 : 0);
+}
+
 // The game plays a map from the bottom row upward (mapY starts at
 // `height - 8` in JE_main() and is decremented as the level scrolls;
 // draw_background_*() in backgrnd.c likewise walk mapYPos *backwards*
@@ -818,9 +960,15 @@ static bool confirm_discard(void)
 		while (keyboardGetInput(&ki))
 		{
 			if (ki.scancode == SDL_SCANCODE_Y)
+			{
+				mouseClearInput();
 				return true;
+			}
 			if (ki.scancode == SDL_SCANCODE_N || ki.scancode == SDL_SCANCODE_ESCAPE)
+			{
+				mouseClearInput();
 				return false;
+			}
 		}
 	}
 }
@@ -844,6 +992,8 @@ static void show_message(const char *msg, int frames)
 		KeyboardInput ki;
 		while (keyboardGetInput(&ki))
 			(void)ki;
+		mouseClearInput();
+		mouseWheelY = 0;
 	}
 }
 
@@ -1519,6 +1669,9 @@ static void run_event_editor(void)
 	number_entry_len = 0;
 	number_entry_buf[0] = '\0';
 
+	mouseClearInput();
+	mouseWheelY = 0;
+
 	clamp_event_view();
 
 	for (;;)
@@ -1713,10 +1866,43 @@ static void run_event_editor(void)
 		if (quit_to_map)
 			return;
 
+		if (!entering_number)
+		{
+			MouseInput mi;
+			while (mouseGetInput(INPUT_NO_MOTION, &mi))
+			{
+				if (mi.button != SDL_BUTTON_LEFT || cur_level.event_count == 0)
+					continue;
+				if (mi.y < ED_EVENT_ROW_Y0)
+					continue;
+				int row = (mi.y - ED_EVENT_ROW_Y0) / ED_EVENT_ROW_H;
+				if (row < 0 || row >= ED_EVENT_ROWS_VISIBLE)
+					continue;
+				int idx = event_scroll + row;
+				if (idx >= cur_level.event_count)
+					continue;
+				event_sel = idx;
+				// If the click landed in an editable field column, select that field too.
+				for (size_t c = 0; c < COUNTOF(ED_EVENT_COLS); ++c)
+				{
+					if (mi.x >= ED_EVENT_COLS[c].x && mi.x < ED_EVENT_COLS[c].x + ED_EVENT_COLS[c].w)
+					{
+						static const int col_field[10] = { -1, 0, 1, -1, 2, 3, 4, 5, 6, 7 };
+						if (col_field[c] >= 0)
+							event_field = col_field[c];
+						break;
+					}
+				}
+			}
+
+			event_sel -= take_wheel_step();
+		}
+
 		clamp_event_view();
 
 		draw_event_screen(show_help);
 		maybe_save_screenshot();
+		draw_mouse_pointer();
 
 		JE_showVGA();
 		waitUntilElapsed();
@@ -1760,6 +1946,10 @@ static void run_map_editor(int level_index)
 	}
 
 	bool show_help = true;
+
+	mouseClearInput();
+	mouseWheelY = 0;
+	mouse_dragging = false;  // ignore any button still held from the selector
 
 	for (;;)
 	{
@@ -1911,10 +2101,65 @@ static void run_map_editor(int level_index)
 		if (quit_to_select)
 			return;
 
+		// Discrete clicks (press events). The mouse selects/scrolls only --
+		// it never places a tile (that stays on Enter/Space), so a stray
+		// click can't drop an asset by accident.
+		MouseInput mi;
+		while (mouseGetInput(INPUT_NO_MOTION, &mi))
+		{
+			int mx, my, slot;
+			if (mi.button == SDL_BUTTON_LEFT)
+			{
+				if (point_in_viewport(mi.x, mi.y, &mx, &my))
+				{
+					cursor_x = mx; cursor_y = my;  // select the cell
+					mouse_dragging = true;
+				}
+				else if (point_in_minimap(mi.x, mi.y))
+				{
+					cursor_y = minimap_row(mi.y);
+					mouse_dragging = true;
+				}
+				else if (sidebar_open && sidebar_slot_at(mi.x, mi.y, &slot) && slot_usable(active_layer, slot))
+					brush_slot[active_layer] = slot;
+			}
+			else if (mi.button == SDL_BUTTON_RIGHT)
+			{
+				if (point_in_viewport(mi.x, mi.y, &mx, &my))
+				{
+					cursor_x = mx; cursor_y = my;
+					brush_slot[active_layer] = get_cell(active_layer, my, mx);  // eyedropper, like P
+				}
+			}
+		}
+
+		// Drag continuation -- follow the held button only if the drag was
+		// started by a press in THIS screen (mouse_dragging). Guards against a
+		// button still held over from the level selector jumping the cursor on
+		// the first map frame. Drag moves the cursor (viewport) or scrolls
+		// (mini-map); it never paints.
+		if ((mouseButtonsDown & SDL_BUTTON(SDL_BUTTON_LEFT)) && mouse_dragging)
+		{
+			int mx, my;
+			if (point_in_viewport(mouseX, mouseY, &mx, &my))
+			{
+				cursor_x = mx; cursor_y = my;
+			}
+			else if (point_in_minimap(mouseX, mouseY))
+				cursor_y = minimap_row(mouseY);
+		}
+
+		if (!(mouseButtonsDown & SDL_BUTTON(SDL_BUTTON_LEFT)))
+			mouse_dragging = false;  // released -- next press must re-arm
+
+		// Wheel = vertical scroll (moves cursor; clamp_view scrolls to follow).
+		cursor_y -= take_wheel_step();
+
 		clamp_view();
 
 		render_map_screen(show_help);
 		maybe_save_screenshot();
+		draw_mouse_pointer();
 
 		JE_showVGA();
 		waitUntilElapsed();
@@ -2123,6 +2368,9 @@ static int row_for_archive_index(int archive_index)
 // archive index; sorting is display-only.
 static int run_level_select(void)
 {
+	mouseClearInput();
+	mouseWheelY = 0;
+
 	build_level_summaries();
 
 	int count = level_summary_count;
@@ -2134,8 +2382,14 @@ static int run_level_select(void)
 
 	int sel = row_for_archive_index(last_level_sel);
 	int scroll = 0;
-	const int rows_visible = 19;
+	const int rows_visible = 18;
 	const int row_h = 8;
+
+	// Fixed pixel columns: JE_outText uses a proportional font, so the old
+	// "%2d  %-9s ..." space-padding never lined up. Each field is drawn at its
+	// own x instead. list_y0 leaves room for the column header row above it.
+	const int list_y0 = 24;
+	const int col_num = 12, col_name = 44, col_map = 168, col_shp = 224;
 
 	for (;;)
 	{
@@ -2152,6 +2406,13 @@ static int run_level_select(void)
 		         sort_mode == SORT_PLAY_ORDER ? "play" : "arch");
 		JE_outText(VGAScreen, 8, 4, title, 0, 4);
 
+		// Column header row (dim), aligned to the same fixed columns as the
+		// data rows below.
+		JE_outText(VGAScreen, col_num,  14, "NUM",  0, 2);
+		JE_outText(VGAScreen, col_name, 14, "NAME", 0, 2);
+		JE_outText(VGAScreen, col_map,  14, "MAP",  0, 2);
+		JE_outText(VGAScreen, col_shp,  14, "SHP",  0, 2);
+
 		for (int row = 0; row < rows_visible; ++row)
 		{
 			int r = scroll + row;
@@ -2159,16 +2420,26 @@ static int run_level_select(void)
 				break;
 
 			int idx = display_order[r];
-			const char *title = (level_title[idx][0] != '\0') ? level_title[idx] : "(unnamed)";
+			const char *name = (level_title[idx][0] != '\0') ? level_title[idx] : "(unnamed)";
+			int y = list_y0 + row * row_h;
+			int bright = (r == sel) ? 4 : 0;
 
-			char line[64];
-			snprintf(line, sizeof(line), "%2d  %-9s  map=%c shp=%c", idx, title,
-			         level_summaries[idx].mapFile, level_summaries[idx].shapeFile);
+			char buf[16];
+			snprintf(buf, sizeof(buf), "%d", idx);
+			JE_outText(VGAScreen, col_num, y, buf, 0, bright);
 
-			JE_outText(VGAScreen, 16, 16 + row * row_h, line, 0, r == sel ? 4 : 0);
+			JE_outText(VGAScreen, col_name, y, name, 0, bright);
+
+			snprintf(buf, sizeof(buf), "%c", level_summaries[idx].mapFile);
+			JE_outText(VGAScreen, col_map, y, buf, 0, bright);
+
+			snprintf(buf, sizeof(buf), "%c", level_summaries[idx].shapeFile);
+			JE_outText(VGAScreen, col_shp, y, buf, 0, bright);
 		}
 
 		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, Enter open, Esc quit", 0, 0);
+
+		draw_mouse_pointer();
 
 		JE_showVGA();
 		waitUntilElapsed();
@@ -2215,6 +2486,29 @@ static int run_level_select(void)
 				break;
 			}
 		}
+
+		MouseInput mi;
+		while (mouseGetInput(INPUT_NO_MOTION, &mi))
+		{
+			if (mi.button != SDL_BUTTON_LEFT || mi.y < list_y0)
+				continue;
+			int row = (mi.y - list_y0) / row_h;
+			if (row < 0 || row >= rows_visible)
+				continue;
+			int r = scroll + row;
+			if (r >= count)
+				continue;
+			if (r == sel)   // click already-selected row = open it
+			{
+				last_level_sel = display_order[sel];
+				return display_order[sel];
+			}
+			sel = r;
+		}
+
+		sel -= take_wheel_step();
+		if (sel < 0) sel = 0;
+		if (sel > count - 1) sel = count - 1;
 	}
 }
 
@@ -2264,6 +2558,9 @@ static int last_episode_sel = 1;
 // Returns the chosen episode (1-4), or -1 if the user quit the editor.
 static int run_episode_select(void)
 {
+	mouseClearInput();
+	mouseWheelY = 0;
+
 	// Per-episode level counts, probed once per entry into this screen, for
 	// display only ("(N levels)" / "(?)" on failure). This clobbers the
 	// shared archive blob/cur_episode/cur_lvl_filename as a side effect, but
@@ -2303,6 +2600,8 @@ static int run_episode_select(void)
 
 		JE_outText(VGAScreen, 8, 190, "Up/Down select, Enter open, Esc quit editor", 0, 0);
 
+		draw_mouse_pointer();
+
 		JE_showVGA();
 		waitUntilElapsed();
 
@@ -2331,6 +2630,26 @@ static int run_episode_select(void)
 				break;
 			}
 		}
+
+		MouseInput mi;
+		while (mouseGetInput(INPUT_NO_MOTION, &mi))
+		{
+			if (mi.button != SDL_BUTTON_LEFT || mi.y < 16)
+				continue;
+			int e = (mi.y - 16) / 8 + 1;
+			if (e < 1 || e > 4)
+				continue;
+			if (e == sel)   // click already-selected = open
+			{
+				last_episode_sel = sel;
+				return sel;
+			}
+			sel = e;
+		}
+
+		sel -= take_wheel_step();
+		if (sel < 1) sel = 1;
+		if (sel > 4) sel = 4;
 	}
 }
 

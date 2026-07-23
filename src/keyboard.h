@@ -62,6 +62,7 @@ extern bool lordKeySymsDown[4];
 extern Sint32 mouseX;
 extern Sint32 mouseY;
 extern Uint8 mouseButtonsDown;
+extern Sint32 mouseWheelY;
 
 void init_keyboard(void);
 
