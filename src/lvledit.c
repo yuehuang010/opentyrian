@@ -50,11 +50,29 @@
 
 #define ED_TILE_W    24
 #define ED_TILE_H    28
-#define ED_VIEW_COLS 13  // 13 * 24 = 312 px
 #define ED_VIEW_ROWS 6   //  6 * 28 = 168 px
 #define ED_STATUS_Y  170
 #define ED_HELP_Y1   179
 #define ED_HELP_Y2   188
+
+// Left mini-map strip (map editor screen only): a slim vertical density map
+// of the WHOLE active layer, pinned to x=0, so a level far taller than the
+// ED_VIEW_ROWS-row viewport (up to 600 rows for map2/map3) still shows the
+// player's place in it at a glance -- see draw_minimap(). Width includes its
+// own 1px divider column (the strip's rightmost pixel, x = ED_MINIMAP_W - 1),
+// mirroring draw_sidebar()'s divider further below. The viewport's tile
+// columns are shifted right by this same amount (draw_map_viewport()'s `dx`).
+#define ED_MINIMAP_W 12
+#define ED_MINIMAP_H (ED_VIEW_ROWS * ED_TILE_H)  // 168 px, same height as the viewport
+
+// Right-hand tile-slot sidebar geometry (draw_sidebar(), further below).
+// Pulled up here because view_cols() needs ED_SIDEBAR_W -- the fixed width
+// the sidebar consumes when open -- to size the viewport before
+// draw_sidebar() itself ever runs.
+#define ED_SIDEBAR_COL_W (ED_TILE_W + 2)  // 26
+#define ED_SIDEBAR_COLS  2
+#define ED_SIDEBAR_GAP   4  // px between the sidebar's divider column and its tile grid
+#define ED_SIDEBAR_W     (ED_SIDEBAR_GAP + ED_SIDEBAR_COLS * ED_SIDEBAR_COL_W)  // 56
 
 // One decoded 24x28 tile from shapes<c>.dat; `blank` mirrors the on-disk
 // "shape blank" flag (JE_loadMap's shapeBlank), i.e. no pixel data at all.
@@ -474,13 +492,16 @@ static void draw_checker_cell(SDL_Surface *screen, int dst_x, int dst_y)
 	}
 }
 
-// Map viewport width in tile columns: narrower when the tile sidebar (T
-// key) is open, to leave room for it on the right; full width when closed.
-// ED_VIEW_COLS itself stays the fixed max/closed-state constant that the
-// sidebar geometry (ED_SIDEBAR_*, below) is measured against.
+// Map viewport width in tile columns: the 320px-wide screen (vga_width)
+// minus the fixed left mini-map strip (ED_MINIMAP_W, always present on this
+// screen) and, when the tile sidebar (T key) is open, its fixed ED_SIDEBAR_W
+// on the right; full width (minus just the mini-map) when the sidebar is
+// closed. Floor division -- any remainder is unused blank margin between the
+// viewport and whatever is to its right, never a partial/clipped column.
 static int view_cols(void)
 {
-	return sidebar_open ? ED_VIEW_COLS - 2 : ED_VIEW_COLS;
+	int avail = vga_width - ED_MINIMAP_W - (sidebar_open ? ED_SIDEBAR_W : 0);
+	return avail / ED_TILE_W;
 }
 
 static void clamp_view(void)
@@ -508,6 +529,91 @@ static void clamp_view(void)
 	if (cursor_y >= scroll_y + ED_VIEW_ROWS) scroll_y = cursor_y - ED_VIEW_ROWS + 1;
 }
 
+// ---------------------------------------------------------------------
+// Left mini-map / scroll indicator (map editor screen only)
+// ---------------------------------------------------------------------
+
+// True iff any column of map row `y` on `layer` is non-empty. Collapses
+// draw_map_viewport()'s tri-state fill logic (real tile / layer-1
+// assigned-but-blank solid black / true empty checkerboard) into a single
+// bool for the mini-map's density plot -- a row counts as "filled" under
+// either of the first two cases.
+static bool row_has_content(int layer, int y)
+{
+	int w = layer_width(layer);
+
+	for (int x = 0; x < w; ++x)
+	{
+		Uint8 slot = get_cell(layer, y, x);
+
+		if (resolve_slot_tile(layer, slot) != NULL)
+			return true;
+
+		// Layer 1 (map1) assigned-but-blank slots still paint solid black
+		// in-game -- see draw_map_viewport()'s comment on the same check.
+		if (layer == 0 && slot_usable(0, slot) && cur_level.mapSh[0][slot] != 0)
+			return true;
+	}
+
+	return false;
+}
+
+// Plots the WHOLE active layer's height (up to 600 rows for map2/map3) into
+// the fixed ED_MINIMAP_H=168px-tall strip pinned at the left edge, then
+// overlays the on-screen viewport slice and the cursor's row so the current
+// position is always visible at a glance, however tall the level is.
+//
+// Orientation: strip row 0 is array row 0, the SAME axis draw_map_viewport()
+// and scroll_y already use -- not row_progress()'s game-start-at-the-bottom
+// reframing. That keeps the viewport band below a direct, unflipped scale of
+// scroll_y (and matches the viewport itself, whose own row 0 is at the top
+// of the screen), so there's nothing to invert here.
+static void draw_minimap(void)
+{
+	int h = layer_height(active_layer);
+
+	for (int sy = 0; sy < ED_MINIMAP_H; ++sy)
+	{
+		int row0 = sy * h / ED_MINIMAP_H;
+		int row1 = (sy + 1) * h / ED_MINIMAP_H;
+		if (row1 <= row0) row1 = row0 + 1;
+		if (row1 > h) row1 = h;
+
+		bool filled = false;
+		for (int y = row0; y < row1 && !filled; ++y)
+			filled = row_has_content(active_layer, y);
+
+		// Filled rows use a light grey (palette-5 index 11, ~162) so the
+		// density plot reads clearly against the black (0) background and
+		// stays distinct from the near-white (15) viewport band drawn over
+		// it below; the divider stays at the dimmer 8 like draw_sidebar()'s.
+		Uint8 color = filled ? 11 : 0;
+		for (int x = 0; x < ED_MINIMAP_W - 1; ++x)
+			JE_pix(VGAScreen, x, sy, color);
+	}
+
+	// Divider, mirroring draw_sidebar()'s.
+	fill_rectangle_xy(VGAScreen, ED_MINIMAP_W - 1, 0, ED_MINIMAP_W - 1, ED_MINIMAP_H - 1, 8);
+
+	// Viewport band: the slice of the level currently on screen.
+	int band_top = scroll_y * ED_MINIMAP_H / h;
+	int band_bot = (scroll_y + ED_VIEW_ROWS) * ED_MINIMAP_H / h;
+	if (band_bot <= band_top) band_bot = band_top + 1;
+	if (band_bot > ED_MINIMAP_H) band_bot = ED_MINIMAP_H;
+
+	for (int sy = band_top; sy < band_bot; ++sy)
+		for (int x = 0; x < ED_MINIMAP_W - 1; ++x)
+			JE_pix(VGAScreen, x, sy, 15);
+
+	// Cursor-row tick: a dark notch inside the bright band (or, if the
+	// cursor's row somehow falls outside the band, a dark mark on the
+	// otherwise density-colored strip) so the exact row reads at a glance.
+	int cursor_sy = cursor_y * ED_MINIMAP_H / h;
+	if (cursor_sy >= ED_MINIMAP_H) cursor_sy = ED_MINIMAP_H - 1;
+	for (int x = 0; x < ED_MINIMAP_W - 1; ++x)
+		JE_pix(VGAScreen, x, cursor_sy, 0);
+}
+
 // Draws only the active layer, fully lit; empty/transparent cells (and cells
 // past the layer's real bounds) fall back to the checkerboard placeholder.
 static void draw_map_viewport(void)
@@ -524,7 +630,7 @@ static void draw_map_viewport(void)
 		for (int col = 0; col < cols; ++col)
 		{
 			int mx = scroll_x + col;
-			int dx = col * ED_TILE_W;
+			int dx = ED_MINIMAP_W + col * ED_TILE_W;
 
 			if (mx >= w || my >= h)
 			{
@@ -558,15 +664,16 @@ static void draw_map_viewport(void)
 // old modal tile palette overlay.
 // ---------------------------------------------------------------------
 //
-// Geometry: the viewport is view_cols()*ED_TILE_W wide when the sidebar is
-// open (11*24 = 264px), leaving a 1px divider at x=264 and the sidebar
-// itself in x=268..319 (52px: two ED_TILE_W-wide columns plus a small
-// inter-column gap). Vertically it stops at the same y as the viewport
-// (ED_VIEW_ROWS*ED_TILE_H = 168px), well above ED_STATUS_Y/ED_HELP_Y1/Y2.
-#define ED_SIDEBAR_DIVIDER_X ((ED_VIEW_COLS - 2) * ED_TILE_W)         // 264
-#define ED_SIDEBAR_X0        (ED_SIDEBAR_DIVIDER_X + 4)               // 268
-#define ED_SIDEBAR_COL_W     (ED_TILE_W + 2)                          // 26
-#define ED_SIDEBAR_COLS      2
+// Geometry: the viewport is ED_MINIMAP_W + view_cols()*ED_TILE_W wide when
+// the sidebar is open (12 + 10*24 = 252px, see view_cols()), leaving a 1px
+// divider right after it and the sidebar itself in a fixed ED_SIDEBAR_W-wide
+// strip through the screen's right edge (two ED_TILE_W-wide columns plus a
+// small inter-column gap -- ED_SIDEBAR_COL_W/COLS/GAP, defined up with
+// ED_MINIMAP_W near the top of the file since view_cols() needs them too).
+// The divider's x therefore moves with view_cols() rather than being a fixed
+// column -- computed locally below, not a macro. Vertically it stops at the
+// same y as the viewport (ED_VIEW_ROWS*ED_TILE_H = 168px), well above
+// ED_STATUS_Y/ED_HELP_Y1/Y2.
 #define ED_SIDEBAR_ROWS_VISIBLE ED_VIEW_ROWS                          // 6 (12 slots/window)
 #define ED_SIDEBAR_TOTAL_ROWS   ((72 + ED_SIDEBAR_COLS - 1) / ED_SIDEBAR_COLS)  // 36
 
@@ -578,7 +685,10 @@ static void draw_map_viewport(void)
 // view.
 static void draw_sidebar(void)
 {
-	fill_rectangle_xy(VGAScreen, ED_SIDEBAR_DIVIDER_X, 0, ED_SIDEBAR_DIVIDER_X, ED_VIEW_ROWS * ED_TILE_H - 1, 8);
+	int divider_x = ED_MINIMAP_W + view_cols() * ED_TILE_W;
+	int x0 = divider_x + ED_SIDEBAR_GAP;
+
+	fill_rectangle_xy(VGAScreen, divider_x, 0, divider_x, ED_VIEW_ROWS * ED_TILE_H - 1, 8);
 
 	int brush = brush_slot[active_layer];
 	int brush_row = brush / ED_SIDEBAR_COLS;
@@ -603,7 +713,7 @@ static void draw_sidebar(void)
 			if (slot >= 72)
 				continue;
 
-			int dx = ED_SIDEBAR_X0 + col * ED_SIDEBAR_COL_W;
+			int dx = x0 + col * ED_SIDEBAR_COL_W;
 
 			const EditorTile *tile = resolve_slot_tile(active_layer, slot);
 			if (tile != NULL)
@@ -659,6 +769,7 @@ static void draw_status(bool show_help)
 static void render_map_screen(bool show_help)
 {
 	SDL_FillRect(VGAScreen, NULL, 0);
+	draw_minimap();
 	draw_map_viewport();
 	if (sidebar_open)
 		draw_sidebar();
