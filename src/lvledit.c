@@ -32,6 +32,7 @@
 
 #include "lvledit_io.h"
 #include "lvledit_png.h"
+#include "lvledit_script.h"
 
 #include "config.h"
 #include "episodes.h"
@@ -3094,6 +3095,813 @@ static int row_for_archive_index(int archive_index)
 	return 0;
 }
 
+// ---------------------------------------------------------------------
+// Episode-script editor (Phase E5b/c): a semantic editor over the
+// levels<ep>.dat interlevel script -- the encrypted command language that
+// sequences an episode (shop menus, which record plays as each level,
+// map-branch choices, cutscenes, end-of-episode). It reads/writes through
+// the E5a codec + flat script_doc model, and all structural mutation / field
+// parsing lives in lvledit_script.c (headlessly testable via
+// --edit-script-retarget-test); this screen is purely rendering + input, the
+// same split the event editor uses (event_field_get/set vs run_event_editor).
+//
+// Two panes, mirroring the event editor: a LEFT list of script lines rendered
+// semantically (section dividers, named commands + a field summary, indented
+// sub-block payload, dimmed inert lines) and a RIGHT inspector (T toggles) of
+// the selected command's named fields, edited via Left/Right + +/- or a typed
+// value. Structural keys route section-marker edits through the section-aware
+// model functions (N/K) and plain command edits through the raw line ops
+// (I/D/move), never mixing the two (see lvledit_script.h's note).
+// ---------------------------------------------------------------------
+
+#define ED_SCRIPT_ROW_Y0        22
+#define ED_SCRIPT_ROW_H         8
+#define ED_SCRIPT_ROWS_VISIBLE  18
+#define ED_SCRIPT_DIVIDER_X     176
+#define ED_SCRIPT_LABEL_X       (ED_SCRIPT_DIVIDER_X + 4)
+#define ED_SCRIPT_VALUE_RIGHT   314
+#define ED_SCRIPT_STATUS_Y      174
+#define ED_SCRIPT_HELP_Y1       183
+#define ED_SCRIPT_HELP_Y2       191
+
+// The document is ~1 MB (LVLEDIT_SCRIPT_MAX_LINES * MAX_LINE); file-static, not
+// on any stack frame, per the plan's explicit instruction.
+static script_doc script_doc_v;
+static int  script_episode = 0;
+static bool script_dirty = false;
+
+static int  script_sel = 0;      // selected line index
+static int  script_scroll = 0;
+static int  script_field_sel = 0; // index into the selected line's field list
+static bool script_inspector_open = true;
+
+// Sub-block child depth per line (0 = top-level, 1 = owned payload row),
+// recomputed each frame from lvledit_script_subblock_len() so indentation and
+// the "don't treat a payload row as a command" rendering stay in sync with the
+// live document after any edit.
+static Uint8 script_child[LVLEDIT_SCRIPT_MAX_LINES];
+
+// Numeric/text field entry (like the event editor's entering_number, but with
+// a text mode for the ]L name field).
+static bool script_entering = false;
+static bool script_entering_text = false;
+static char script_entry_buf[32];
+static int  script_entry_len = 0;
+
+// Modal "insert command" template picker (the I key): [/] cycle a template,
+// Enter inserts it after the selection, Esc cancels. Kept to a few well-formed
+// templates (exact fixed-width byte layouts) so an inserted line always parses
+// -- the alternative, free-typing a whole command line with its rigid offsets,
+// is far more error-prone. Section markers are NOT a template (they must go
+// through N -> lvledit_script_insert_section for ordinal safety).
+static bool script_insert_mode = false;
+static int  script_insert_idx = 0;
+
+typedef struct { const char *label; const char *text; } script_template;
+static const script_template script_templates[] =
+{
+	{ "Play level",  "]L[ 0000 001 NEWLEVEL 01 01" },
+	{ "Jump",        "]J 001[" },
+	{ "Play music",  "]M 001[" },
+	{ "Show picture","]P 001[" },
+	{ "Menu song",   "]i 001[" },
+	{ "Comment",     "" },
+};
+
+// Whole-document undo/redo ring. A script_doc is ~1 MB, so the cap is kept
+// low (16) as the plan directs -- 2 * 16 * ~1 MB ~= 32 MB of BSS, noted and
+// accepted (dwarfed by export_rgb_buf ~18 MB already present). Separate from
+// the level editor's undo_stack (different type/state).
+#define SCRIPT_UNDO_CAP 16
+static script_doc script_undo[SCRIPT_UNDO_CAP];
+static int script_undo_count = 0;
+static script_doc script_redo[SCRIPT_UNDO_CAP];
+static int script_redo_count = 0;
+
+static void script_snapshot_push(script_doc *stack, int *count, const script_doc *doc)
+{
+	if (*count < SCRIPT_UNDO_CAP)
+	{
+		stack[*count] = *doc;
+		++*count;
+	}
+	else
+	{
+		memmove(&stack[0], &stack[1], sizeof(script_doc) * (SCRIPT_UNDO_CAP - 1));
+		stack[SCRIPT_UNDO_CAP - 1] = *doc;
+	}
+}
+
+// Records the current document as an undo point (call immediately BEFORE a
+// real mutation) and invalidates the redo history.
+static void script_undo_push(void)
+{
+	script_snapshot_push(script_undo, &script_undo_count, &script_doc_v);
+	script_redo_count = 0;
+}
+
+static bool script_undo_apply(void)
+{
+	if (script_undo_count == 0)
+		return false;
+	script_snapshot_push(script_redo, &script_redo_count, &script_doc_v);
+	script_doc_v = script_undo[--script_undo_count];
+	return true;
+}
+
+static bool script_redo_apply(void)
+{
+	if (script_redo_count == 0)
+		return false;
+	script_snapshot_push(script_undo, &script_undo_count, &script_doc_v);
+	script_doc_v = script_redo[--script_redo_count];
+	return true;
+}
+
+// Recomputes script_child[] for every line: a command that owns a sub-block
+// (lvledit_script_subblock_len) marks its following N lines as depth-1 payload
+// rows. A payload row is never itself treated as a block owner (the game's
+// framing is strictly one level deep), so the scan skips past a block's own
+// span before looking for the next owner.
+static void script_recompute_children(void)
+{
+	for (int i = 0; i < script_doc_v.line_count; ++i)
+		script_child[i] = 0;
+
+	for (int i = 0; i < script_doc_v.line_count; )
+	{
+		int sub = lvledit_script_subblock_len(&script_doc_v, i);
+		if (sub > 0)
+		{
+			for (int j = 1; j <= sub && i + j < script_doc_v.line_count; ++j)
+				script_child[i + j] = 1;
+			i += sub + 1;
+		}
+		else
+		{
+			++i;
+		}
+	}
+}
+
+// 1-based ordinal of the section CONTAINING line `index` (== the count of '*'
+// markers at or before it; 0 if `index` precedes the first marker). If the
+// line itself is a marker, that marker is counted, so this returns the ordinal
+// that marker begins -- which is what N/K want as "the current section".
+static int script_current_section(int index)
+{
+	int n = 0;
+	for (int i = 0; i <= index && i < script_doc_v.line_count; ++i)
+		if (script_doc_v.lines[i].text[0] == '*')
+			++n;
+	return n;
+}
+
+// Builds a compact one-line summary of a command for the LEFT list: the
+// opcode's human name plus its key fields (numeric fields shown as "label val",
+// the ]L name field shown bare). Truncated to fit `max_w` px, no ellipsis
+// (TINY_FONT has no glyph reserved for one -- same reasoning as event_summary).
+static void script_command_summary(const script_line *line, char *buf, size_t buf_sz, int max_w)
+{
+	char op = lvledit_script_opcode(line->text);
+	snprintf(buf, buf_sz, "%s", lvledit_script_opcode_name(op));
+
+	script_field fields[LVLEDIT_SCRIPT_MAX_FIELDS];
+	int count = lvledit_script_line_fields(line, fields);
+
+	for (int i = 0; i < count; ++i)
+	{
+		char piece[32];
+		if (fields[i].is_text)
+		{
+			char txt[16];
+			lvledit_script_field_get_text(line, i, txt, sizeof(txt));
+			snprintf(piece, sizeof(piece), " %s", txt);
+		}
+		else if (fields[i].is_section)
+		{
+			snprintf(piece, sizeof(piece), " ->s%ld", lvledit_script_field_get(line, i));
+		}
+		else
+		{
+			snprintf(piece, sizeof(piece), " %ld", lvledit_script_field_get(line, i));
+		}
+
+		size_t len = strlen(buf);
+		snprintf(buf + len, buf_sz - len, "%s", piece);
+	}
+
+	while (strlen(buf) > 0 && JE_textWidth(buf, TINY_FONT) > max_w)
+		buf[strlen(buf) - 1] = '\0';
+}
+
+// Renders one LEFT-list row for line `index`. Section markers become a bright
+// "== SEC n ==" divider; commands show name + summary; owned sub-block rows are
+// indented and dimmed as raw text; inert non-command/non-marker lines are
+// dimmed raw text too. Selected row is brightened.
+static void draw_script_list_row(int index, int y, bool selected)
+{
+	const script_line *line = &script_doc_v.lines[index];
+	int bright = selected ? 4 : 0;
+	int list_w = (script_inspector_open ? ED_SCRIPT_DIVIDER_X : 316) - 8;
+
+	if (lvledit_script_is_section_marker(line->text))
+	{
+		int ord = script_current_section(index);
+		char buf[64];
+		snprintf(buf, sizeof(buf), "== SECTION %d ==", ord);
+		JE_outText(VGAScreen, 6, y, buf, 0, selected ? 5 : 3);
+		return;
+	}
+
+	if (script_child[index])
+	{
+		// Owned payload row (]I item line, ]W/]Q text, ]h line): raw text,
+		// indented under its owner, dim unless selected.
+		char buf[80];
+		snprintf(buf, sizeof(buf), "%s", line->text);
+		fit_name(buf, list_w - 16);
+		JE_outText(VGAScreen, 18, y, buf, 0, selected ? 4 : 1);
+		return;
+	}
+
+	if (lvledit_script_is_command(line->text))
+	{
+		char buf[96];
+		script_command_summary(line, buf, sizeof(buf), list_w - 6);
+		JE_outText(VGAScreen, 6, y, buf, 0, bright);
+		return;
+	}
+
+	// Inert line (comment/padding): dim raw text.
+	char buf[80];
+	snprintf(buf, sizeof(buf), "%s", line->text);
+	fit_name(buf, list_w - 6);
+	JE_outText(VGAScreen, 6, y, buf, 0, selected ? 4 : 1);
+}
+
+// Renders the RIGHT inspector for the selected line's command fields (or a
+// hint if it has none). Mirrors draw_inspector_sidebar(): label left, value
+// right-aligned, the field at script_field_sel boxed.
+static void draw_script_inspector(void)
+{
+	const script_line *line = &script_doc_v.lines[script_sel];
+	char op = lvledit_script_opcode(line->text);
+
+	char header[24];
+	snprintf(header, sizeof(header), "%s", lvledit_script_opcode_name(op));
+	JE_outText(VGAScreen, ED_SCRIPT_LABEL_X, 13, header, 0, 4);
+
+	script_field fields[LVLEDIT_SCRIPT_MAX_FIELDS];
+	int count = lvledit_script_line_fields(line, fields);
+
+	if (count == 0)
+	{
+		JE_outText(VGAScreen, ED_SCRIPT_LABEL_X, ED_SCRIPT_ROW_Y0, "(no fields)", 0, 2);
+		return;
+	}
+
+	for (int i = 0; i < count; ++i)
+	{
+		int y = ED_SCRIPT_ROW_Y0 + i * ED_SCRIPT_ROW_H;
+		bool is_cursor = (i == script_field_sel);
+
+		char val[20];
+		if (fields[i].is_text)
+			lvledit_script_field_get_text(line, i, val, sizeof(val));
+		else
+			snprintf(val, sizeof(val), "%ld", lvledit_script_field_get(line, i));
+
+		int val_w = JE_textWidth(val, TINY_FONT);
+		int val_x = ED_SCRIPT_VALUE_RIGHT - val_w;
+		int bright = is_cursor ? 8 : 0;
+
+		if (is_cursor)
+			JE_rectangle(VGAScreen, ED_SCRIPT_LABEL_X - 1, y - 1, ED_SCRIPT_VALUE_RIGHT, y + 7, 15);
+
+		JE_outText(VGAScreen, ED_SCRIPT_LABEL_X, y, fields[i].label, 0, bright);
+		JE_outText(VGAScreen, val_x, y, val, 0, bright);
+	}
+}
+
+// Clamps selection/scroll/field cursor to the live document, same shape as
+// clamp_event_view(): selection in range, scroll follows selection, and the
+// field cursor re-clamped to the selected line's (variable) field count.
+static void clamp_script_view(void)
+{
+	int count = script_doc_v.line_count;
+
+	if (count == 0)
+	{
+		script_sel = script_scroll = script_field_sel = 0;
+		return;
+	}
+
+	if (script_sel < 0) script_sel = 0;
+	if (script_sel >= count) script_sel = count - 1;
+
+	if (script_sel < script_scroll) script_scroll = script_sel;
+	if (script_sel >= script_scroll + ED_SCRIPT_ROWS_VISIBLE) script_scroll = script_sel - ED_SCRIPT_ROWS_VISIBLE + 1;
+
+	int max_scroll = count > ED_SCRIPT_ROWS_VISIBLE ? count - ED_SCRIPT_ROWS_VISIBLE : 0;
+	if (script_scroll > max_scroll) script_scroll = max_scroll;
+	if (script_scroll < 0) script_scroll = 0;
+
+	script_field field_scratch[LVLEDIT_SCRIPT_MAX_FIELDS];
+	int field_count = lvledit_script_line_fields(&script_doc_v.lines[script_sel], field_scratch);
+	if (script_field_sel < 0) script_field_sel = 0;
+	if (field_count == 0) script_field_sel = 0;
+	else if (script_field_sel >= field_count) script_field_sel = field_count - 1;
+}
+
+static void draw_script_screen(bool show_help)
+{
+	SDL_FillRect(VGAScreen, NULL, 0);
+
+	char title[64];
+	snprintf(title, sizeof(title), "Script Editor - levels%d.dat", script_episode);
+	JE_outText(VGAScreen, 4, 4, title, 0, 4);
+
+	JE_outText(VGAScreen, 6, 13, "LINE", 0, 2);
+
+	if (script_inspector_open)
+		fill_rectangle_xy(VGAScreen, ED_SCRIPT_DIVIDER_X, 0, ED_SCRIPT_DIVIDER_X, ED_SCRIPT_STATUS_Y - 4, 8);
+
+	int count = script_doc_v.line_count;
+	if (count == 0)
+	{
+		JE_outText(VGAScreen, 6, ED_SCRIPT_ROW_Y0, "(empty script)", 0, 2);
+	}
+	else
+	{
+		for (int row = 0; row < ED_SCRIPT_ROWS_VISIBLE; ++row)
+		{
+			int idx = script_scroll + row;
+			if (idx >= count)
+				break;
+			draw_script_list_row(idx, ED_SCRIPT_ROW_Y0 + row * ED_SCRIPT_ROW_H, idx == script_sel);
+		}
+
+		if (script_inspector_open)
+			draw_script_inspector();
+	}
+
+	char status[96];
+	snprintf(status, sizeof(status), "Line %d/%d  sec %d/%d%s", count > 0 ? script_sel : -1, count,
+	         script_current_section(script_sel), lvledit_script_section_count(&script_doc_v),
+	         script_dirty ? "  *unsaved*" : "");
+	JE_outText(VGAScreen, 4, ED_SCRIPT_STATUS_Y, status, 0, 2);
+
+	if (script_insert_mode)
+	{
+		char buf[64];
+		snprintf(buf, sizeof(buf), "Insert: %s   [/] change  Enter add  Esc cancel", script_templates[script_insert_idx].label);
+		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y1, buf, 0, 4);
+	}
+	else if (script_entering)
+	{
+		char buf[48];
+		snprintf(buf, sizeof(buf), "Enter %s: %s_", script_entering_text ? "text" : "value", script_entry_buf);
+		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y1, buf, 0, 4);
+	}
+	else if (show_help)
+	{
+		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y1, "Up/Dn/PgUp/PgDn line  L/R field  +/-(Sft10) edit  Enter type  T panel", 0, 0);
+		JE_outText(VGAScreen, 4, ED_SCRIPT_HELP_Y2, "I ins D del [/] move  N/K sec+/-  U/Y undo/redo  S save  Esc back", 0, 0);
+	}
+}
+
+// Applies the pending field-entry buffer to the selected line's current field.
+static void commit_script_entry(void)
+{
+	if (script_entry_len > 0 && script_doc_v.line_count > 0)
+	{
+		script_line *line = &script_doc_v.lines[script_sel];
+		script_field fields[LVLEDIT_SCRIPT_MAX_FIELDS];
+		int fcount = lvledit_script_line_fields(line, fields);
+
+		if (script_field_sel >= 0 && script_field_sel < fcount)
+		{
+			script_undo_push();
+			if (fields[script_field_sel].is_text)
+				lvledit_script_field_set_text(line, script_field_sel, script_entry_buf);
+			else
+				lvledit_script_field_set(line, script_field_sel, strtol(script_entry_buf, NULL, 10));
+			script_dirty = true;
+		}
+	}
+
+	script_entering = false;
+	script_entering_text = false;
+	script_entry_len = 0;
+	script_entry_buf[0] = '\0';
+}
+
+// Nudges the selected line's current numeric field by delta (clamped in the
+// model). No-op for a text field (must be typed via Enter) or no field.
+static void script_nudge_field(long delta)
+{
+	if (script_doc_v.line_count == 0)
+		return;
+
+	script_line *line = &script_doc_v.lines[script_sel];
+	script_field fields[LVLEDIT_SCRIPT_MAX_FIELDS];
+	int fcount = lvledit_script_line_fields(line, fields);
+
+	if (script_field_sel < 0 || script_field_sel >= fcount || fields[script_field_sel].is_text)
+		return;
+
+	long before = lvledit_script_field_get(line, script_field_sel);
+	long want = before + delta;
+	if (want < fields[script_field_sel].min) want = fields[script_field_sel].min;
+	if (want > fields[script_field_sel].max) want = fields[script_field_sel].max;
+
+	if (want != before)
+	{
+		script_undo_push();
+		lvledit_script_field_set(line, script_field_sel, want);
+		script_dirty = true;
+	}
+}
+
+// Moves the selected line by `dir` (-1/+1). Refuses to move a '*' marker
+// (section reorders must go through N/K for ordinal safety) and pre-checks the
+// boundary so a no-op at the top/bottom pushes no undo snapshot. Bound to both
+// Shift+Up/Down and [/].
+static void script_try_move_line(int dir)
+{
+	if (script_doc_v.line_count == 0)
+		return;
+
+	if (lvledit_script_is_section_marker(script_doc_v.lines[script_sel].text))
+	{
+		show_message("USE N/K FOR SECTIONS", 20);
+		return;
+	}
+
+	int j = script_sel + dir;
+	if (j < 0 || j >= script_doc_v.line_count)
+		return; // at a boundary -- nothing to swap with
+
+	script_undo_push();
+	lvledit_script_move_line(&script_doc_v, script_sel, dir);
+	script_sel = j;
+	script_dirty = true;
+}
+
+// Interactive semantic editor over levels<episode>.dat. Loads the script,
+// runs its own event-pump loop, returns to level-select on Esc (confirming a
+// discard if there are unsaved changes).
+static void run_script_editor(int episode)
+{
+	script_episode = episode;
+
+	if (!lvledit_script_load(episode, &script_doc_v))
+	{
+		show_message("SCRIPT LOAD FAILED", 40);
+		return;
+	}
+
+	script_dirty = false;
+	script_sel = 0;
+	script_scroll = 0;
+	script_field_sel = 0;
+	script_undo_count = 0;
+	script_redo_count = 0;
+	script_entering = false;
+	script_insert_mode = false;
+
+	bool show_help = true;
+
+	mouseClearInput();
+	mouseWheelY = 0;
+
+	for (;;)
+	{
+		setFrameCount(1);
+		handleSdlEvents();
+
+		script_recompute_children();
+		clamp_script_view();
+
+		bool quit = false;
+
+		KeyboardInput ki;
+		while (keyboardGetInput(&ki))
+		{
+			// --- modal: insert-template picker ---
+			if (script_insert_mode)
+			{
+				if (ki.scancode == SDL_SCANCODE_LEFTBRACKET)
+					script_insert_idx = (script_insert_idx + (int)COUNTOF(script_templates) - 1) % (int)COUNTOF(script_templates);
+				else if (ki.scancode == SDL_SCANCODE_RIGHTBRACKET)
+					script_insert_idx = (script_insert_idx + 1) % (int)COUNTOF(script_templates);
+				else if (ki.scancode == SDL_SCANCODE_RETURN || ki.scancode == SDL_SCANCODE_KP_ENTER)
+				{
+					script_undo_push();
+					int at = (script_doc_v.line_count == 0) ? 0 : script_sel + 1;
+					if (lvledit_script_insert_line(&script_doc_v, at, script_templates[script_insert_idx].text))
+					{
+						script_sel = at;
+						script_dirty = true;
+					}
+					script_insert_mode = false;
+				}
+				else if (ki.scancode == SDL_SCANCODE_ESCAPE)
+					script_insert_mode = false;
+				continue;
+			}
+
+			// --- modal: field value/text entry ---
+			if (script_entering)
+			{
+				if (ki.scancode == SDL_SCANCODE_RETURN || ki.scancode == SDL_SCANCODE_KP_ENTER)
+					commit_script_entry();
+				else if (ki.scancode == SDL_SCANCODE_ESCAPE)
+				{
+					script_entering = false;
+					script_entering_text = false;
+					script_entry_len = 0;
+					script_entry_buf[0] = '\0';
+				}
+				else if (ki.scancode == SDL_SCANCODE_BACKSPACE)
+				{
+					if (script_entry_len > 0)
+						script_entry_buf[--script_entry_len] = '\0';
+				}
+				else if (script_entry_len < (int)sizeof(script_entry_buf) - 1)
+				{
+					bool ok = script_entering_text
+						? (ki.ch >= 32 && ki.ch < 127)
+						: ((ki.ch >= '0' && ki.ch <= '9') || (ki.ch == '-' && script_entry_len == 0));
+					if (ok)
+					{
+						script_entry_buf[script_entry_len++] = (char)ki.ch;
+						script_entry_buf[script_entry_len] = '\0';
+					}
+				}
+				continue;
+			}
+
+			bool fast = (ki.mod & KMOD_SHIFT) != 0;
+
+			switch (ki.scancode)
+			{
+			case SDL_SCANCODE_ESCAPE:
+				if (!script_dirty || confirm_discard())
+					quit = true;
+				break;
+
+			case SDL_SCANCODE_F1:
+				show_help = !show_help;
+				break;
+
+			case SDL_SCANCODE_F12:
+				screenshot_pending = true;
+				break;
+
+			case SDL_SCANCODE_UP:
+				// Shift+Up moves the selected (non-marker) line up.
+				if (fast)
+					script_try_move_line(-1);
+				else
+					--script_sel;
+				break;
+
+			case SDL_SCANCODE_DOWN:
+				if (fast)
+					script_try_move_line(+1);
+				else
+					++script_sel;
+				break;
+
+			case SDL_SCANCODE_PAGEUP:
+				script_sel -= ED_SCRIPT_ROWS_VISIBLE;
+				break;
+			case SDL_SCANCODE_PAGEDOWN:
+				script_sel += ED_SCRIPT_ROWS_VISIBLE;
+				break;
+			case SDL_SCANCODE_HOME:
+				script_sel = 0;
+				break;
+			case SDL_SCANCODE_END:
+				script_sel = script_doc_v.line_count - 1;
+				break;
+
+			case SDL_SCANCODE_LEFT:
+			{
+				script_field fs[LVLEDIT_SCRIPT_MAX_FIELDS];
+				int fc = lvledit_script_line_fields(&script_doc_v.lines[script_sel], fs);
+				if (fc > 0)
+					script_field_sel = (script_field_sel + fc - 1) % fc;
+				break;
+			}
+			case SDL_SCANCODE_RIGHT:
+			{
+				script_field fs[LVLEDIT_SCRIPT_MAX_FIELDS];
+				int fc = lvledit_script_line_fields(&script_doc_v.lines[script_sel], fs);
+				if (fc > 0)
+					script_field_sel = (script_field_sel + 1) % fc;
+				break;
+			}
+
+			case SDL_SCANCODE_EQUALS:
+			case SDL_SCANCODE_KP_PLUS:
+				script_nudge_field(fast ? 10 : 1);
+				break;
+			case SDL_SCANCODE_MINUS:
+			case SDL_SCANCODE_KP_MINUS:
+				script_nudge_field(fast ? -10 : -1);
+				break;
+
+			case SDL_SCANCODE_RETURN:
+			case SDL_SCANCODE_KP_ENTER:
+			{
+				// Open value/text entry for the current field.
+				script_field fs[LVLEDIT_SCRIPT_MAX_FIELDS];
+				int fc = lvledit_script_line_fields(&script_doc_v.lines[script_sel], fs);
+				if (script_field_sel >= 0 && script_field_sel < fc)
+				{
+					script_entering = true;
+					script_entering_text = fs[script_field_sel].is_text;
+					script_entry_len = 0;
+					script_entry_buf[0] = '\0';
+				}
+				break;
+			}
+
+			case SDL_SCANCODE_I:
+				script_insert_mode = true;
+				script_insert_idx = 0;
+				break;
+
+			case SDL_SCANCODE_D:
+				if (script_doc_v.line_count == 0)
+					break;
+				if (lvledit_script_is_section_marker(script_doc_v.lines[script_sel].text))
+				{
+					show_message("USE K TO DELETE A SECTION", 25);
+					break;
+				}
+				script_undo_push();
+				if (lvledit_script_delete_line(&script_doc_v, script_sel))
+					script_dirty = true;
+				else
+					script_undo_apply();
+				break;
+
+			// [/] move the selected (non-marker) line up/down -- a second way to
+			// reorder besides Shift+Up/Down, matching the map editor's bracket
+			// habit. Markers are refused (route through N/K).
+			case SDL_SCANCODE_LEFTBRACKET:
+				script_try_move_line(-1);
+				break;
+			case SDL_SCANCODE_RIGHTBRACKET:
+				script_try_move_line(+1);
+				break;
+
+			case SDL_SCANCODE_N:
+			{
+				// New section before the current one (section-ordinal-safe).
+				int at = script_current_section(script_sel);
+				if (at < 1) at = 1;
+				script_undo_push();
+				if (lvledit_script_insert_section(&script_doc_v, at))
+				{
+					int m = -1, seen = 0;
+					for (int i = 0; i < script_doc_v.line_count; ++i)
+						if (script_doc_v.lines[i].text[0] == '*' && ++seen == at) { m = i; break; }
+					if (m >= 0) script_sel = m;
+					script_dirty = true;
+					show_message("SECTION INSERTED", 20);
+				}
+				else
+				{
+					script_undo_apply();
+					show_message("INSERT SECTION FAILED", 25);
+				}
+				break;
+			}
+
+			case SDL_SCANCODE_K:
+			{
+				// Delete the current section marker (ordinal-safe, warns on
+				// any references left dangling onto the neighbor).
+				int sec = script_current_section(script_sel);
+				if (sec < 1)
+				{
+					show_message("NOT IN A SECTION", 20);
+					break;
+				}
+				int dangling = 0;
+				script_undo_push();
+				if (lvledit_script_delete_section(&script_doc_v, sec, &dangling))
+				{
+					script_dirty = true;
+					if (dangling > 0)
+					{
+						char msg[64];
+						snprintf(msg, sizeof(msg), "SECTION DELETED - %d JUMP(S) NOW DANGLING", dangling);
+						show_message(msg, 45);
+					}
+					else
+						show_message("SECTION DELETED", 20);
+				}
+				else
+				{
+					script_undo_apply();
+					show_message("DELETE SECTION FAILED", 25);
+				}
+				break;
+			}
+
+			case SDL_SCANCODE_T:
+				script_inspector_open = !script_inspector_open;
+				break;
+
+			case SDL_SCANCODE_U:
+				if (script_undo_apply())
+				{
+					script_dirty = true;
+					show_message("UNDO", 20);
+				}
+				else
+					show_message("NOTHING TO UNDO", 20);
+				break;
+
+			case SDL_SCANCODE_Y:
+				if (script_redo_apply())
+				{
+					script_dirty = true;
+					show_message("REDO", 20);
+				}
+				else
+					show_message("NOTHING TO REDO", 20);
+				break;
+
+			case SDL_SCANCODE_S:
+				if (lvledit_script_save(episode, &script_doc_v))
+				{
+					script_dirty = false;
+					show_message("SAVED", 30);
+				}
+				else
+					show_message("SAVE FAILED", 30);
+				break;
+
+			default:
+				break;
+			}
+
+			if (quit)
+				break;
+		}
+
+		if (quit)
+			return;
+
+		if (!script_entering && !script_insert_mode)
+		{
+			MouseInput mi;
+			while (mouseGetInput(INPUT_NO_MOTION, &mi))
+			{
+				if (mi.button != SDL_BUTTON_LEFT || script_doc_v.line_count == 0)
+					continue;
+				if (mi.y < ED_SCRIPT_ROW_Y0)
+					continue;
+				int row = (mi.y - ED_SCRIPT_ROW_Y0) / ED_SCRIPT_ROW_H;
+				if (row < 0 || row >= ED_SCRIPT_ROWS_VISIBLE)
+					continue;
+
+				if (!script_inspector_open || mi.x < ED_SCRIPT_DIVIDER_X)
+				{
+					int idx = script_scroll + row;
+					if (idx < script_doc_v.line_count)
+						script_sel = idx;
+				}
+				else
+				{
+					script_field fs[LVLEDIT_SCRIPT_MAX_FIELDS];
+					int fc = lvledit_script_line_fields(&script_doc_v.lines[script_sel], fs);
+					if (row >= 0 && row < fc)
+						script_field_sel = row;
+				}
+			}
+
+			script_sel -= take_wheel_step();
+		}
+
+		clamp_script_view();
+
+		draw_script_screen(show_help);
+		maybe_save_screenshot();
+		draw_mouse_pointer();
+
+		JE_showVGA();
+		waitUntilElapsed();
+	}
+}
+
 // Returns the chosen level ARCHIVE INDEX, or -1 if the user quit the editor.
 // The list itself is rendered/navigated via display_order[] (row -> archive
 // index) so it can be shown in play order or archive order, but every
@@ -3170,7 +3978,7 @@ static int run_level_select(void)
 			JE_outText(VGAScreen, col_shp, y, buf, 0, bright);
 		}
 
-		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, A add, Enter open, Esc quit", 0, 0);
+		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, A add, C script, Enter open, Esc quit", 0, 0);
 
 		draw_mouse_pointer();
 
@@ -3250,6 +4058,20 @@ static int run_level_select(void)
 				}
 				break;
 			}
+
+			case SDL_SCANCODE_C:
+				// Open the episode-script editor (levels<ep>.dat). Per-episode,
+				// not per-level, so it doesn't consume the selection; on return
+				// the level list is rebuilt in case play order / titles changed.
+				run_script_editor(cur_episode);
+				build_level_summaries();
+				compute_play_order();
+				build_display_order();
+				count = level_summary_count;
+				sel = row_for_archive_index(last_level_sel);
+				mouseClearInput();
+				mouseWheelY = 0;
+				break;
 
 			case SDL_SCANCODE_RETURN:
 			case SDL_SCANCODE_KP_ENTER:

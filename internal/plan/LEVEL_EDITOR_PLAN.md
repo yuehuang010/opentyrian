@@ -162,6 +162,22 @@ insert/append path:
 
 ### E5 — Semantic script editor (the crux; `src/lvledit_script.c/.h` + UI in `src/lvledit.c`)
 
+**Status: E5a done; E5b/c IMPLEMENTED (2026-07-23).** The script editor is
+reachable via **`C`** ("sCript") from the level-select screen (per-episode).
+Model-layer mutations + fixed-width field access live in `lvledit_script.c`
+(headlessly testable); `lvledit.c` holds only `run_script_editor()`'s
+render/input glue. Section ordinals are kept correct by **rewriting every
+jump/`]G` target on a marker insert/delete** (`lvledit_script_insert_section`/
+`_delete_section`), rather than a symbolic-reference model — the flat `script_doc`
+stays the single source of truth (as E5a established), and the retarget is proven
+byte-exact by the hidden **`--edit-script-retarget-test <ep>`** gate (opcode 264):
+step 0 field-API no-op, steps 1–4 insert/delete-invert target preservation,
+step 5 codec round-trip — ALL PASS on episodes 1–4. Full field support: `]L`
+(next/name/song/record#), `]J/]2/]w/]t/]l/]H` (section targets), `]G`
+(origin/count/per-choice planet+section), `]M/]i/]P/]?/]!/]+/]W`. Descoped to
+free-text/sub-line rows (not structured fields): `]I` 9 shop rows, `]W`/`]Q`
+`#`-terminated text blocks, `]h`'s line — editable as indented raw lines.
+
 Make `levels<ep>.dat` writable with a **structured, validated editor** over the
 full command language (not a raw-line editor). Decompose:
 

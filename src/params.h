@@ -36,6 +36,11 @@ extern int edit_addlevel_episode;
 // not requested" sentinel as edit_roundtrip_episode above.
 extern int edit_script_roundtrip_episode;
 
+// Hidden level-editor flag (Phase E5b): --edit-script-retarget-test <episode
+// 1-4>, the section-ordinal retargeting invariant self-test. Same "0 means
+// not requested" sentinel as edit_roundtrip_episode above.
+extern int edit_script_retarget_episode;
+
 // Hidden level-editor flag (Phase E1): --edit (no argument) boots the
 // interactive editor (lvledit_run()) instead of the normal title screen.
 // The editor now presents its own in-app episode picker followed by the

@@ -145,4 +145,116 @@ char lvledit_script_opcode(const char *text);
 // past doc->line_count.
 int lvledit_script_subblock_len(const script_doc *doc, int cmd_index);
 
+// ---------------------------------------------------------------------
+// Structural mutations (Phase E5b): section-ordinal-aware editing.
+//
+// Sections are delimited by '*' marker lines; jump/branch opcodes select a
+// section by its 1-based ORDINAL (the Nth '*'-delimited section), read at a
+// fixed byte offset with atoi() by the interpreter. The opcodes that carry a
+// section-ordinal target are ]J ]2 ]w ]t ]l (target at s+3), ]H (s+4), and
+// ]G (each choice's section at s+4+(i+1)*8, count at s+7). Any structural
+// edit that renumbers sections MUST rewrite every one of those targets so it
+// still points at the same logical section -- that rewrite is the single
+// biggest correctness hazard in the whole feature, and it lives HERE in the
+// model layer (headlessly testable via lvledit_script_run_retarget_test())
+// rather than in the UI.
+// ---------------------------------------------------------------------
+
+// mapPlanet[5]/mapSection[5] (varz.h) cap a ]G branch at five choices.
+#define LVLEDIT_SCRIPT_MAX_G_CHOICES 5
+
+// Number of '*' section-marker lines in the document (== the highest 1-based
+// section ordinal a jump can target; content before the first marker is the
+// implicit "section 0").
+int lvledit_script_section_count(const script_doc *doc);
+
+// Insert a new blank section marker ("*") BEFORE the section currently at
+// 1-based ordinal `at` (at == section_count+1 appends a trailing empty
+// section). Rewrites every jump/]G section target with value >= `at` by +1 so
+// each still points at the same logical section body. Returns false if `at`
+// is out of range (1..section_count+1) or the document is already full.
+bool lvledit_script_insert_section(script_doc *doc, int at);
+
+// Delete the section marker for 1-based ordinal `sec`, merging its body into
+// the previous section's flow, and decrement every target with value > sec by
+// 1. Targets whose value == sec cannot follow their section (it is gone): they
+// are LEFT numerically unchanged -- which now resolves to what has become the
+// following section -- and *out_dangling (may be NULL) receives the count of
+// such retargeted-onto-neighbor references so the UI can warn instead of
+// silently corrupting. Returns false if `sec` is out of range (1..
+// section_count).
+bool lvledit_script_delete_section(script_doc *doc, int sec, int *out_dangling);
+
+// Generic raw line ops that do NOT touch section ordinals -- for editing
+// command lines WITHIN a section. Callers must not use these to move/insert/
+// delete a '*' marker line (that would silently renumber sections); marker
+// structural edits go exclusively through insert_section/delete_section
+// above. Moving a command line across a section boundary is fine (it changes
+// no ordinals). insert_line copies at most 255 payload bytes from `text` and
+// sets len = strlen(text). All three return false on a bad index / full doc.
+bool lvledit_script_insert_line(script_doc *doc, int index, const char *text); // shift down
+bool lvledit_script_delete_line(script_doc *doc, int index);
+bool lvledit_script_move_line(script_doc *doc, int index, int dir); // dir -1/+1, swap
+
+// ---------------------------------------------------------------------
+// Fixed-width field access (Phase E5c): the parameterized opcodes.
+//
+// The interpreter parses fields with atoi(s+OFFSET) at FIXED byte offsets,
+// ASCII digits space/zero-padded on disk (see SCRIPT_REFERENCE.md). Editing a
+// numeric field OVERWRITES the fixed-width digit substring in place, zero-
+// padded and right-aligned, preserving every other byte offset (the line is
+// never reformatted/re-packed -- that would move the other fields). A text
+// field (the ]L level name) is overwritten space-padded and left-aligned.
+// ---------------------------------------------------------------------
+
+#define LVLEDIT_SCRIPT_MAX_FIELDS  16
+#define LVLEDIT_SCRIPT_FIELD_LABEL 12
+
+// One editable field of a command line. `offset`/`width` locate the fixed
+// substring; numeric fields clamp to [min,max]; a text field is flagged with
+// is_text (min/max unused). is_section marks a jump/]G ordinal target so the
+// UI can label it "-> sec N" -- the stored value IS the ordinal, so editing it
+// just changes the number (section marker moves are handled separately, by
+// insert_section/delete_section, not by editing this field).
+typedef struct
+{
+	int  offset;
+	int  width;
+	char label[LVLEDIT_SCRIPT_FIELD_LABEL];
+	long min, max;
+	bool is_text;
+	bool is_section;
+} script_field;
+
+// Fills `out` (>= LVLEDIT_SCRIPT_MAX_FIELDS entries) with the editable fields
+// for `line`'s opcode, in display order, and returns the count (0 for a
+// non-command line or a no-parameter opcode). ]G's choice fields are emitted
+// dynamically from its own count byte, so the list length varies with the
+// line's content -- same idiom as the event editor's build_inspector_fields().
+int lvledit_script_line_fields(const script_line *line, script_field out[LVLEDIT_SCRIPT_MAX_FIELDS]);
+
+// Read/write field `field_id` (an index into the list lvledit_script_line_
+// fields() returns for this line). _get returns the numeric value (0 for a
+// text field or a bad id); _set clamps to the field's [min,max] and overwrites
+// in place (see the fixed-width note above). The _text pair does the same for
+// a text field (trailing spaces trimmed on read; truncated to width on write).
+long lvledit_script_field_get(const script_line *line, int field_id);
+void lvledit_script_field_set(script_line *line, int field_id, long value);
+void lvledit_script_field_get_text(const script_line *line, int field_id, char *out, size_t out_sz);
+void lvledit_script_field_set_text(script_line *line, int field_id, const char *text);
+
+// Short human name for an opcode character (text[1]) -- e.g. 'L' -> "Play",
+// 'J' -> "Jump", '\0'/unknown -> "?". For the editor's list + inspector.
+const char *lvledit_script_opcode_name(char opcode);
+
+// Hidden --edit-script-retarget-test <episode> self-test (Phase E5b): proves
+// the section-ordinal retargeting invariant headlessly. Loads levels<ep>.dat,
+// snapshots every jump/]G target resolved to the line index of the section it
+// points at, inserts a section at an interior ordinal and asserts every target
+// still resolves to the SAME section body (ordinals shifted, logical targets
+// preserved), then deletes it and asserts the targets are restored and the
+// codec still round-trips byte-identically. Prints per-step PASS/FAIL and a
+// summary; returns true iff every step passed.
+bool lvledit_script_run_retarget_test(int episode);
+
 #endif /* LVLEDIT_SCRIPT_H */

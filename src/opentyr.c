@@ -964,6 +964,15 @@ int main(int argc, char *argv[])
 		return ok ? 0 : 1;
 	}
 
+	if (edit_script_retarget_episode != 0)
+	{
+		// Hidden level-editor section-ordinal retargeting self-test (Phase
+		// E5b): same rationale as edit_roundtrip_episode above -- no
+		// video/audio needed.
+		bool ok = lvledit_script_run_retarget_test(edit_script_retarget_episode);
+		return ok ? 0 : 1;
+	}
+
 	init_video();
 	init_keyboard();
 	init_controllers();
