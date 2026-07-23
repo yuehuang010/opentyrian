@@ -3984,7 +3984,12 @@ static int run_level_select(void)
 			JE_outText(VGAScreen, col_shp, y, buf, 0, bright);
 		}
 
-		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, A add, C script, Enter open, Esc quit", 0, 0);
+		// Two lines: the single-line form overran the 320px width once A/C
+		// were added, and JE_outText has no right-edge clip (blit_sprite_hv_
+		// unsafe) so the overflow spilled onto the next scanline. The list
+		// ends by y~168, leaving y=182/190 free.
+		JE_outText(VGAScreen, 8, 182, "Up/Down/PgUp/PgDn select, O sort, A add, C script", 0, 0);
+		JE_outText(VGAScreen, 8, 190, "Enter open, Esc quit", 0, 0);
 
 		draw_mouse_pointer();
 
