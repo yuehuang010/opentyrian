@@ -107,9 +107,18 @@ e.g. starting y≈96:
   └─────────────────────────────┘
 ```
 
-- Draw a 1px frame, then `blit_sprite2` the base frame inside it. Enemy sprites
-  are drawn on a 12px column cadence; multi-cell / `esize`≥1 enemies show only
-  their primary cell — acceptable for a thumbnail (note it in a comment).
+- Draw a 1px frame, then composite the enemy inside it exactly as the flight
+  loop does (`JE_drawEnemy()`, tyrian2.c ~273). A size-0 enemy is one
+  `blit_sprite2` of the base frame; a **size-1 (2×2) enemy is four sheet cells**
+  at index offsets `{0, +1, +19, +20}` (+1 = right, +19 = below-left,
+  +20 = below-right) on a 12×14 grid — matching `blit_enemy(i,-6,-7,0)` /
+  `(+6,-7,1)` / `(-6,+7,19)` / `(+6,+7,20)`. Bounds-check **each cell**
+  independently. The box is sized for a 3×3 footprint (headroom; the engine
+  only ever uses 1×1 or 2×2 — `enemy[].size` is branched on `==1` vs else, and
+  `esize` is 0/1 in all data). **Update (2026-07-23):** shipped — the initial
+  version blitted only the base cell (so a 2×2 enemy showed one quarter); it now
+  composites the full footprint and the box grew 16px→40×46 to hold it, with the
+  stats reflowed (short ones right of the box, `Move` spanning below).
 - Stat lines via `JE_outText` (armor, size, value, explosion, x/y move). Keep it
   to ~4–5 short lines to fit the panel width.
 - Only render the block when `event_preview_enemy_num()` succeeds **and** the

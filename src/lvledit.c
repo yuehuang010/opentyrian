@@ -986,16 +986,27 @@ static void free_enemy_preview_bank(void)
 	enemy_preview_bank_char = 0;
 }
 
-// Renders enemyDat[enemy_num]'s base frame at (x,y), replicating the single
-// blit the real flight loop uses for enemy graphics (blit_enemy(),
-// tyrian2.c ~210: blit_sprite2(surface, x, y, *enemy[i].sprite2s,
-// enemy[i].egr[enemy[i].enemycycle-1] + sprite_offset)) for a static
-// thumbnail of egraphic[0] instead of the animated cycle enemy[i] tracks
-// in-flight. Multi-cell (esize>=1) enemies only show their primary cell --
-// acceptable for a thumbnail (see ENEMY_PREVIEW.md).
+// Preview grid geometry. Enemy graphics tile on a 12x14 cell (the flight
+// loop's 2x2 branch blits its four cells at x=-6/+6, y=-7/+7 -- i.e. 12 apart
+// horizontally, 14 vertically; blit_sprite2 itself steps 12px per sprite row).
+// The box is sized for up to a 3x3 footprint of these cells; the engine only
+// ever uses 1x1 (esize 0) or 2x2 (esize 1), so the third row/col is headroom.
+#define ED_ENEMY_CELL_W 12
+#define ED_ENEMY_CELL_H 14
+#define ED_ENEMY_GRID   3   // box capacity in cells per side (data uses <= 2)
+
+// Composites enemyDat[enemy_num] at (x,y) the way the flight loop draws it
+// (JE_drawEnemy(), tyrian2.c ~273): a size-0 enemy is one sprite cell; a
+// size-1 (2x2) enemy is four sheet cells at offsets {0,+1,+19,+20} laid out
+// +1 = right, +19 = below-left, +20 = below-right -- so the base frame's
+// bottom row lives 19/20 sprites further into the sheet, matching
+// blit_enemy(i,-6,-7,0)/(+6,-7,1)/(-6,+7,19)/(+6,+7,20). Each cell is
+// bounds-checked against the sheet independently, so a frame near the end of
+// the bank simply drops the cells that would run past it instead of reading
+// garbage (blit_sprite2 does no bounds-check of its own, sprite.c).
 //
-// Returns whether a sprite was actually drawn; callers should still show
-// the (always-valid) stat lines when this returns false.
+// Returns whether the base (top-left) cell drew; callers still show the
+// always-valid stat lines when this returns false.
 static bool draw_enemy_thumb(int enemy_num, int x, int y)
 {
 	if (enemy_num < 1 || enemy_num > ENEMY_NUM)
@@ -1010,19 +1021,42 @@ static bool draw_enemy_thumb(int enemy_num, int x, int y)
 	if (enemy_preview_bank.data == NULL)
 		return false;  // newsh<c>.shp missing/unreadable
 
-	int idx = enemyDat[enemy_num].egraphic[0];
-	if (idx == 0)
+	int base = enemyDat[enemy_num].egraphic[0];
+	if (base == 0)
 		return false;  // 0 means "no base frame" for this row, not a real sprite index
 
-	// blit_sprite2() does no bounds-check of its own (sprite.c): the sheet's
-	// first Uint16 is the byte offset to sprite #1's data, i.e. the end of
-	// the offset table, so offset[0]/2 is the sheet's sprite count.
+	// Sheet sprite count: the first Uint16 is the byte offset to sprite #1's
+	// data (i.e. the end of the offset table), so offset[0]/2 is the count.
 	int count = SDL_SwapLE16(((Uint16 *)enemy_preview_bank.data)[0]) / 2;
-	if (idx < 1 || idx > count)
-		return false;
 
-	blit_sprite2(VGAScreen, x, y, enemy_preview_bank, (unsigned int)idx);
-	return true;
+	// {dx-in-cells, dy-in-cells, sprite-index offset from base}.
+	static const struct { int cx, cy, off; } cells_2x2[] =
+	{
+		{ 0, 0, 0 }, { 1, 0, 1 }, { 0, 1, 19 }, { 1, 1, 20 },
+	};
+
+	bool base_drew = false;
+
+	if (enemyDat[enemy_num].esize == 1)
+	{
+		for (size_t c = 0; c < COUNTOF(cells_2x2); ++c)
+		{
+			int idx = base + cells_2x2[c].off;
+			if (idx < 1 || idx > count)
+				continue;
+			blit_sprite2(VGAScreen, x + cells_2x2[c].cx * ED_ENEMY_CELL_W,
+			             y + cells_2x2[c].cy * ED_ENEMY_CELL_H, enemy_preview_bank, (unsigned int)idx);
+			if (cells_2x2[c].off == 0)
+				base_drew = true;
+		}
+	}
+	else if (base >= 1 && base <= count)
+	{
+		blit_sprite2(VGAScreen, x, y, enemy_preview_bank, (unsigned int)base);
+		base_drew = true;
+	}
+
+	return base_drew;
 }
 
 // ---------------------------------------------------------------------
@@ -2084,16 +2118,19 @@ static bool save_current_level(void)
 // Enemy preview block (Option A, ENEMY_PREVIEW.md): the inspector fields
 // above occupy y 13..~78 (header + up to 8 rows of ED_EVENT_ROW_H each), and
 // nothing else uses the panel down to the status line (ED_EVENT_STATUS_Y,
-// 174) -- put the sprite box + stat lines there. Box is 16px (2px margin +
-// blit_sprite2's 12px-wide row cadence + 2px margin) square; stat text sits
-// to its right for the first two lines, then spans the full panel width
-// below it.
-#define ED_ENEMY_PREVIEW_Y0    96
-#define ED_ENEMY_PREVIEW_BOX_X ED_EVENT_SIDEBAR_LABEL_X
-#define ED_ENEMY_PREVIEW_BOX_Y (ED_ENEMY_PREVIEW_Y0 + 8)
-#define ED_ENEMY_PREVIEW_BOX_W 16
-#define ED_ENEMY_PREVIEW_BOX_H 16
-#define ED_ENEMY_PREVIEW_TEXT_X (ED_ENEMY_PREVIEW_BOX_X + ED_ENEMY_PREVIEW_BOX_W + 4)
+// 174) -- put the sprite box + stat lines there. The box holds up to a 3x3
+// grid of ED_ENEMY_CELL_W x ED_ENEMY_CELL_H cells (2px inset each side); the
+// sprite composites at (BOX_X+2, BOX_Y+2). Short stats sit to the right of
+// the box; the two wider ones span the full panel width below it. Bottom of
+// the block (Move line at ~162) stays clear of the status line at 174.
+#define ED_ENEMY_PREVIEW_Y0     96
+#define ED_ENEMY_PREVIEW_BOX_X  ED_EVENT_SIDEBAR_LABEL_X
+#define ED_ENEMY_PREVIEW_BOX_Y  (ED_ENEMY_PREVIEW_Y0 + 8)
+#define ED_ENEMY_PREVIEW_BOX_W  (ED_ENEMY_GRID * ED_ENEMY_CELL_W + 4)   // 40
+#define ED_ENEMY_PREVIEW_BOX_H  (ED_ENEMY_GRID * ED_ENEMY_CELL_H + 4)   // 46
+#define ED_ENEMY_PREVIEW_SPR_X  (ED_ENEMY_PREVIEW_BOX_X + 2)
+#define ED_ENEMY_PREVIEW_SPR_Y  (ED_ENEMY_PREVIEW_BOX_Y + 2)
+#define ED_ENEMY_PREVIEW_TEXT_X (ED_ENEMY_PREVIEW_BOX_X + ED_ENEMY_PREVIEW_BOX_W + 4)  // 256
 
 // Pixel width the summary column gets: the narrow "stops before the divider"
 // value above when the inspector sidecar is open, or the full run out to the
@@ -2199,22 +2236,34 @@ static void draw_inspector_sidebar(const lvledit_event *ev)
 		if (valid_n)
 		{
 			int bank = enemyDat[enemy_num].shapebank;
-			bool drew = draw_enemy_thumb(enemy_num, ED_ENEMY_PREVIEW_BOX_X + 2, ED_ENEMY_PREVIEW_BOX_Y + 2);
 
+			// Composite the enemy (1x1 or 2x2) at the box's inset origin. If
+			// nothing drew (missing bank file / bad bank / frame index), mark
+			// the empty box "n/a"; the stat lines are always valid regardless.
+			bool drew = draw_enemy_thumb(enemy_num, ED_ENEMY_PREVIEW_SPR_X, ED_ENEMY_PREVIEW_SPR_Y);
+			if (!drew)
+				JE_outText(VGAScreen, ED_ENEMY_PREVIEW_BOX_X + 11, ED_ENEMY_PREVIEW_BOX_Y + 19, "n/a", 0, 0);
+
+			// Short stats to the right of the box (kept <=9 chars to stay
+			// inside the panel's right edge at x=314).
 			if (bank >= 1 && bank <= 34)
-				snprintf(line, sizeof(line), "Bank %d '%c'%s", bank, shapeFile[bank - 1], drew ? "" : " n/a");
+				snprintf(line, sizeof(line), "Bk %d '%c'", bank, shapeFile[bank - 1]);
 			else
-				snprintf(line, sizeof(line), "Bank %d n/a", bank);
+				snprintf(line, sizeof(line), "Bk %d ??", bank);
 			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y, line, 0, 0);
 
 			snprintf(line, sizeof(line), "Ar%d Sz%d", enemyDat[enemy_num].armor, enemyDat[enemy_num].esize);
 			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y + 8, line, 0, 0);
 
-			snprintf(line, sizeof(line), "Val %d  Ex%d", enemyDat[enemy_num].value, enemyDat[enemy_num].explosiontype);
-			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_BOX_X, ED_ENEMY_PREVIEW_BOX_Y + ED_ENEMY_PREVIEW_BOX_H + 2, line, 0, 0);
+			snprintf(line, sizeof(line), "V %d", enemyDat[enemy_num].value);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y + 16, line, 0, 0);
 
-			snprintf(line, sizeof(line), "Mv %d,%d", enemyDat[enemy_num].xmove, enemyDat[enemy_num].ymove);
-			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_BOX_X, ED_ENEMY_PREVIEW_BOX_Y + ED_ENEMY_PREVIEW_BOX_H + 10, line, 0, 0);
+			snprintf(line, sizeof(line), "Ex %d", enemyDat[enemy_num].explosiontype);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_TEXT_X, ED_ENEMY_PREVIEW_BOX_Y + 24, line, 0, 0);
+
+			// Wider stat spans the full panel width below the box.
+			snprintf(line, sizeof(line), "Move %d,%d", enemyDat[enemy_num].xmove, enemyDat[enemy_num].ymove);
+			JE_outText(VGAScreen, ED_ENEMY_PREVIEW_BOX_X, ED_ENEMY_PREVIEW_BOX_Y + ED_ENEMY_PREVIEW_BOX_H + 4, line, 0, 0);
 		}
 		else
 		{
