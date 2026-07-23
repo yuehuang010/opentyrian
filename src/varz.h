@@ -273,6 +273,7 @@ extern JE_byte displayTime;                    // countdown for transient on-scr
 /* ===== Demo recording/playback ===== */
 extern bool play_demo, record_demo, stopped_demo; // demo playback/record mode flags; demo ended early
 extern Uint8 demo_num;                         // index of the attract-mode demo file currently in use
+extern bool editorPlaytest;                    // level-editor "F5" playtest of a staged level (see varz.c)
 extern FILE *demo_file;                        // open handle to the demo recording/playback file
 
 extern Uint8 demo_keys;                        // last input-key byte read from/written to the demo stream

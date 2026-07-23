@@ -219,6 +219,13 @@ JE_byte displayTime;
 
 /* Demo Stuff */
 bool play_demo = false, record_demo = false, stopped_demo = false;
+
+// Level-editor playtest (LEVEL_EDITOR_PLAN.md E7): when true, JE_main()/
+// JE_loadMap() reuse demo mode's skip-the-episode-script + return-to-caller
+// skeleton (so the editor can fly one staged level and get control back), but
+// input stays live. Set ONLY by lvledit.c's playtest_current_level(); false on
+// every normal gameplay path, so all its carve-outs are strict supersets.
+bool editorPlaytest = false;
 Uint8 demo_num = 0;
 FILE *demo_file = NULL;
 

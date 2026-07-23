@@ -33,14 +33,20 @@
 #include "lvledit_io.h"
 #include "lvledit_png.h"
 
+#include "config.h"
+#include "episodes.h"
 #include "file.h"
 #include "fonthand.h"
 #include "keyboard.h"
+#include "lvllib.h"
+#include "mainint.h"
 #include "mouse.h"
 #include "nortsong.h"
 #include "opentyr.h"
 #include "palette.h"
 #include "sprite.h"
+#include "tyrian2.h"
+#include "varz.h"
 #include "vga256d.h"
 #include "video.h"
 
@@ -1515,7 +1521,7 @@ static void draw_status(bool show_help)
 	if (show_help)
 	{
 		JE_outText(VGAScreen, 4, ED_HELP_Y1, "Arrows move Shift/PgUp/PgDn fast Tab layer Enter/Space place", 0, 0);
-		JE_outText(VGAScreen, 4, ED_HELP_Y2, "P pick [/] tile T panel U undo R redo E events S save Esc back", 0, 0);
+		JE_outText(VGAScreen, 4, ED_HELP_Y2, "P pick [/] tile T panel U/R undo/redo E events F5 play S save Esc", 0, 0);
 	}
 }
 
@@ -2591,6 +2597,75 @@ static bool load_level_for_edit(int level_index)
 	return true;
 }
 
+// ---------------------------------------------------------------------
+// In-editor playtest -- the "F5" experience (Phase E7)
+// ---------------------------------------------------------------------
+//
+// Fly the level currently open in the map editor, then return here. Reuses the
+// engine's demo-mode skeleton: under editorPlaytest, JE_loadMap() skips the
+// levels<ep>.dat script entirely and JE_main() returns to us at level end (see
+// the editorPlaytest carve-outs in tyrian2.c), but input stays live. To exit a
+// running playtest, open the in-game menu (Esc) and pick Quit -- that sets
+// reallyEndLevel/playerEndLevel, which routes to JE_main()'s early return.
+//
+// The record under test -- INCLUDING unsaved edits -- is staged into a scratch
+// archive in data_dir() via the normal save path (blob-copy every other record,
+// re-serialize the edited one), so the real tyrian<ep>.lvl and its .bak are
+// never touched. The name must fit levelFile[13]; "_edtest.lvl" (11) does, like
+// "tyrian4.lvl".
+#define ED_PLAYTEST_ARCHIVE "_edtest.lvl"
+
+static void playtest_current_level(void)
+{
+	char stage_path[512];
+	snprintf(stage_path, sizeof(stage_path), "%s/%s", data_dir(), ED_PLAYTEST_ARCHIVE);
+	if (!lvledit_save_archive(stage_path, cur_level_index, &cur_level))
+	{
+		show_message("PLAYTEST STAGE FAILED", 40);
+		return;
+	}
+
+	// Load this episode's item/enemy/ship tables + real lvlPos. Force
+	// JE_initEpisode() to actually run (it early-returns when episodeNum already
+	// matches). JE_initPlayerData() reads ships[].dmg, so it must follow.
+	episodeNum = 0;
+	JE_initEpisode(cur_episode);
+	JE_initPlayerData();
+
+	// Redirect the level archive to the staged copy so JE_loadMap() reads the
+	// edited record; refresh lvlPos from it. Record index is 1-based on disk.
+	SDL_strlcpy(levelFile, ED_PLAYTEST_ARCHIVE, sizeof(levelFile));
+	JE_analyzeLevel();
+	lvlFileNum = (JE_byte)(cur_level_index + 1);
+
+	// The .lvl record carries no name or song (those live in the episode script
+	// we're bypassing), so supply flyable defaults.
+	difficultyLevel = oldDifficultyLevel = initialDifficulty = DIFFICULTY_NORMAL;
+	levelSong = 2;
+	SDL_strlcpy(levelName, "EDIT TEST", sizeof(levelName));
+
+	editorPlaytest = true;
+	keyboardClearInput();
+	mouseClearInput();
+
+	JE_main();  // returns at level end via the editorPlaytest carve-out
+
+	editorPlaytest = false;
+
+	// Restore the editor: drop the scratch archive, put the mouse back to
+	// absolute, re-apply the fixed tileset palette (flight loaded its own) and
+	// force a tile-sprite reload. cur_level and lvledit_io's own archive blob
+	// are untouched by the game-side globals above, so edits survive intact.
+	remove(stage_path);
+	mouseSetRelative(false);
+	keyboardClearInput();
+	mouseClearInput();
+	mouseWheelY = 0;
+	mouse_dragging = false;
+	set_palette(palettes[5], 0, 255);
+	tileset_loaded = false;
+}
+
 static void run_map_editor(int level_index)
 {
 	if (!load_level_for_edit(level_index))
@@ -2731,6 +2806,10 @@ static void run_map_editor(int level_index)
 
 			case SDL_SCANCODE_E:
 				run_event_editor();
+				break;
+
+			case SDL_SCANCODE_F5:
+				playtest_current_level();
 				break;
 
 			case SDL_SCANCODE_X:

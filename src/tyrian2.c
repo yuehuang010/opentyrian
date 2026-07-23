@@ -733,7 +733,10 @@ start_level:
 
 	difficultyLevel = oldDifficultyLevel;   /*Return difficulty to normal*/
 
-	if (!play_demo)
+	// editorPlaytest (E7): skip the whole campaign end-of-level machinery
+	// (end animation, on-death autosave-reload, section advance) -- we're about
+	// to hand control straight back to the level editor below.
+	if (!play_demo && !editorPlaytest)
 	{
 		if ((!all_players_dead() || normalBonusLevelCurrent || bonusLevelCurrent) && !playerEndLevel)
 		{
@@ -762,7 +765,10 @@ start_level:
 	}
 	doNotSaveBackup = false;
 
-	if (play_demo)
+	// editorPlaytest (E7): like a demo, a playtest returns to its caller
+	// (playtest_current_level() in lvledit.c) at level end instead of chaining
+	// into the next level / item screen.
+	if (play_demo || editorPlaytest)
 		return;
 
 start_level_first:
@@ -1040,7 +1046,9 @@ start_level_first:
 	set_volume(tyrMusicVolume, fxVolume);
 
 	/*Save backup game*/
-	if (!play_demo && !doNotSaveBackup)
+	// editorPlaytest (E7): never touch the player's save slots when flying a
+	// throwaway staged level from the editor.
+	if (!play_demo && !editorPlaytest && !doNotSaveBackup)
 	{
 		temp = (twoPlayerMode && !campaignCoop) ? 22 : 11;
 		JE_saveGame(temp, "LAST LEVEL    ");
@@ -2669,7 +2677,11 @@ new_game:
 
 	gameLoaded = false;
 
-	if (!play_demo)
+	// editorPlaytest (E7): bypass the entire levels<ep>.dat interpretation
+	// (shop, cutscenes, branching, cube data) exactly as demo playback does, and
+	// fall straight through to the record read below using the lvlFileNum the
+	// editor set. A staged level needs no episode script.
+	if (!play_demo && !editorPlaytest)
 	{
 		do
 		{
