@@ -53,28 +53,16 @@ static Sint32 archive_offs[LVLEDIT_MAX_OFFS];
 // Scratch buffer for the record being serialized during a save.
 static Uint8 serialize_scratch[LVLEDIT_MAX_RECORD];
 
-bool lvledit_load_archive(const char *filename)
+// Parses the u16 lvlNum + s32 offset table out of archive_blob/archive_size
+// (which the caller must already have populated with a candidate archive's
+// raw bytes) and, on success, sets archive_lvlnum/archive_offs from it. This
+// is the validation core of lvledit_load_archive(), factored out so
+// lvledit_add_level() can re-derive archive_lvlnum/archive_offs from a
+// freshly-rebuilt in-memory blob the exact same way a load from disk would,
+// guaranteeing the header bytes and archive_offs[] can never disagree.
+// Leaves archive_size zeroed (== "no archive loaded") on any failure.
+static bool parse_archive_header_from_blob(void)
 {
-	archive_size = 0;
-	archive_lvlnum = 0;
-
-	FILE *f = dir_fopen_die(data_dir(), filename, "rb");
-
-	fseek(f, 0, SEEK_END);
-	long filelen = ftell(f);
-	fseek(f, 0, SEEK_SET);
-
-	if (filelen < 2 || (size_t)filelen > sizeof(archive_blob))
-	{
-		fclose(f);
-		return false;
-	}
-
-	fread_die(archive_blob, 1, (size_t)filelen, f);
-	fclose(f);
-
-	archive_size = (size_t)filelen;
-
 	MemReader r = { archive_blob, archive_size, false };
 
 	Uint16 lvlnum = memReadU16LE(&r);
@@ -112,6 +100,31 @@ bool lvledit_load_archive(const char *filename)
 	archive_lvlnum = lvlnum;
 
 	return true;
+}
+
+bool lvledit_load_archive(const char *filename)
+{
+	archive_size = 0;
+	archive_lvlnum = 0;
+
+	FILE *f = dir_fopen_die(data_dir(), filename, "rb");
+
+	fseek(f, 0, SEEK_END);
+	long filelen = ftell(f);
+	fseek(f, 0, SEEK_SET);
+
+	if (filelen < 2 || (size_t)filelen > sizeof(archive_blob))
+	{
+		fclose(f);
+		return false;
+	}
+
+	fread_die(archive_blob, 1, (size_t)filelen, f);
+	fclose(f);
+
+	archive_size = (size_t)filelen;
+
+	return parse_archive_header_from_blob();
 }
 
 int lvledit_level_count(void)
@@ -357,6 +370,128 @@ bool lvledit_save_archive(const char *filename, int edited_index, const lvledit_
 	return true;
 }
 
+// ---------------------------------------------------------------------
+// Add level (Phase E4): append a cloned record to the loaded archive
+// ---------------------------------------------------------------------
+//
+// A zero-filled level record has no end event and would never terminate
+// in-game, so "add a level" clones an existing record instead of fabricating
+// one from scratch -- this reuses the already round-trip-proven
+// parse/serialize pair and sidesteps "what is a minimal valid level"
+// entirely. The clone is produced by parsing the template record and
+// re-serializing it (rather than a raw byte copy) so it is guaranteed to be
+// exactly what lvledit_save_archive() would regenerate for that record on
+// any future save.
+//
+// Large scratch buffers, mirroring the serialize_scratch/archive_blob
+// pattern above: static BSS, not the stack, since a whole rebuilt archive can
+// be up to LVLEDIT_MAX_BLOB.
+static lvledit_level add_level_clone;
+static Uint8 add_level_serialize_scratch[LVLEDIT_MAX_RECORD];
+static Uint8 rebuild_blob[LVLEDIT_MAX_BLOB];
+
+int lvledit_add_level(int template_index)
+{
+	int count = lvledit_level_count();
+
+	if (archive_lvlnum == 0 || template_index < 0 || template_index >= count)
+		return -1;
+
+	// Growing lvlNum by 2 must still fit the offset-table capacity; the new
+	// record's pair would land at indices [archive_lvlnum, archive_lvlnum+1]
+	// otherwise (and the trailing entry would be pushed out past the array).
+	if ((int)archive_lvlnum + 2 > LVLEDIT_MAX_OFFS)
+		return -1;
+
+	if (!lvledit_parse_level(template_index, &add_level_clone))
+		return -1;
+
+	size_t clone_map_off = 0;
+	size_t clone_len = lvledit_serialize_level(&add_level_clone, add_level_serialize_scratch,
+	                                            sizeof(add_level_serialize_scratch), &clone_map_off);
+	if (clone_len == 0)
+		return -1;
+
+	Uint16 new_lvlnum = (Uint16)(archive_lvlnum + 2);
+
+	// Trailing unpaired entry (episode item data for tyrian4.lvl, an EOF
+	// marker otherwise): opaque, copied verbatim, same as lvledit_save_archive.
+	Sint32 trailing_start = archive_offs[archive_lvlnum - 1];
+	if (trailing_start < 0 || (size_t)trailing_start > archive_size)
+		return -1;
+	size_t trailing_len = archive_size - (size_t)trailing_start;
+
+	// Recompute the ENTIRE offset table from the new (8-bytes-larger) header
+	// size forward -- do not just add a delta to the old offsets, since every
+	// record's absolute position shifts once the header grows. This is the
+	// same walk lvledit_save_archive() does, minus the "one edited record"
+	// carve-out (nothing existing is being edited here, only appended).
+	Sint32 new_offs[LVLEDIT_MAX_OFFS];
+	size_t header_size = 2 + (size_t)new_lvlnum * 4;
+	Sint32 cur = (Sint32)header_size;
+
+	for (int i = 0; i < count; ++i)
+	{
+		Sint32 len = record_end(i) - record_start(i);
+		Sint32 map_off = archive_offs[2 * i + 1] - record_start(i);
+
+		new_offs[2 * i] = cur;
+		new_offs[2 * i + 1] = cur + map_off;
+		cur += len;
+	}
+
+	// New cloned record, appended right after the last real record and
+	// before the trailing blob -- this is what makes the new level
+	// immediately parseable (lvledit_level_count() == count+1) without
+	// disturbing where the trailing blob's bytes come from.
+	Sint32 new_record_off = cur;
+	new_offs[2 * count] = cur;
+	new_offs[2 * count + 1] = cur + (Sint32)clone_map_off;
+	cur += (Sint32)clone_len;
+
+	Sint32 new_trailing_off = cur;
+	new_offs[new_lvlnum - 1] = cur;
+	cur += (Sint32)trailing_len;
+
+	if ((size_t)cur > sizeof(rebuild_blob))
+		return -1; // would exceed LVLEDIT_MAX_BLOB
+
+	// Assemble the whole new archive into rebuild_blob (a separate buffer
+	// from archive_blob, so copying old records out of archive_blob below
+	// can't alias with writing them into rebuild_blob): header, then every
+	// record back-to-back (old records verbatim, the new record from the
+	// re-serialized clone), then the trailing blob verbatim.
+	MemWriter w = { rebuild_blob, sizeof(rebuild_blob), false };
+	memWriteU16LE(&w, new_lvlnum);
+	for (Uint16 i = 0; i < new_lvlnum; ++i)
+		memWriteU32LE(&w, (Uint32)new_offs[i]);
+
+	if (w.error)
+		return -1;
+
+	for (int i = 0; i < count; ++i)
+	{
+		Sint32 len = record_end(i) - record_start(i);
+		memcpy(rebuild_blob + new_offs[2 * i], archive_blob + record_start(i), (size_t)len);
+	}
+
+	memcpy(rebuild_blob + new_record_off, add_level_serialize_scratch, clone_len);
+	memcpy(rebuild_blob + new_trailing_off, archive_blob + trailing_start, trailing_len);
+
+	// Commit: copy the rebuilt bytes over the live archive blob, then
+	// re-derive archive_lvlnum/archive_offs from those bytes exactly as a
+	// disk load would (parse_archive_header_from_blob() is the same code
+	// lvledit_load_archive() uses) -- this is what guarantees archive_offs[]
+	// can never disagree with the header bytes now sitting in archive_blob.
+	archive_size = (size_t)cur;
+	memcpy(archive_blob, rebuild_blob, archive_size);
+
+	if (!parse_archive_header_from_blob())
+		return -1;
+
+	return count; // the new level's 0-based archive index
+}
+
 // Scratch used only by the self-test below.
 static lvledit_level roundtrip_level;
 static Uint8 roundtrip_scratch[LVLEDIT_MAX_RECORD];
@@ -444,6 +579,99 @@ bool lvledit_run_roundtrip_test(int episode)
 	all_ok = all_ok && archive_ok;
 
 	printf("edit-roundtrip: %s: %s\n", filename, all_ok ? "ALL PASS" : "FAIL");
+
+	return all_ok;
+}
+
+// Scratch used only by the self-test below.
+static lvledit_level addlevel_template, addlevel_clone, addlevel_scratch;
+
+bool lvledit_run_addlevel_test(int episode)
+{
+	char filename[32];
+	snprintf(filename, sizeof(filename), "tyrian%d.lvl", episode);
+
+	if (!lvledit_load_archive(filename))
+	{
+		printf("edit-addlevel: FAILED to load %s\n", filename);
+		return false;
+	}
+
+	int count0 = lvledit_level_count();
+	printf("edit-addlevel: %s: starting with %d level record(s)\n", filename, count0);
+
+	bool all_ok = true;
+
+	// Step 1: clone level 0 and confirm the archive grew by exactly one.
+	int ni = lvledit_add_level(0);
+	bool step_ok = (ni == count0) && (lvledit_level_count() == count0 + 1);
+	printf("  add level (clone 0 -> new index %d): %s\n", ni, step_ok ? "PASS" : "FAIL");
+	all_ok = all_ok && step_ok;
+
+	if (!step_ok)
+	{
+		printf("edit-addlevel: %s: FAIL\n", filename);
+		return false;
+	}
+
+	// Step 2: the new record must parse and be byte-identical to the
+	// template it was cloned from.
+	bool parsed_template = lvledit_parse_level(0, &addlevel_template);
+	bool parsed_clone = lvledit_parse_level(ni, &addlevel_clone);
+	bool identical = parsed_template && parsed_clone &&
+	                  memcmp(&addlevel_template, &addlevel_clone, sizeof(lvledit_level)) == 0;
+	printf("  clone matches template (level 0 == level %d): %s\n", ni, identical ? "PASS" : "FAIL");
+	all_ok = all_ok && identical;
+
+	// Step 3: save the grown in-memory archive out, then load THAT file back
+	// (a fresh lvledit_load_archive(), not the in-memory state) to prove the
+	// append survives a real save/reload round trip, not just the in-memory
+	// append. The scratch file is written under data_dir() (same convention
+	// lvledit.c's save_current_level()/playtest_current_level() use) so the
+	// reload's data_dir()-relative lvledit_load_archive() call finds the
+	// exact same file lvledit_save_archive() just wrote -- data_dir() is not
+	// necessarily the process's CWD (e.g. --data ./tyrian21).
+	char out_filename[48];
+	snprintf(out_filename, sizeof(out_filename), "addlevel_tyrian%d.lvl", episode);
+	char out_full_path[512];
+	snprintf(out_full_path, sizeof(out_full_path), "%s/%s", data_dir(), out_filename);
+
+	bool save_ok = lvledit_save_archive(out_full_path, -1, NULL);
+	printf("  save grown archive (%s): %s\n", out_full_path, save_ok ? "PASS" : "FAIL");
+	all_ok = all_ok && save_ok;
+
+	bool reload_ok = save_ok && lvledit_load_archive(out_filename);
+	printf("  reload %s: %s\n", out_filename, reload_ok ? "PASS" : "FAIL");
+	all_ok = all_ok && reload_ok;
+
+	bool count_ok = reload_ok && (lvledit_level_count() == count0 + 1);
+	printf("  reloaded count == %d: %s\n", count0 + 1, count_ok ? "PASS" : "FAIL");
+	all_ok = all_ok && count_ok;
+
+	bool all_levels_parse = reload_ok;
+	if (reload_ok)
+	{
+		for (int i = 0; i < lvledit_level_count(); ++i)
+		{
+			if (!lvledit_parse_level(i, &addlevel_scratch))
+			{
+				all_levels_parse = false;
+				break;
+			}
+		}
+	}
+	printf("  every reloaded level parses: %s\n", all_levels_parse ? "PASS" : "FAIL");
+	all_ok = all_ok && all_levels_parse;
+
+	bool last_matches_clone = reload_ok && count_ok &&
+	                           lvledit_parse_level(count0, &addlevel_scratch) &&
+	                           memcmp(&addlevel_scratch, &addlevel_template, sizeof(lvledit_level)) == 0;
+	printf("  reloaded last level == clone: %s\n", last_matches_clone ? "PASS" : "FAIL");
+	all_ok = all_ok && last_matches_clone;
+
+	remove(out_full_path);
+
+	printf("edit-addlevel: %s: %s\n", filename, all_ok ? "ALL PASS" : "FAIL");
 
 	return all_ok;
 }

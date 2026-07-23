@@ -92,6 +92,21 @@ size_t lvledit_serialize_level(const lvledit_level *lv, Uint8 *buf, size_t bufsi
 // record replaced). Requires a prior successful lvledit_load_archive().
 bool lvledit_save_archive(const char *filename, int edited_index, const lvledit_level *lv);
 
+// Appends a new level record to the loaded archive IN MEMORY, cloned from
+// template_index's record (parsed then re-serialized, so the clone is
+// guaranteed self-consistent), growing lvlNum by 2 and rebuilding the offset
+// table so the new record sits just before the trailing opaque blob. A
+// zero-filled level has no end event and would never terminate in-game --
+// that's why "add level" clones an existing record rather than fabricating
+// one. Returns the new level's 0-based index (== the pre-call
+// lvledit_level_count()) on success, or -1 on failure (no archive loaded,
+// template_index out of range, or capacity exceeded -- the in-memory
+// archive is left untouched on failure). After a successful call,
+// lvledit_level_count() reflects +1 and lvledit_parse_level(new_index, ...)
+// succeeds. Purely in-memory; the caller persists with
+// lvledit_save_archive().
+int lvledit_add_level(int template_index);
+
 // Hidden --edit-roundtrip <episode> self-test: loads tyrian<episode>.lvl,
 // parses and re-serializes every level (byte-comparing each against the
 // original record), then does a full-archive round-trip save to
@@ -99,5 +114,14 @@ bool lvledit_save_archive(const char *filename, int edited_index, const lvledit_
 // original file. Prints per-level PASS/FAIL plus a summary. Returns true
 // iff everything matched.
 bool lvledit_run_roundtrip_test(int episode);
+
+// Hidden --edit-addlevel <episode> self-test (Phase E4): loads
+// tyrian<episode>.lvl, clones level 0 via lvledit_add_level(), verifies the
+// clone parses and is byte-identical to the template, then saves the grown
+// archive to a data_dir()-relative scratch file (removed before returning),
+// reloads THAT file fresh, and verifies the count grew by one, every level
+// still parses, and the last level still matches the clone. Prints per-step
+// PASS/FAIL plus a summary. Returns true iff everything matched.
+bool lvledit_run_addlevel_test(int episode);
 
 #endif /* LVLEDIT_IO_H */

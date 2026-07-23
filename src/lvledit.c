@@ -3170,7 +3170,7 @@ static int run_level_select(void)
 			JE_outText(VGAScreen, col_shp, y, buf, 0, bright);
 		}
 
-		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, Enter open, Esc quit", 0, 0);
+		JE_outText(VGAScreen, 8, 190, "Up/Down/PgUp/PgDn select, O sort, A add, Enter open, Esc quit", 0, 0);
 
 		draw_mouse_pointer();
 
@@ -3207,6 +3207,47 @@ static int run_level_select(void)
 				sort_mode = (sort_mode == SORT_PLAY_ORDER) ? SORT_ARCHIVE_INDEX : SORT_PLAY_ORDER;
 				build_display_order();
 				sel = row_for_archive_index(cur_archive_index);
+				break;
+			}
+
+			case SDL_SCANCODE_A:
+			{
+				// Add level (Phase E4): clone the currently-selected row's
+				// archive record and append it to the loaded archive. This
+				// only touches the IN-MEMORY archive (lvledit_add_level() is
+				// purely in-memory) -- the clone is not written to
+				// tyrian<ep>.lvl until the user opens it and presses S,
+				// which goes through save_current_level() ->
+				// lvledit_save_archive() the same as any other edit. No
+				// auto-save here on purpose.
+				int template_index = display_order[sel];
+				int new_index = lvledit_add_level(template_index);
+
+				if (new_index >= 0)
+				{
+					// The archive grew, so the whole level list (summaries,
+					// play order, and the display permutation derived from
+					// it) needs rebuilding from scratch -- same three calls
+					// run_level_select() itself does on entry.
+					build_level_summaries();
+					compute_play_order();
+					build_display_order();
+
+					// count is a local snapshot of level_summary_count taken
+					// once at the top of this function; it must be
+					// refreshed here too or the list below still renders
+					// the old (pre-add) row count.
+					count = level_summary_count;
+
+					last_level_sel = new_index;
+					sel = row_for_archive_index(new_index);
+
+					show_message("LEVEL ADDED -- OPEN IT AND PRESS S TO SAVE", 40);
+				}
+				else
+				{
+					show_message("ADD LEVEL FAILED", 30);
+				}
 				break;
 			}
 

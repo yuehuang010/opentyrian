@@ -42,6 +42,7 @@
 JE_boolean richMode = false, constantPlay = false, constantDie = false;
 
 int edit_roundtrip_episode = 0;
+int edit_addlevel_episode = 0;
 bool edit_requested = false;
 
 bool edit_shot_requested = false;
@@ -93,6 +94,10 @@ void JE_paramCheck(int argc, char *argv[])
 		// Shares the "edit" prefix; same short-circuit ordering note as
 		// edit-shot above applies here too.
 		{ 261, 0,   "edit-export",       true },
+		// Hidden: level-editor archive record-append self-test (Phase E4),
+		// not shown in --help. Shares the "edit" prefix; same short-circuit
+		// ordering note as edit-shot above applies here too.
+		{ 262, 0,   "edit-addlevel",     true },
 
 		{ 'X', 'X', "xmas",              false },
 		{ 'c', 'c', "constant",          false },
@@ -271,6 +276,19 @@ void JE_paramCheck(int argc, char *argv[])
 			else
 			{
 				fprintf(stderr, "%s: error: invalid --edit-export value (expected <episode 1-4>,<level>=0)\n", argv[0]);
+				exit(EXIT_FAILURE);
+			}
+			break;
+		}
+
+		case 262: // --edit-addlevel (hidden)
+		{
+			int temp = atoi(option.arg);
+			if (temp >= 1 && temp <= 4)
+				edit_addlevel_episode = temp;
+			else
+			{
+				fprintf(stderr, "%s: error: invalid --edit-addlevel episode (expected 1-4)\n", argv[0]);
 				exit(EXIT_FAILURE);
 			}
 			break;

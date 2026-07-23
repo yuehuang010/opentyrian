@@ -27,6 +27,10 @@ extern JE_boolean richMode, constantPlay, constantDie;
 // 0 means "not requested"; otherwise the requested episode number.
 extern int edit_roundtrip_episode;
 
+// Hidden level-editor flag (Phase E4): --edit-addlevel <episode 1-4>. Same
+// "0 means not requested" sentinel as edit_roundtrip_episode above.
+extern int edit_addlevel_episode;
+
 // Hidden level-editor flag (Phase E1): --edit (no argument) boots the
 // interactive editor (lvledit_run()) instead of the normal title screen.
 // The editor now presents its own in-app episode picker followed by the

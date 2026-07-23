@@ -946,6 +946,14 @@ int main(int argc, char *argv[])
 		return ok ? 0 : 1;
 	}
 
+	if (edit_addlevel_episode != 0)
+	{
+		// Hidden level-editor add-level self-test (Phase E4): same rationale
+		// as edit_roundtrip_episode above -- no video/audio needed.
+		bool ok = lvledit_run_addlevel_test(edit_addlevel_episode);
+		return ok ? 0 : 1;
+	}
+
 	init_video();
 	init_keyboard();
 	init_controllers();
