@@ -41,6 +41,13 @@ extern int edit_script_roundtrip_episode;
 // not requested" sentinel as edit_roundtrip_episode above.
 extern int edit_script_retarget_episode;
 
+// Hidden level-editor flag (Phase E6): --edit-addepisode-test (no argument),
+// the add-episode scaffold self-test. Unlike the other self-tests above it
+// takes no episode number -- it always targets the lowest missing episode
+// slot -- so it's a plain "requested" bool like edit_requested, not an
+// episode-number sentinel.
+extern bool edit_addepisode_test_requested;
+
 // Hidden level-editor flag (Phase E1): --edit (no argument) boots the
 // interactive editor (lvledit_run()) instead of the normal title screen.
 // The editor now presents its own in-app episode picker followed by the

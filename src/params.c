@@ -45,6 +45,7 @@ int edit_roundtrip_episode = 0;
 int edit_addlevel_episode = 0;
 int edit_script_roundtrip_episode = 0;
 int edit_script_retarget_episode = 0;
+bool edit_addepisode_test_requested = false;
 bool edit_requested = false;
 
 bool edit_shot_requested = false;
@@ -108,6 +109,11 @@ void JE_paramCheck(int argc, char *argv[])
 		// (Phase E5b), not shown in --help. Shares the "edit" prefix; same
 		// short-circuit ordering note as edit-shot above applies here too.
 		{ 264, 0,   "edit-script-retarget-test", true },
+		// Hidden: add-episode scaffold self-test (Phase E6), not shown in
+		// --help. No argument -- it always targets the lowest missing
+		// episode slot. Shares the "edit" prefix; same short-circuit
+		// ordering note as edit-shot above applies here too.
+		{ 265, 0,   "edit-addepisode-test", false },
 
 		{ 'X', 'X', "xmas",              false },
 		{ 'c', 'c', "constant",          false },
@@ -329,6 +335,10 @@ void JE_paramCheck(int argc, char *argv[])
 			}
 			break;
 		}
+
+		case 265: // --edit-addepisode-test (hidden)
+			edit_addepisode_test_requested = true;
+			break;
 
 		case 'X':
 			xmas = true;

@@ -973,6 +973,16 @@ int main(int argc, char *argv[])
 		return ok ? 0 : 1;
 	}
 
+	if (edit_addepisode_test_requested)
+	{
+		// Hidden level-editor add-episode scaffold self-test (Phase E6):
+		// same rationale as edit_roundtrip_episode above -- no video/audio
+		// needed. Unlike the episode-number self-tests above, it takes no
+		// argument (it always targets the lowest missing episode slot).
+		bool ok = lvledit_run_addepisode_test();
+		return ok ? 0 : 1;
+	}
+
 	init_video();
 	init_keyboard();
 	init_controllers();

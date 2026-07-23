@@ -30,11 +30,22 @@
 #include <stdbool.h>
 
 // Runs the interactive level editor until the user quits back out. episode
-// selects tyrian<episode>.lvl directly (1-4); pass 0 (or any out-of-range
-// value) to start at the in-app episode picker instead. Assumes
+// selects tyrian<episode>.lvl directly (1-EPISODE_MAX); pass 0 (or any
+// out-of-range value) to start at the in-app episode picker instead. Assumes
 // video/keyboard/font/palette subsystems are already initialized (same
 // prerequisites as titleScreen()).
 void lvledit_run(int episode);
+
+// Hidden --edit-addepisode-test self-test (Phase E6): exercises the add-
+// episode scaffold (cloning episode 4's tyrian4.lvl/levels4.dat/cubetxt4.dat
+// into the lowest missing episode slot, see lvledit.c's scaffold_new_episode())
+// end to end, then removes every file it created so the data directory is
+// left exactly as found. Takes no argument -- it always targets whichever
+// slot the in-app picker's "+ New Episode" row would. If every slot in
+// [1, EPISODE_MAX] already exists, prints a SKIP line and returns true
+// (nothing to test without touching real user content). No video/audio
+// needed. Returns true iff every step (and the cleanup) succeeded.
+bool lvledit_run_addepisode_test(void);
 
 // Headless screenshot dump: loads tyrian<episode>.lvl (episode 1-4), parses
 // level_index the same way the interactive editor would, then renders and

@@ -1,11 +1,11 @@
 # Level Editor Plan
 
-Status: **E0–E2 done** (2026-07-19); **E7 (in-editor "F5" playtest) done**
-(2026-07-23). **E4–E6 designed** (2026-07-23, below): add levels/episodes —
-archive record-append, a full **semantic** `levels<ep>.dat` script editor,
-add-episode scaffolding. E7 (fly the edited level, then return to the editor)
-was the concrete realization of the old E3 placeholder. Opcode schema for the
-script lives in [SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
+Status: **E0–E2 done** (2026-07-19); **E4–E7 done** (2026-07-23): archive
+record-append, a full **semantic** `levels<ep>.dat` script editor,
+add-episode scaffolding, and in-editor "F5" playtest. E7 (fly the edited
+level, then return to the editor) was the concrete realization of the old E3
+placeholder. Opcode schema for the script lives in
+[SCRIPT_REFERENCE.md](SCRIPT_REFERENCE.md).
 Usability pass **2026-07-22**: toggleable tile sidebar + undo/redo, in-app
 episode picker, level-select sort + titles (below). Queued: left mini-map
 scrollbar.
@@ -207,21 +207,60 @@ corrupts the whole episode's sequencing.
 
 ### E6 — Add episode (scaffolding; `src/lvledit.c`)
 
-Engine is already episode-count-dynamic: `EPISODE_MAX 5` (`episodes.h:34`),
-`JE_scanForEpisodes()` probes `tyrian<n>.lvl`, `JE_findNextEpisode()` wraps on
-availability — **a 5th episode needs no core-engine change**. "New episode" is a
-scaffold built from E4 + E5:
+**Status: IMPLEMENTED (2026-07-23).** Engine is already episode-count-dynamic:
+`EPISODE_MAX 5` (`episodes.h:29`), `JE_scanForEpisodes()` probes
+`tyrian<n>.lvl`, `JE_findNextEpisode()` wraps on availability — **a 5th
+episode needs no core-engine change**.
 
-- Create `tyrian5.lvl` = one cloned level (E4) + the **item-data blob** appended
-  to the archive tail (episodes ≥4 read item data from there, `episodes.c:76`;
-  copy episode 4's blob so the shop/enemy tables are valid).
-- Emit a minimal `levels5.dat` (one section: `]I` menu, `]L` play, `]Q` end) via
-  the E5 encoder, plus a stub `cubetxt5.dat`.
-- Replace the hardcoded 1–4 loop in `run_episode_select()` (`lvledit.c:3213`)
-  with a dynamic scan + a "＋ New episode" row.
+**Design change from the original sketch below: clone episode 4 wholesale,
+don't hand-author a minimal archive.** The original plan was to build episode
+5 from E4 (one cloned level + an appended item-data blob) + E5 (a
+hand-emitted minimal `levels5.dat`). As-built, `scaffold_new_episode()`
+instead clones all **three** of episode 4's data files verbatim
+(`tyrian4.lvl → tyrian5.lvl`, `levels4.dat → levels5.dat`, `cubetxt4.dat →
+cubetxt5.dat`). Two reasons this is the safer path:
+- **Item data.** Episodes ≥4 read their item/enemy/ship tables from the
+  archive's own trailing blob (`episodes.c:76`,
+  `fseek(f, lvlPos[lvlNum-1], ...)`), and **only `tyrian4.lvl`'s trailing
+  entry is a real item-data blob** — episodes 1-3's trailing entry is just an
+  EOF marker. A new episode 5 is ≥4, so it needs a real blob; episode 4 is
+  the only source of one.
+- **Playability.** A hand-authored minimal script (one section: `]I` menu,
+  `]L` play, `]Q` end) is error-prone and its correctness (shop menus, end
+  sequence) can't be checked headlessly — it needs an actual playthrough.
+  Cloning episode 4's already-valid, already-playable script instead means
+  the scaffolded episode boots and plays immediately; the author customizes
+  it afterward with the tools that already exist (tile/event editor,
+  add-level `A`, the semantic script editor `C`, F5 playtest).
+
+Implementation:
+- `scaffold_new_episode(new_ep)` (`src/lvledit.c`): refuses to clobber an
+  existing `tyrian<new_ep>.lvl`, refuses if episode 4's own files are
+  missing, then buffer-copies all three files via `dir_fopen`
+  (`copy_data_file()`, mirroring the `.bak`-creation loop in
+  `save_current_level()`).
+- `run_episode_select()` is now fully dynamic: it probes `tyrian<e>.lvl` for
+  every `e` in `[1, EPISODE_MAX]` (not a hardcoded 1–4 loop), shows only the
+  slots that exist, and appends a **"+ New Episode (episode N)"** row for the
+  lowest still-missing slot (omitted once all `EPISODE_MAX` slots are
+  filled). Choosing that row scaffolds it on the spot and returns the new
+  episode number exactly like picking an existing episode — `lvledit_run()`
+  then loads it fresh via the normal `load_episode_archive()` path, so no
+  separate "re-probe" step is needed (the next visit to the picker just sees
+  the new file on disk).
+- Headless self-test `--edit-addepisode-test` (opcode 265, no argument):
+  targets the lowest missing slot, scaffolds it, verifies the three files
+  exist + parse + are byte-identical to episode 4's, then **removes all
+  three** so the data directory is left exactly as found — the "all slots
+  full" case is a SKIP, not a failure, since there's nothing to test without
+  risking real user content.
 - **Ceiling:** `EPISODE_MAX 5` is the natural stop. Episode 6+ would mean
   bumping that constant and auditing save-slot / next-episode logic — out of
   scope; flag if requested.
+
+The original design sketch (superseded by the above) follows for the record:
+build `tyrian5.lvl` from one cloned level (E4) + an appended item-data blob,
+emit a minimal `levels5.dat` via the E5 encoder, plus a stub `cubetxt5.dat`.
 
 ### E7 — In-editor playtest, the "F5" experience (`src/lvledit.c` + carve-outs in `tyrian2.c`)
 

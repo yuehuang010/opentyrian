@@ -4147,11 +4147,149 @@ static bool load_episode_archive(int episode)
 	return true;
 }
 
-// Remembers the last-selected row across re-entries into run_episode_select()
-// within one editor session, same rationale as last_level_sel above.
+// ---------------------------------------------------------------------
+// Add-episode scaffolding (Phase E6)
+// ---------------------------------------------------------------------
+//
+// Design decision (see internal/plan/LEVEL_EDITOR_PLAN.md's E6 section for
+// the full rationale): a new episode is scaffolded by CLONING episode 4's
+// three data files rather than hand-authoring a minimal archive/script.
+// Two engine facts force this:
+//   - Per-episode data is exactly three files: tyrian<n>.lvl (levels +
+//     enemy/item tables), levels<n>.dat (interlevel script), cubetxt<n>.dat
+//     (story-cube text) -- JE_initEpisode() (episodes.c) composes exactly
+//     these names.
+//   - Episodes >= 4 read their item/enemy/ship tables from the ARCHIVE'S
+//     OWN trailing blob rather than tyrian.hdt (episodes.c:76,
+//     `fseek(f, lvlPos[lvlNum-1], ...)`), and tyrian4.lvl is the only
+//     archive whose trailing entry is a real item-data blob (episodes 1-3's
+//     trailing entry is just an EOF marker). A new episode 5 is >= 4, so it
+//     MUST inherit a valid trailing blob -- only episode 4 has one to give.
+// Cloning episode 4 also hands the new episode a valid, immediately
+// playable levels4.dat script for free, so the scaffolded episode boots and
+// plays out of the box; the author then customizes it with the tools that
+// already exist (tile/event editor, add-level, the semantic script editor,
+// F5 playtest). A hand-authored "one level + minimal script" archive was
+// considered and rejected: it is error-prone and its correctness (shop
+// menus, end sequence) can't be validated headlessly -- it needs an actual
+// playthrough.
+
+// Buffered byte-for-byte copy of one data_dir()-relative file to another,
+// mirroring the .bak-creation loop in save_current_level(). Returns false
+// (leaving whatever was written so far) if the source can't be opened, the
+// destination can't be created, or a write comes up short.
+static bool copy_data_file(const char *src_name, const char *dst_name)
+{
+	FILE *src = dir_fopen(data_dir(), src_name, "rb");
+	if (src == NULL)
+		return false;
+
+	FILE *dst = dir_fopen(data_dir(), dst_name, "wb");
+	if (dst == NULL)
+	{
+		fclose(src);
+		return false;
+	}
+
+	bool ok = true;
+	Uint8 buf[8192];
+	size_t n;
+	while (ok && (n = fread(buf, 1, sizeof(buf), src)) > 0)
+		ok = (fwrite(buf, 1, n, dst) == n);
+
+	fclose(dst);
+	fclose(src);
+	return ok;
+}
+
+// Scaffolds a new episode by cloning episode 4's three data files (the only
+// episode whose .lvl carries the item-data trailing blob that episodes >= 4
+// load from). new_ep must be the lowest missing slot in [1, EPISODE_MAX] and
+// must not already exist. Returns true on success. Writes into data_dir().
+//
+// Refuses (returns false, writing nothing) if new_ep is out of range, if
+// tyrian<new_ep>.lvl already exists (never clobber), or if any of episode
+// 4's three source files is missing -- checked up front so a missing source
+// can't leave a partial episode behind. A failure partway through the three
+// copies (e.g. disk full) can still leave a partial scaffold; the caller is
+// expected to treat any false return as "creation failed", not "partially
+// created, try to recover".
+static bool scaffold_new_episode(int new_ep)
+{
+	if (new_ep < 1 || new_ep > EPISODE_MAX)
+		return false;
+
+	char dst_lvl[32], dst_script[32], dst_cube[32];
+	snprintf(dst_lvl, sizeof(dst_lvl), "tyrian%d.lvl", new_ep);
+	snprintf(dst_script, sizeof(dst_script), "levels%d.dat", new_ep);
+	snprintf(dst_cube, sizeof(dst_cube), "cubetxt%d.dat", new_ep);
+
+	if (dir_file_exists(data_dir(), dst_lvl))
+		return false;  // never clobber an existing episode
+
+	static const char *SRC_LVL = "tyrian4.lvl";
+	static const char *SRC_SCRIPT = "levels4.dat";
+	static const char *SRC_CUBE = "cubetxt4.dat";
+
+	if (!dir_file_exists(data_dir(), SRC_LVL) ||
+	    !dir_file_exists(data_dir(), SRC_SCRIPT) ||
+	    !dir_file_exists(data_dir(), SRC_CUBE))
+		return false;  // episode 4 itself is missing -- nothing to clone
+
+	if (!copy_data_file(SRC_LVL, dst_lvl))
+		return false;
+	if (!copy_data_file(SRC_SCRIPT, dst_script))
+		return false;
+	if (!copy_data_file(SRC_CUBE, dst_cube))
+		return false;
+
+	return true;
+}
+
+// Resolves row `row` of the episode picker (0-based: existing episodes in
+// shown_eps[0..shown_count-1], then the "+ New Episode" row at index
+// new_row if has_new_row). For an existing episode's row, just returns its
+// episode number. For the new-episode row, scaffolds it on the spot: on
+// success returns the freshly-created episode number; on failure shows a
+// brief toast (show_message()) and returns 0 -- 0 is never a valid episode
+// number, so the caller treats it as "stay in the picker".
+static int activate_episode_row(int row, const int *shown_eps, int shown_count,
+                                 bool has_new_row, int new_row, int new_ep)
+{
+	if (has_new_row && row == new_row)
+	{
+		if (scaffold_new_episode(new_ep))
+			return new_ep;
+
+		show_message("NEW EPISODE SCAFFOLD FAILED", 40);
+		return 0;
+	}
+
+	if (row >= 0 && row < shown_count)
+		return shown_eps[row];
+
+	return 0;
+}
+
+// Remembers the last-selected episode across re-entries into
+// run_episode_select() within one editor session, same rationale as
+// last_level_sel above. Stored as an episode NUMBER (not a row index),
+// since the row layout is rebuilt fresh every entry (episodes may have been
+// added by the New-Episode row since the last visit).
 static int last_episode_sel = 1;
 
-// Returns the chosen episode (1-4), or -1 if the user quit the editor.
+// Returns the chosen episode (1-EPISODE_MAX), or -1 if the user quit the
+// editor. The episode list is fully dynamic: only slots that actually have
+// a tyrian<e>.lvl are shown as openable rows, and if any slot in
+// [1, EPISODE_MAX] is still free, an extra "+ New Episode" row appears
+// below the list (scaffold_new_episode(), above) targeting the LOWEST free
+// slot. Choosing that row scaffolds the episode and returns its number
+// immediately, same as choosing an existing episode -- lvledit_run() then
+// calls load_episode_archive() on it exactly as it would for any other
+// pick, so the freshly-scaffolded files are what gets loaded (no separate
+// "re-probe" step is needed here: the next time this function is entered,
+// the top-of-function scan below sees the new file on disk and lists it
+// normally).
 static int run_episode_select(void)
 {
 	mouseClearInput();
@@ -4162,17 +4300,45 @@ static int run_episode_select(void)
 	// shared archive blob/cur_episode/cur_lvl_filename as a side effect, but
 	// that's harmless: whichever episode the user picks gets reloaded fresh
 	// by load_episode_archive() right after this function returns.
-	int counts[5]; // index by episode 1..4; counts[0] unused
-	for (int e = 1; e <= 4; ++e)
+	//
+	// Also determines, in the same pass, which slots exist at all (only
+	// those are shown as openable rows) and the lowest free slot in
+	// [1, EPISODE_MAX] (if any) for the "+ New Episode" row.
+	int counts[EPISODE_MAX + 1]; // index by episode 1..EPISODE_MAX; [0] unused
+	int shown_eps[EPISODE_MAX];  // episode numbers that exist, in order
+	int shown_count = 0;
+	int new_ep = 0;              // lowest missing slot, or 0 if none free
+
+	for (int e = 1; e <= EPISODE_MAX; ++e)
 	{
 		char fname[32];
 		snprintf(fname, sizeof(fname), "tyrian%d.lvl", e);
-		counts[e] = lvledit_load_archive(fname) ? lvledit_level_count() : -1;
+
+		if (dir_file_exists(data_dir(), fname))
+		{
+			counts[e] = lvledit_load_archive(fname) ? lvledit_level_count() : -1;
+			shown_eps[shown_count++] = e;
+		}
+		else
+		{
+			counts[e] = -1;
+			if (new_ep == 0)
+				new_ep = e;
+		}
 	}
 
-	int sel = last_episode_sel;
-	if (sel < 1) sel = 1;
-	if (sel > 4) sel = 4;
+	bool has_new_row = (new_ep != 0);
+	int new_row = has_new_row ? shown_count : -1;
+	int row_count = shown_count + (has_new_row ? 1 : 0);
+
+	// Translate the remembered episode number into a row index for this
+	// visit's (possibly different) layout; default to row 0 if it's not
+	// currently shown (defensive -- the editor never deletes an episode, so
+	// this shouldn't actually happen).
+	int sel = 0;
+	for (int r = 0; r < shown_count; ++r)
+		if (shown_eps[r] == last_episode_sel)
+			sel = r;
 
 	for (;;)
 	{
@@ -4183,18 +4349,26 @@ static int run_episode_select(void)
 
 		JE_outText(VGAScreen, 8, 4, "Level Editor - select episode", 0, 4);
 
-		for (int e = 1; e <= 4; ++e)
+		for (int r = 0; r < shown_count; ++r)
 		{
+			int e = shown_eps[r];
 			char line[64];
 			if (counts[e] >= 0)
 				snprintf(line, sizeof(line), "Episode %d   tyrian%d.lvl  (%d levels)", e, e, counts[e]);
 			else
 				snprintf(line, sizeof(line), "Episode %d   tyrian%d.lvl  (?)", e, e);
 
-			JE_outText(VGAScreen, 16, 16 + (e - 1) * 8, line, 0, e == sel ? 4 : 0);
+			JE_outText(VGAScreen, 16, 16 + r * 8, line, 0, r == sel ? 4 : 0);
 		}
 
-		JE_outText(VGAScreen, 8, 190, "Up/Down select, Enter open, Esc quit editor", 0, 0);
+		if (has_new_row)
+		{
+			char line[64];
+			snprintf(line, sizeof(line), "+ New Episode (episode %d)", new_ep);
+			JE_outText(VGAScreen, 16, 16 + new_row * 8, line, 0, new_row == sel ? 4 : 0);
+		}
+
+		JE_outText(VGAScreen, 8, 190, "Up/Down select, Enter open/create, Esc quit editor", 0, 0);
 
 		draw_mouse_pointer();
 
@@ -4207,20 +4381,29 @@ static int run_episode_select(void)
 			switch (ki.scancode)
 			{
 			case SDL_SCANCODE_ESCAPE:
-				last_episode_sel = sel;
+				last_episode_sel = (shown_count > 0 && sel < shown_count) ? shown_eps[sel] : last_episode_sel;
 				return -1;
 
 			case SDL_SCANCODE_UP:
-				if (sel > 1) --sel;
+				if (sel > 0) --sel;
 				break;
 			case SDL_SCANCODE_DOWN:
-				if (sel < 4) ++sel;
+				if (sel < row_count - 1) ++sel;
 				break;
 
 			case SDL_SCANCODE_RETURN:
 			case SDL_SCANCODE_KP_ENTER:
-				last_episode_sel = sel;
-				return sel;
+			{
+				int chosen = activate_episode_row(sel, shown_eps, shown_count, has_new_row, new_row, new_ep);
+				if (chosen != 0)
+				{
+					last_episode_sel = chosen;
+					return chosen;
+				}
+				mouseClearInput();
+				mouseWheelY = 0;
+				break;  // scaffold failed (toast already shown) -- stay in the picker
+			}
 
 			default:
 				break;
@@ -4232,20 +4415,27 @@ static int run_episode_select(void)
 		{
 			if (mi.button != SDL_BUTTON_LEFT || mi.y < 16)
 				continue;
-			int e = (mi.y - 16) / 8 + 1;
-			if (e < 1 || e > 4)
+			int r = (mi.y - 16) / 8;
+			if (r < 0 || r >= row_count)
 				continue;
-			if (e == sel)   // click already-selected = open
+			if (r == sel)   // click already-selected = open/create
 			{
-				last_episode_sel = sel;
-				return sel;
+				int chosen = activate_episode_row(sel, shown_eps, shown_count, has_new_row, new_row, new_ep);
+				if (chosen != 0)
+				{
+					last_episode_sel = chosen;
+					return chosen;
+				}
+				mouseClearInput();
+				mouseWheelY = 0;
+				continue;  // scaffold failed (toast already shown) -- stay in the picker
 			}
-			sel = e;
+			sel = r;
 		}
 
 		sel -= take_wheel_step();
-		if (sel < 1) sel = 1;
-		if (sel > 4) sel = 4;
+		if (sel < 0) sel = 0;
+		if (sel > row_count - 1) sel = row_count - 1;
 	}
 }
 
@@ -4253,8 +4443,11 @@ static int run_episode_select(void)
 // Entry point
 // ---------------------------------------------------------------------
 
-// episode: 1-4 to boot straight into that episode's level-select, or 0 (or
-// any out-of-range value) to start at the in-app episode picker instead.
+// episode: 1-EPISODE_MAX to boot straight into that episode's level-select,
+// or 0 (or any out-of-range value) to start at the in-app episode picker
+// instead. EPISODE_MAX itself may not exist yet on disk -- run_episode_select()
+// only offers it as an openable row once scaffold_new_episode() has created it
+// (via its "+ New Episode" row), same as any other episode.
 void lvledit_run(int episode)
 {
 	bool saved_hd_mode = hd_mode;
@@ -4268,7 +4461,7 @@ void lvledit_run(int episode)
 	int ep = episode;
 	for (;;)
 	{
-		if (ep < 1 || ep > 4)
+		if (ep < 1 || ep > EPISODE_MAX)
 		{
 			ep = run_episode_select();
 			if (ep < 0)
@@ -4405,4 +4598,130 @@ bool lvledit_export_map_cli(int episode, int level_index)
 
 	hd_mode = saved_hd_mode;
 	return ok;
+}
+
+// ---------------------------------------------------------------------
+// Headless add-episode scaffold self-test (--edit-addepisode-test, Phase E6)
+// ---------------------------------------------------------------------
+
+// Byte-for-byte compares two data_dir()-relative files (size, then content).
+// Used below to prove the scaffolded files really are exact copies of
+// episode 4's, the way scaffold_new_episode()'s copy_data_file() intends.
+static bool files_identical(const char *name_a, const char *name_b)
+{
+	FILE *a = dir_fopen(data_dir(), name_a, "rb");
+	FILE *b = dir_fopen(data_dir(), name_b, "rb");
+
+	if (a == NULL || b == NULL)
+	{
+		if (a != NULL) fclose(a);
+		if (b != NULL) fclose(b);
+		return false;
+	}
+
+	fseek(a, 0, SEEK_END);
+	fseek(b, 0, SEEK_END);
+	long len_a = ftell(a);
+	long len_b = ftell(b);
+	fseek(a, 0, SEEK_SET);
+	fseek(b, 0, SEEK_SET);
+
+	bool same = (len_a >= 0) && (len_a == len_b);
+
+	Uint8 buf_a[8192], buf_b[8192];
+	size_t n;
+	while (same && (n = fread(buf_a, 1, sizeof(buf_a), a)) > 0)
+	{
+		if (fread(buf_b, 1, n, b) != n || memcmp(buf_a, buf_b, n) != 0)
+			same = false;
+	}
+
+	fclose(a);
+	fclose(b);
+	return same;
+}
+
+// Hidden --edit-addepisode-test self-test (Phase E6): proves
+// scaffold_new_episode() end to end, then cleans up after itself so the
+// data directory (data_dir(), e.g. the gitignored tyrian21/ for a
+// --data ./tyrian21 run) is left exactly as found -- the point of this test
+// is to validate the scaffold, not to actually add episode content; the user
+// is expected to create their episode 5 for real through the in-app picker.
+//
+// No episode argument (unlike the other --edit-* self-tests): the target is
+// always the lowest missing slot in [1, EPISODE_MAX], same rule the picker's
+// "+ New Episode" row uses. If every slot already exists, there is nothing
+// to test without risking real user content, so this prints a SKIP line and
+// returns true rather than refusing to run.
+bool lvledit_run_addepisode_test(void)
+{
+	int new_ep = 0;
+	for (int e = 1; e <= EPISODE_MAX; ++e)
+	{
+		char fname[32];
+		snprintf(fname, sizeof(fname), "tyrian%d.lvl", e);
+		if (!dir_file_exists(data_dir(), fname))
+		{
+			new_ep = e;
+			break;
+		}
+	}
+
+	if (new_ep == 0)
+	{
+		printf("edit-addepisode: all episode slots full -- SKIP\n");
+		return true;
+	}
+
+	printf("edit-addepisode: scaffolding episode %d by cloning episode 4's files\n", new_ep);
+
+	bool all_ok = true;
+
+	bool scaffold_ok = scaffold_new_episode(new_ep);
+	printf("  scaffold_new_episode(%d): %s\n", new_ep, scaffold_ok ? "PASS" : "FAIL");
+	all_ok = all_ok && scaffold_ok;
+
+	char new_lvl[32], new_script[32], new_cube[32];
+	snprintf(new_lvl, sizeof(new_lvl), "tyrian%d.lvl", new_ep);
+	snprintf(new_script, sizeof(new_script), "levels%d.dat", new_ep);
+	snprintf(new_cube, sizeof(new_cube), "cubetxt%d.dat", new_ep);
+
+	bool files_exist = scaffold_ok &&
+	                    dir_file_exists(data_dir(), new_lvl) &&
+	                    dir_file_exists(data_dir(), new_script) &&
+	                    dir_file_exists(data_dir(), new_cube);
+	printf("  scaffolded files exist (%s, %s, %s): %s\n", new_lvl, new_script, new_cube,
+	       files_exist ? "PASS" : "FAIL");
+	all_ok = all_ok && files_exist;
+
+	bool archive_ok = files_exist && lvledit_load_archive(new_lvl) && lvledit_level_count() > 0;
+	printf("  lvledit_load_archive(%s) + level_count() > 0: %s\n", new_lvl, archive_ok ? "PASS" : "FAIL");
+	all_ok = all_ok && archive_ok;
+
+	bool identical_lvl = files_exist && files_identical(new_lvl, "tyrian4.lvl");
+	printf("  %s byte-identical to tyrian4.lvl: %s\n", new_lvl, identical_lvl ? "PASS" : "FAIL");
+	all_ok = all_ok && identical_lvl;
+
+	bool identical_script = files_exist && files_identical(new_script, "levels4.dat");
+	printf("  %s byte-identical to levels4.dat: %s\n", new_script, identical_script ? "PASS" : "FAIL");
+	all_ok = all_ok && identical_script;
+
+	bool identical_cube = files_exist && files_identical(new_cube, "cubetxt4.dat");
+	printf("  %s byte-identical to cubetxt4.dat: %s\n", new_cube, identical_cube ? "PASS" : "FAIL");
+	all_ok = all_ok && identical_cube;
+
+	// Clean up unconditionally and best-effort: whatever scaffold_new_episode()
+	// managed to write must not survive this self-test. remove() silently
+	// no-ops on a path that was never created (e.g. scaffold_ok was false
+	// partway through), which is fine here.
+	char full_path[512];
+	snprintf(full_path, sizeof(full_path), "%s/%s", data_dir(), new_lvl);
+	remove(full_path);
+	snprintf(full_path, sizeof(full_path), "%s/%s", data_dir(), new_script);
+	remove(full_path);
+	snprintf(full_path, sizeof(full_path), "%s/%s", data_dir(), new_cube);
+	remove(full_path);
+
+	printf("edit-addepisode: %s\n", all_ok ? "ALL PASS" : "FAIL");
+	return all_ok;
 }
