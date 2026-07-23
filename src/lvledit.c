@@ -66,6 +66,15 @@
 #define ED_MINIMAP_W 12
 #define ED_MINIMAP_H (ED_VIEW_ROWS * ED_TILE_H)  // 168 px, same height as the viewport
 
+// Event guide colour (mini-map ticks in draw_minimap(), viewport row tabs
+// in draw_map_viewport()): palette 5 (palettes[5], loaded via set_palette()
+// in lvledit_run() -- see the comment above save_screenshot_bmp()) index
+// 205 is a vivid green (~(32,230,72)), verified against a decoded
+// palette.dat dump to read clearly against the density plot's grey (11),
+// the viewport band's white (15), and the black (0) background. Green
+// (not red -- red reads as an error) marks a neutral "here's an event".
+#define ED_EVENT_COLOR 205
+
 // Right-hand tile-slot sidebar geometry (draw_sidebar(), further below).
 // Pulled up here because view_cols() needs ED_SIDEBAR_W -- the fixed width
 // the sidebar consumes when open -- to size the viewport before
@@ -251,6 +260,12 @@ static int event_scroll = 0;
 // shorter-schema type (directly, or by editing TYPE) can shrink it out from
 // under an in-range cursor.
 static int event_field = 0;
+
+// Whether the event editor's RIGHT inspector "sidecar" is shown. T toggles it
+// (mirroring the map editor's own T tile-sidebar toggle); closing it hands the
+// full screen width to the event list so the summaries read wider. Defaults
+// open so the inspector is there the first time you enter the editor.
+static bool event_sidebar_open = true;
 
 static bool entering_number = false;
 static char number_entry_buf[8];
@@ -933,6 +948,76 @@ static const EditorTile *resolve_slot_tile(int layer, int slot)
 }
 
 // ---------------------------------------------------------------------
+// Event time <-> map row (nominal/default-scroll mapping)
+// ---------------------------------------------------------------------
+//
+// An event's `time` field is the curLoc (scroll position) at which it
+// fires. At level start curLoc == 0 and mapY == 292 (300 - 8, tyrian2.c:897);
+// as the level scrolls, curLoc += backMove and backPos += backMove in
+// lockstep, and backPos wraps every ED_TILE_H (28) units -> one map-1
+// (layer-0) row. So, nominally:
+//
+//     map1_row(time) = ED_EVENT_ROW0 - time/28
+//     time(map1_row) = (ED_EVENT_ROW0 - map1_row) * 28
+//
+// This is the nominal/default-scroll mapping -- speed changes and
+// force-events (e.g. JE_eventSystem's dat3 == -99 handling) can shift an
+// event's effective firing row at runtime. It's good enough for an editor
+// guide, not a simulation of variable scroll; don't treat it as exact.
+//
+// Events live in layer-0 row space. To place an event on any active layer
+// (map2/map3 are twice as tall as map1), go through the level-progress
+// FRACTION so the mapping is layer-agnostic:
+//
+//     frac(event)        = map1_row(event.time) / 300.0   // 0=top .. ~1=bottom
+//     active_row(event)  = round(frac(event) * layer_height(active_layer))
+//
+// All of this stays in array-row order (row 0 at the TOP, the same axis
+// scroll_y/cursor_y and draw_minimap()/draw_map_viewport() already use),
+// NOT row_progress()'s game-start-at-the-bottom reframing further below --
+// nothing here needs flipping.
+#define ED_EVENT_ROW0 (300 - 8)  // mapY at level start, tyrian2.c:897
+
+// Layer-0 (map1) array row an event's time nominally pins to, clamped to
+// the valid [0, 299] row range.
+static int event_map1_row(const lvledit_event *ev)
+{
+	long row = ED_EVENT_ROW0 - (long)ev->time / ED_TILE_H;
+	if (row < 0) row = 0;
+	if (row > 299) row = 299;
+	return (int)row;
+}
+
+// Same event, reframed as an array row of the CURRENTLY ACTIVE layer
+// (which may be map2/map3, twice as tall as map1) via the layer-agnostic
+// level-progress fraction. Rounds rather than truncates.
+static int event_active_row(const lvledit_event *ev)
+{
+	int row1 = event_map1_row(ev);
+	int h = layer_height(active_layer);
+	int row = (int)(((long)row1 * h + 150) / 300);
+	if (row < 0) row = 0;
+	if (row >= h) row = h - 1;
+	return row;
+}
+
+// Inverse of event_active_row(): the event `time` a given active-layer
+// cursor row nominally corresponds to. Used by the E-key jump-to-nearest
+// feature (run_event_editor()) to find the event closest to the map
+// cursor. Clamped to >= 0.
+static long row_target_time(int active_row)
+{
+	int h = layer_height(active_layer);
+	int row1 = (int)(((long)active_row * 300 + h / 2) / h);
+	if (row1 < 0) row1 = 0;
+	if (row1 > 299) row1 = 299;
+
+	long time = (long)(ED_EVENT_ROW0 - row1) * ED_TILE_H;
+	if (time < 0) time = 0;
+	return time;
+}
+
+// ---------------------------------------------------------------------
 // Drawing
 // ---------------------------------------------------------------------
 
@@ -1097,6 +1182,25 @@ static void draw_minimap(void)
 	if (cursor_sy >= ED_MINIMAP_H) cursor_sy = ED_MINIMAP_H - 1;
 	for (int x = 0; x < ED_MINIMAP_W - 1; ++x)
 		JE_pix(VGAScreen, x, cursor_sy, 0);
+
+	// Event ticks: one per event, at the layer-agnostic fraction of level
+	// progress (event_map1_row()/300 -- see its comment above row_progress()),
+	// so they land at the right strip row whichever layer is active. Drawn
+	// last, over the density plot/band/cursor tick, in the saturated
+	// ED_EVENT_COLOR so they don't get lost under the grey (11) density
+	// plot or the white (15) viewport band; a short tick on the strip's
+	// right half (x = (ED_MINIMAP_W-1)/2 .. ED_MINIMAP_W-2) leaves the left
+	// half free for the density plot underneath. Many events can land on
+	// the same mini-map row; that's fine, they just overplot.
+	for (int i = 0; i < cur_level.event_count; ++i)
+	{
+		int sy = event_map1_row(&cur_level.event[i]) * ED_MINIMAP_H / 300;
+		if (sy < 0) sy = 0;
+		if (sy >= ED_MINIMAP_H) sy = ED_MINIMAP_H - 1;
+
+		for (int x = (ED_MINIMAP_W - 1) / 2; x <= ED_MINIMAP_W - 2; ++x)
+			JE_pix(VGAScreen, x, sy, ED_EVENT_COLOR);
+	}
 }
 
 // Draws only the active layer, fully lit; empty/transparent cells (and cells
@@ -1141,6 +1245,29 @@ static void draw_map_viewport(void)
 			if (mx == cursor_x && my == cursor_y)
 				JE_rectangle(VGAScreen, dx, dy, dx + ED_TILE_W - 1, dy + ED_TILE_H - 1, 15);
 		}
+	}
+
+	// Event row markers: a thin left-edge tab on every on-screen row that's
+	// an event trigger. Events are full-width row bands, not per-cell (see
+	// event_active_row()'s comment), so this marks the ROW, not a cell --
+	// drawn over the row's leftmost few px rather than picking one column.
+	// One pass over cur_level.event[] (not rows * events): bucket each
+	// event's active-layer row into the on-screen row it falls in, if any.
+	bool row_has_event[ED_VIEW_ROWS] = { false };
+	for (int i = 0; i < cur_level.event_count; ++i)
+	{
+		int row = event_active_row(&cur_level.event[i]) - scroll_y;
+		if (row >= 0 && row < ED_VIEW_ROWS)
+			row_has_event[row] = true;
+	}
+
+	for (int row = 0; row < ED_VIEW_ROWS; ++row)
+	{
+		if (!row_has_event[row])
+			continue;
+
+		int dy = row * ED_TILE_H;
+		fill_rectangle_xy(VGAScreen, ED_MINIMAP_W, dy, ED_MINIMAP_W + 2, dy + ED_TILE_H - 1, ED_EVENT_COLOR);
 	}
 }
 
@@ -1810,6 +1937,14 @@ static bool save_current_level(void)
 #define ED_EVENT_SIDEBAR_LABEL_X    212
 #define ED_EVENT_SIDEBAR_VALUE_RIGHT 314
 
+// Pixel width the summary column gets: the narrow "stops before the divider"
+// value above when the inspector sidecar is open, or the full run out to the
+// screen's usable right edge (316) when T has closed it.
+static int event_summary_w(void)
+{
+	return event_sidebar_open ? ED_EVENT_SUMMARY_W : (316 - ED_EVENT_SUMMARY_X);
+}
+
 // Defensive backstop for any label/name text that might overflow its box:
 // measurement shows no current event_type_name() entry exceeds the space
 // available, but if a future entry ever did, silently overflowing would be
@@ -1839,7 +1974,7 @@ static void draw_event_list_row(int index, int y, bool selected)
 	snprintf(f_time, sizeof(f_time), "%u", ev->time);
 
 	char summary[128];
-	event_summary(ev, summary, sizeof(summary), ED_EVENT_SUMMARY_W);
+	event_summary(ev, summary, sizeof(summary), event_summary_w());
 
 	int bright = selected ? 4 : 0;
 
@@ -1954,8 +2089,10 @@ static void draw_event_screen(bool show_help)
 
 	// Vertical divider between the LEFT event list and the RIGHT inspector --
 	// same "1px-wide filled rect" trick the map editor's own tile-sidebar
-	// divider uses (see draw_map_viewport()'s divider_x).
-	fill_rectangle_xy(VGAScreen, ED_EVENT_DIVIDER_X, 0, ED_EVENT_DIVIDER_X, ED_EVENT_STATUS_Y - 4, 8);
+	// divider uses (see draw_map_viewport()'s divider_x). Only when the
+	// inspector sidecar is open (T); closed, the list owns the full width.
+	if (event_sidebar_open)
+		fill_rectangle_xy(VGAScreen, ED_EVENT_DIVIDER_X, 0, ED_EVENT_DIVIDER_X, ED_EVENT_STATUS_Y - 4, 8);
 
 	int count = cur_level.event_count;
 
@@ -1974,7 +2111,8 @@ static void draw_event_screen(bool show_help)
 			draw_event_list_row(idx, ED_EVENT_ROW_Y0 + row * ED_EVENT_ROW_H, idx == event_sel);
 		}
 
-		draw_inspector_sidebar(&cur_level.event[event_sel]);
+		if (event_sidebar_open)
+			draw_inspector_sidebar(&cur_level.event[event_sel]);
 	}
 
 	char status[96];
@@ -1991,7 +2129,7 @@ static void draw_event_screen(bool show_help)
 	else if (show_help)
 	{
 		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y1, "Up/Dn/PgUp/PgDn/Home/End event  Click row/field  L/R field", 0, 0);
-		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "+/-(Sft=10) I ins D del R sort U/Y undo/redo S save Esc back", 0, 0);
+		JE_outText(VGAScreen, 4, ED_EVENT_HELP_Y2, "+/-(Sft=10) I ins D del R sort T panel U/Y undo/redo S save Esc", 0, 0);
 	}
 }
 
@@ -2128,6 +2266,29 @@ static void run_event_editor(void)
 
 	mouseClearInput();
 	mouseWheelY = 0;
+
+	// Jump straight to the event nearest the map cursor's scroll position
+	// (rather than leaving event_sel wherever a previous visit left it, or
+	// defaulting to 0): minimise |ev.time - target|, earlier index wins
+	// ties. Pure selection change -- no event data is touched.
+	if (cur_level.event_count > 0)
+	{
+		long target = row_target_time(cursor_y);
+		int best = 0;
+		long best_diff = labs((long)cur_level.event[0].time - target);
+
+		for (int i = 1; i < cur_level.event_count; ++i)
+		{
+			long diff = labs((long)cur_level.event[i].time - target);
+			if (diff < best_diff)
+			{
+				best = i;
+				best_diff = diff;
+			}
+		}
+
+		event_sel = best;
+	}
 
 	clamp_event_view();
 
@@ -2300,6 +2461,10 @@ static void run_event_editor(void)
 				sort_events_by_time();
 				break;
 
+			case SDL_SCANCODE_T:
+				event_sidebar_open = !event_sidebar_open;
+				break;
+
 			case SDL_SCANCODE_U:
 				if (undo_apply())
 				{
@@ -2355,7 +2520,10 @@ static void run_event_editor(void)
 
 				int row = (mi.y - ED_EVENT_ROW_Y0) / ED_EVENT_ROW_H;
 
-				if (mi.x < ED_EVENT_DIVIDER_X)
+				// With the sidecar closed the list spans the full width, so a
+				// click anywhere is a list click; open, x past the divider is
+				// an inspector field click.
+				if (!event_sidebar_open || mi.x < ED_EVENT_DIVIDER_X)
 				{
 					// LEFT list: pick the event under the click -- same row
 					// math as before, minus the old column->field mapping
