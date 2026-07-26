@@ -315,6 +315,155 @@ static void coopJoinRowActivate(void)
 	JE_playSampleNum(S_CLICK);
 }
 
+/* ===================== Arcade drop-in second player ===================== */
+
+// Rows of the two arcade preflight menus once the "2 PLAYER" join/leave row is
+// present. The row is inserted directly above Quit so Quit stays last, which
+// shifts Quit down by one in both menus. Every consumer of these numbers --
+// JE_drawMenuChoices(), the mouse hit test, JE_drawMainMenuHelpText() and
+// JE_menuFunction() -- must agree, so they are named here rather than spelled
+// as bare literals at each site.
+//
+//   MENU_1_PLAYER_ARCADE: 2 next level, 3 Options, [4 2 PLAYER], 4/5 Quit
+//   MENU_2_PLAYER_ARCADE: 2 next level, 3 P1 device, 4 P2 device, 5 Options,
+//                         [6 2 PLAYER], 6/7 Quit
+enum
+{
+	ARCADE_JOIN_ROW_1P = 4,
+	ARCADE_JOIN_ROW_2P = 6,
+};
+
+// Arcade join eligibility (ARCADE_JOIN_PLAN.md): an arcade session -- solo
+// (onePlayerAction) or already 2P (twoPlayerMode && !campaignCoop) -- that a
+// second player may drop into or out of. SuperTyrian and super-arcade are
+// single-ship modes, and network arcade is out of scope until NETWORK_MATCH_PLAN
+// lands, so all three are excluded.
+//
+// Mutually exclusive with coopJoinEligible() by construction: that one requires
+// !onePlayerAction && (!twoPlayerMode || campaignCoop), i.e. a *campaign*
+// session, while this one requires !campaignCoop && (onePlayerAction ||
+// twoPlayerMode). onePlayerAction alone decides the first two clauses, and the
+// remaining case (campaign 2P) splits on campaignCoop. So the two join rows can
+// never both want to exist in the same menu.
+static bool arcadeJoinEligible(void)
+{
+	return !isNetworkGame && !superTyrian && superArcadeMode == SA_NONE &&
+	       !campaignCoop && (onePlayerAction || twoPlayerMode);
+}
+
+// Label for the "2 PLAYER" arcade row, reflecting the current session state.
+// Unlike campaign co-op there is no READY state: the arcade flip is immediate
+// (see arcadeJoinActivate), so the row only ever means join or leave.
+static const char *arcadeJoinRowLabel(void)
+{
+	return twoPlayerMode ? "2 PLAYER: LEAVE" : "2 PLAYER: JOIN";
+}
+
+// Flip the live arcade session between solo and 2P, immediately -- there is no
+// coopJoinController-style ready-at-launch latch here. Campaign co-op needs one
+// because the shop is rendered entirely for player[0] and must stay 1P for the
+// visit; the arcade preflight menu has nothing player-scoped to break, and
+// flipping now makes the menu itself the feedback (P2's device-cycler row
+// appears/disappears as MENU_1_PLAYER_ARCADE <-> MENU_2_PLAYER_ARCADE swap).
+//
+// `pad` is the controller index that requested the join, or -1 when the request
+// came from the menu row (or from a disconnect, which can only ever leave).
+static void arcadeJoinActivate(int pad)
+{
+	if (twoPlayerMode)
+	{
+		// Leave. P2's items are deliberately left alone: they are re-initialized
+		// wholesale on the next join, and leaving them intact costs nothing.
+		twoPlayerMode = false;
+		onePlayerAction = true;
+	}
+	else
+	{
+		// Join. The ~15 arcade gates in the engine spell "arcade" as
+		// (twoPlayerMode && !campaignCoop) || onePlayerAction, so swapping which
+		// of the two flags is set keeps every arcade rule true; only the player
+		// count changes.
+		twoPlayerMode = true;
+		onePlayerAction = false;
+
+		// Reset P2 to a fresh 2P-arcade start, mirroring JE_initPlayerData()'s
+		// player[1] block (mainint.c). Arcade P2 buys nothing and saves nothing --
+		// the loadout comes from P1's hull plus a Vulcan rear and grows from
+		// pickups -- so a plain re-init is the whole of "P2 joins".
+		player[1].items = player[0].items;
+		player[1].items.weapon[REAR_WEAPON].id = 15;  // Vulcan Cannon
+		player[1].items.sidekick_level = 101;         // 101, 102, 103
+		player[1].items.sidekick_series = 0;          // None
+		for (uint i = 0; i < COUNTOF(player[1].items.weapon); ++i)
+			player[1].items.weapon[i].power = 1;
+		player[1].weapon_mode = 1;
+		player[1].armor = ships[player[1].items.ship].dmg;
+		player[1].cash = 0;
+		player[1].is_dragonwing = true;
+		// player[1].lives aliases items.weapon[1].power (JE_initPlayerData), so
+		// the power reset above already put P2 back on one life.
+
+		if (pad >= 0)
+		{
+			// A pad claimed the P2 slot: adopt it, and if it was also P1's
+			// device, move P1 off it. Keyboard is the safe fallback -- it is the
+			// one device that always exists and can never collide with a pad.
+			inputDevice[1] = 3 + pad;
+			if (inputDevice[0] == inputDevice[1])
+				inputDevice[0] = 1;  // keyboard
+		}
+		else if (inputDevice[1] >= 3 &&
+		         (inputDevice[1] - 3 >= controllers ||
+		          controller[inputDevice[1] - 3].handle == NULL))
+		{
+			// Menu-row join: no pad requested it, so P2 inherits whatever device
+			// the controller-config menu has parked in inputDevice[1]. If that is
+			// a pad slot whose controller has since been unplugged (the slot
+			// survives a disconnect, only the handle is nulled), arcadeP2PadLost()
+			// would undo this join on the very next frame, clicking in a loop.
+			// Fall back to a device that always exists and isn't P1's.
+			inputDevice[1] = (inputDevice[0] == 1) ? 2 : 1;  // mouse, else keyboard
+		}
+	}
+
+	// The MENU_FULL_GAME clamp (top of JE_itemScreen's loop) only reroutes when
+	// curMenu is MENU_FULL_GAME, so the swap between the two arcade menus has to
+	// be done here. Only do it when we are actually standing on an arcade menu:
+	// from a submenu (Options, controller config) leave curMenu alone, since
+	// backing out of those goes via MENU_FULL_GAME and re-clamps correctly.
+	if (curMenu == MENU_1_PLAYER_ARCADE || curMenu == MENU_2_PLAYER_ARCADE)
+	{
+		curMenu = twoPlayerMode ? MENU_2_PLAYER_ARCADE : MENU_1_PLAYER_ARCADE;
+
+		// menuChoices[] for the new menu is refreshed at the top of the next
+		// frame, but curSel[] is read before that; set both now so no frame ever
+		// sees a selection past the end. The cursor lands on the *new* menu's
+		// join row -- the one row whose meaning just flipped (JOIN <-> LEAVE) --
+		// which is both in range by construction and the clearest feedback.
+		menuChoices[curMenu] = twoPlayerMode ? 7 : 5;
+		curSel[curMenu] = twoPlayerMode ? ARCADE_JOIN_ROW_2P : ARCADE_JOIN_ROW_1P;
+	}
+
+	JE_playSampleNum(S_CLICK);
+}
+
+// True when arcade P2 is flying on a controller that has gone away.
+// controller_device_removed() (controller.c) keeps the slot and only nulls the
+// handle, so "P2's pad is gone" is exactly a NULL handle -- controllers never
+// shrinks, but the >= check guards a device list that never grew that far.
+// Exported for the in-flight check in tyrian2.c; the preflight menu calls it too.
+bool arcadeP2PadLost(void)
+{
+	if (!twoPlayerMode || campaignCoop || isNetworkGame)
+		return false;
+
+	if (inputDevice[1] < 3)
+		return false;  // P2 is on keyboard/mouse/"any"; nothing to disconnect
+
+	const int p2_pad = inputDevice[1] - 3;
+	return p2_pad >= controllers || controller[p2_pad].handle == NULL;
+}
+
 /* ===================== Item shop screen ===================== */
 
 void JE_itemScreen(void)
@@ -497,6 +646,18 @@ void JE_itemScreen(void)
 		// nav, mouse hotspots, and back/esc all derive from the same value.
 		if (curMenu == MENU_OPTIONS)
 			menuChoices[MENU_OPTIONS] = coopJoinEligible() ? 9 : 8;
+
+		// "2 PLAYER" arcade join/leave row (ARCADE_JOIN_PLAN.md B): inserted into
+		// the arcade preflight menus themselves rather than the Options submenu
+		// where the campaign row lives -- the user asked for it in the preflight
+		// menu, and it is where a joining player will look. Same dynamic-count
+		// discipline as above: one value feeds drawing, cursor nav and hotspots.
+		// MENU_1_PLAYER_ARCADE also serves network games, but arcadeJoinEligible()
+		// excludes those, so a network session keeps its stock 4 rows.
+		if (curMenu == MENU_1_PLAYER_ARCADE)
+			menuChoices[MENU_1_PLAYER_ARCADE] = arcadeJoinEligible() ? 5 : 4;
+		if (curMenu == MENU_2_PLAYER_ARCADE)
+			menuChoices[MENU_2_PLAYER_ARCADE] = arcadeJoinEligible() ? 7 : 6;
 
 		/* Draw menu choices for simple menus */
 		if ((curMenu >= MENU_FULL_GAME && curMenu <= MENU_PLAY_NEXT_LEVEL) ||
@@ -1162,8 +1323,16 @@ void JE_itemScreen(void)
 				// a confirm. Reads controller[c].action_pressed[0] (fire, edge-
 				// triggered) as last set by the previous iteration's polling, which
 				// is safe: nothing else touches it between iterations.
-				coopJoinPollActive = coopJoinEligible();
-				if (coopJoinPollActive)
+				// The arcade join poll below shares this frame and this gate: the
+				// two eligibility predicates are mutually exclusive (see
+				// arcadeJoinEligible), so at most one of the two blocks runs, but
+				// coopJoinPollActive has to cover both or an arcade join press
+				// would leak into the menu as a confirm exactly as described above.
+				const bool coopEligible = coopJoinEligible();
+				const bool arcadeEligible = arcadeJoinEligible();
+				coopJoinPollActive = coopEligible || arcadeEligible;
+
+				if (coopEligible)
 				{
 					// P1's effective pad: explicit joystick device, or pad 0 when
 					// the device is "any" (JE_moveShip's c = inputDevice ? -3 : 0).
@@ -1242,6 +1411,62 @@ void JE_itemScreen(void)
 						}
 					}
 				}
+				else if (arcadeEligible)
+				{
+					// Arcade join/leave gesture (ARCADE_JOIN_PLAN.md B). Same shape
+					// as the campaign poll above -- and under the same ordering
+					// constraint w.r.t. waitUntilElapsed() -- but the flip is
+					// immediate, so it calls arcadeJoinActivate() instead of
+					// latching a coopJoinController.
+					//
+					// P1's effective pad: explicit joystick device, or pad 0 when
+					// the device is "any" (JE_moveShip's c = inputDevice ? -3 : 0).
+					const int p1_pad = (inputDevice[0] == 0) ? 0
+					                 : (inputDevice[0] >= 3) ? inputDevice[0] - 3 : -1;
+
+					if (twoPlayerMode)
+					{
+						// Already 2P: only P2's own pad may drop P2, so a stray
+						// press on a third pad can't kick a player out. A
+						// keyboard/mouse P2 has no pad to press and leaves via the
+						// "2 PLAYER" menu row instead.
+						const int p2_pad = (inputDevice[1] >= 3) ? inputDevice[1] - 3 : -1;
+						if (p2_pad >= 0 && p2_pad < controllers && p2_pad != p1_pad &&
+						    controller[p2_pad].action_pressed[0])
+						{
+							arcadeJoinActivate(-1);
+						}
+					}
+					else
+					{
+						// Solo: any pad that isn't P1's claims the P2 slot -- this
+						// is the "someone walks up with a controller and presses
+						// fire" case, so it deliberately ignores whatever device
+						// the controller-config menu currently has parked in
+						// inputDevice[1]; the claiming pad overwrites it.
+						for (int c = 0; c < controllers; c++)
+						{
+							if (c == p1_pad)
+								continue;  // P1's own pad
+
+							if (controller[c].handle == NULL)
+								continue;  // slot kept after a disconnect
+
+							if (!controller[c].action_pressed[0])  // fire
+								continue;
+
+							arcadeJoinActivate(c);
+							break;
+						}
+					}
+				}
+
+				// Arcade P2's pad vanished (ARCADE_JOIN_PLAN.md C): drop back to
+				// one player right here at the menu, using the same leave path the
+				// row and the gesture use, so the menu re-clamps to
+				// MENU_1_PLAYER_ARCADE and P2's device row disappears.
+				if (arcadeP2PadLost())
+					arcadeJoinActivate(-1);
 
 				waitUntilElapsed();
 
@@ -1380,6 +1605,14 @@ void JE_itemScreen(void)
 
 				if (curMenu == MENU_2_PLAYER_ARCADE)
 				{
+					// Undo the two extra lines the device-cycler values occupy
+					// (see the matching tempY rules in JE_drawMenuChoices). This
+					// needs no adjustment for the appended "2 PLAYER" row: the row
+					// and the shifted Quit sit at y = 134 and y = 150, which raw-
+					// map to 8 and 9 and come back through both decrements as 6
+					// and 7 -- exactly their drawn row numbers. The
+					// `selection <= menuChoices[curMenu]` gate below then keeps a
+					// click past the last row inert when the row is absent.
 					if (selection > 5)
 						selection--;
 					if (selection > 3)
@@ -2273,6 +2506,12 @@ void JE_drawMenuChoices(void)
 			}
 		}
 
+		// The two device-cycler rows (x == 3 and x == 4) each print their current
+		// value on a second line below the label (see the inputDevice[] draw in
+		// JE_itemScreen), so every row after them is pushed down one line each.
+		// Both rules already fire for any x > 4, so the appended "2 PLAYER" row
+		// (x == 6) and the shifted Quit (x == 7) land on the regular 16px grid at
+		// y = 134 and y = 150, directly below Options at y = 118.
 		if (curMenu == MENU_2_PLAYER_ARCADE)
 		{
 			if (x > 3)
@@ -2295,9 +2534,18 @@ void JE_drawMenuChoices(void)
 		// (the tyrian.hdt data file ships no string for it); it is inserted just
 		// above Done (x == 8) whenever a co-op join/leave is possible, so Done
 		// stays the last row (shifted down to x == 9).
+		//
+		// The arcade "2 PLAYER" row works the same way and for the same reason:
+		// it is inserted just above Quit (x == 4 in MENU_1_PLAYER_ARCADE, x == 6
+		// in MENU_2_PLAYER_ARCADE), so Quit keeps its label but reads one row
+		// further down the menuInt[] table than it is drawn.
 		const char *choice;
 		if (curMenu == MENU_OPTIONS && coopJoinEligible() && x >= 8)
 			choice = (x == 8) ? coopJoinRowLabel() : menuInt[curMenu + 1][8-1];
+		else if (curMenu == MENU_1_PLAYER_ARCADE && arcadeJoinEligible() && x >= ARCADE_JOIN_ROW_1P)
+			choice = (x == ARCADE_JOIN_ROW_1P) ? arcadeJoinRowLabel() : menuInt[curMenu + 1][ARCADE_JOIN_ROW_1P-1];
+		else if (curMenu == MENU_2_PLAYER_ARCADE && arcadeJoinEligible() && x >= ARCADE_JOIN_ROW_2P)
+			choice = (x == ARCADE_JOIN_ROW_2P) ? arcadeJoinRowLabel() : menuInt[curMenu + 1][ARCADE_JOIN_ROW_2P-1];
 		else
 			choice = menuInt[curMenu + 1][x-1];
 
@@ -2717,6 +2965,16 @@ void JE_drawMainMenuHelpText(void)
 	if (curMenu == MENU_OPTIONS && coopJoinEligible() && curSel[MENU_OPTIONS] == 9)
 		temp = 8 - 2;
 
+	// Same remap for the arcade "2 PLAYER" row's shift of Quit. Only the 2P menu
+	// needs it: menuHelp[MENU_2_PLAYER_ARCADE] has exactly 5 entries (rows 2..6)
+	// and row 7 would index the trailing zero, i.e. mainMenuHelp[-1].
+	// MENU_1_PLAYER_ARCADE has no menuHelp[] row at all -- its Quit is picked up
+	// by the generic `temp == menuChoices[curMenu] - 2` branch below, which
+	// follows the dynamic row count on its own.
+	if (curMenu == MENU_2_PLAYER_ARCADE && arcadeJoinEligible() &&
+	    curSel[MENU_2_PLAYER_ARCADE] == ARCADE_JOIN_ROW_2P + 1)
+		temp = ARCADE_JOIN_ROW_2P - 2;
+
 	if (curMenu == MENU_CONTROLLER_CONFIG) // controller settings menu help
 	{
 		int row_index = curSel[curMenu] - 2;
@@ -2740,6 +2998,19 @@ void JE_drawMainMenuHelpText(void)
 	{
 		// Literal help for our "2 PLAYER" row (no data-file help string exists).
 		const char *text = "Add or drop a second player for co-op campaign.";
+		strncpy(tempStr, text, sizeof(tempStr) - 1);
+		tempStr[sizeof(tempStr) - 1] = '\0';
+	}
+	else if (arcadeJoinEligible() &&
+	         ((curMenu == MENU_1_PLAYER_ARCADE && curSel[curMenu] == ARCADE_JOIN_ROW_1P) ||
+	          (curMenu == MENU_2_PLAYER_ARCADE && curSel[curMenu] == ARCADE_JOIN_ROW_2P)))
+	{
+		// Literal help for the arcade "2 PLAYER" row, for the same reason as the
+		// co-op row above. Must precede the MENU_2_PLAYER_ARCADE branch below,
+		// which would otherwise swallow it via menuHelp[].
+		const char *text = twoPlayerMode
+			? "Drop the second player and continue solo."
+			: "Add a second player to this arcade game.";
 		strncpy(tempStr, text, sizeof(tempStr) - 1);
 		tempStr[sizeof(tempStr) - 1] = '\0';
 	}
@@ -3272,7 +3543,13 @@ void JE_menuFunction(JE_byte select)
 		case 5:
 			curMenu = MENU_OPTIONS;
 			break;
-		case 6:
+		case ARCADE_JOIN_ROW_2P:  // "2 PLAYER: LEAVE" when present, else Quit
+		case ARCADE_JOIN_ROW_2P + 1:  // Quit, shifted down by the "2 PLAYER" row
+			if (arcadeJoinEligible() && curSel[curMenu] == ARCADE_JOIN_ROW_2P)
+			{
+				arcadeJoinActivate(-1);  // menu row activation: no pad to adopt
+				break;
+			}
 			if (JE_quitRequest())
 			{
 				gameLoaded = true;
@@ -3294,7 +3571,13 @@ void JE_menuFunction(JE_byte select)
 				? MENU_LIMITED_OPTIONS
 				: MENU_OPTIONS;
 			break;
-		case 4:
+		case ARCADE_JOIN_ROW_1P:  // "2 PLAYER: JOIN" when present, else Quit
+		case ARCADE_JOIN_ROW_1P + 1:  // Quit, shifted down by the "2 PLAYER" row
+			if (arcadeJoinEligible() && curSel[curMenu] == ARCADE_JOIN_ROW_1P)
+			{
+				arcadeJoinActivate(-1);  // menu row activation: no pad to adopt
+				break;
+			}
 			if (JE_quitRequest())
 			{
 				gameLoaded = true;

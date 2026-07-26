@@ -1267,6 +1267,20 @@ level_loop:
 			hd_hud_msg_clear();  // HD (H3): drop the message shadow glyphs on erase
 		}
 
+		// Arcade P2's controller was unplugged mid-flight (ARCADE_JOIN_PLAN.md C):
+		// drop back to one player exactly as the galaga dragonwing drop below
+		// does -- clearing twoPlayerMode is the whole mechanism, P1 simply flies
+		// on solo. onePlayerAction is set so the ~15 arcade gates that spell
+		// "arcade" as (twoPlayerMode && !campaignCoop) || onePlayerAction stay
+		// true with neither flag left standing. P2's items are deliberately left
+		// untouched: reconnecting and rejoining at the next preflight menu
+		// re-initializes them anyway.
+		if (arcadeP2PadLost())
+		{
+			twoPlayerMode = false;
+			onePlayerAction = true;
+		}
+
 		/*------------------------Shield Gen-------------------------*/
 		if (galagaMode)
 		{
@@ -3960,18 +3974,12 @@ bool newGame(void)
 
 			player[0].items.ship = 8;  // Stalker
 		}
-		else if (twoPlayerMode)
-		{
-			for (uint i = 0; i < COUNTOF(player); ++i)
-				player[i].cash = 0;
-
-			player[0].items.ship = 11;  // Silver Ship
-
-			difficultyLevel++;  // Make it one step harder for 2-player mode!
-
-			inputDevice[0] = 1;
-			inputDevice[1] = 2;
-		}
+		// The old `else if (twoPlayerMode)` branch is gone: gameplaySelect() can no
+		// longer start a 2P arcade game (ARCADE_JOIN_PLAN.md A), so it was dead.
+		// Its side effects are deliberately not moved to the join path -- a
+		// mid-session join must not bump difficultyLevel, must not swap the ship
+		// P1 already started the run with (P1 keeps the Stalker), and must not
+		// stomp the inputDevice[] assignments the controller-config menu holds.
 		else if (richMode)
 		{
 			player[0].cash = 1000000;

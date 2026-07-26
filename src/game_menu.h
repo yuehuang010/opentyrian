@@ -27,6 +27,11 @@ typedef JE_byte JE_MenuChoiceType[MENU_MAX];
 JE_longint JE_cashLeft(void);
 void JE_itemScreen(void);
 
+// True when arcade P2's assigned controller has disconnected, i.e. the session
+// must drop back to one player (ARCADE_JOIN_PLAN.md C). Checked once per frame
+// at the preflight menu and again in flight (tyrian2.c).
+bool arcadeP2PadLost(void);
+
 void load_cubes(void);
 bool load_cube(int cube_slot, int cube_index);
 

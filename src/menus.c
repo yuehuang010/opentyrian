@@ -46,12 +46,27 @@ char gameplay_name[5][26];
 
 bool gameplaySelect(void)
 {
+	// ARCADE_JOIN_PLAN.md A: the two arcade rows collapse into one "Arcade" row
+	// that always starts solo. 2P arcade is now reached only by joining from the
+	// preflight menu (game_menu.c, arcadeJoinActivate), so there is no longer a
+	// menu item for it.
 	enum MenuItemIndex
 	{
 		MENU_ITEM_1_PLAYER_FULL_GAME = 0,
-		MENU_ITEM_1_PLAYER_ARCADE,
-		MENU_ITEM_2_PLAYER_ARCADE,
+		MENU_ITEM_ARCADE,
 		MENU_ITEM_NETWORK,
+		MENU_ITEM_COUNT,
+	};
+
+	// The tyrian.hdt data file ships no "Arcade" string -- gameplay_name[2]/[3]
+	// are the old "1 Player Arcade"/"2 Player Arcade" labels -- so the merged row
+	// uses a local literal, exactly as titleScreen() overrides menuText[4] with
+	// "Setup" (tyrian2.c).
+	const char *const menuItemText[MENU_ITEM_COUNT] =
+	{
+		gameplay_name[1],  // 1 Player Full Game
+		"Arcade",
+		gameplay_name[4],  // Network (drawn disabled)
 	};
 
 	if (shopSpriteSheet.data == NULL)
@@ -59,7 +74,7 @@ bool gameplaySelect(void)
 
 	bool restart = true;
 
-	const size_t menuItemsCount = COUNTOF(gameplay_name) - 1;
+	const size_t menuItemsCount = MENU_ITEM_COUNT;
 	size_t selectedIndex = MENU_ITEM_1_PLAYER_FULL_GAME;
 
 	const int xCenter = 320 / 2;
@@ -67,7 +82,7 @@ bool gameplaySelect(void)
 	const int yMenuItems = 54;
 	const int dyMenuItems = 24;
 	const int hMenuItem = 13;
-	int wMenuItem[COUNTOF(gameplay_name) - 1] = { 0 };
+	int wMenuItem[MENU_ITEM_COUNT] = { 0 };
 
 	for (; ; )
 	{
@@ -100,7 +115,7 @@ bool gameplaySelect(void)
 		// Draw menu items.
 		for (size_t i = 0; i < menuItemsCount; ++i)
 		{
-			const char *const text = gameplay_name[i + 1];
+			const char *const text = menuItemText[i];
 
 			wMenuItem[i] = JE_textWidth(text, FONT_NORMAL);
 			const int x = xCenter - wMenuItem[i] / 2;
@@ -219,15 +234,17 @@ bool gameplaySelect(void)
 			switch (selectedIndex)
 			{
 			case MENU_ITEM_1_PLAYER_FULL_GAME:
-			case MENU_ITEM_1_PLAYER_ARCADE:
-			case MENU_ITEM_2_PLAYER_ARCADE:
+			case MENU_ITEM_ARCADE:
 			{
 				JE_playSampleNum(S_SELECT);
 
 				fade_black(10);
 
-				onePlayerAction = selectedIndex == MENU_ITEM_1_PLAYER_ARCADE;
-				twoPlayerMode = selectedIndex == MENU_ITEM_2_PLAYER_ARCADE;
+				// Arcade always starts solo; a second player drops in later from
+				// the preflight menu, which flips onePlayerAction -> twoPlayerMode
+				// live (ARCADE_JOIN_PLAN.md B).
+				onePlayerAction = selectedIndex == MENU_ITEM_ARCADE;
+				twoPlayerMode = false;
 				hd_clear_backdrop();
 				return true;
 			}
