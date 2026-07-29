@@ -41,6 +41,7 @@ FontAlignment;
 
 void drawFontHvShadow(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value, bool black, int shadowDist);
 void drawFontHvFullShadow(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value, bool black, int shadowDist);
+void drawFontHvOutline(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value, Sint8 outlineValue, int dist);
 
 void drawFontHv(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value);
 void drawFontHvBlend(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value);

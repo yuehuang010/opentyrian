@@ -33,6 +33,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
 
 Sprite_array sprite_table[SPRITE_TABLES_MAX];
 
@@ -107,6 +108,69 @@ void free_sprites(unsigned int table)
 	}
 	
 	sprite_table[table].count = 0;
+}
+
+// Decodes a sprite into `mask` (width*height bytes): 0 where transparent, else
+// (0x10 | brightness nibble). Walks the RLE exactly as blit_sprite() does, minus
+// the surface. The HD font compositor needs the sprite's *exact* classic
+// silhouette and shading: its own anti-aliased HD assets differ from this mask by
+// a few percent of the glyph area, which is enough to punch hairline holes in an
+// outline built by unioning offset copies.
+bool sprite_shade_mask(unsigned int table, unsigned int index, Uint8 *mask)
+{
+	if (!sprite_exists(table, index))
+		return false;
+
+	const Sprite * const cur_sprite = sprite(table, index);
+
+	const Uint8 *data = cur_sprite->data;
+	const Uint8 * const data_ul = data + cur_sprite->size;
+
+	const unsigned int width = cur_sprite->width;
+	const size_t count = (size_t)width * cur_sprite->height;
+
+	memset(mask, 0, count);
+
+	size_t cursor = 0;
+	unsigned int x_offset = 0;
+
+	for (; data < data_ul; ++data)
+	{
+		switch (*data)
+		{
+		case 255:  // transparent pixels; next byte tells how many
+			data++;
+			cursor += *data;
+			x_offset += *data;
+			break;
+
+		case 254:  // next pixel row
+			cursor += width - x_offset;
+			x_offset = width;
+			break;
+
+		case 253:  // 1 transparent pixel
+			cursor++;
+			x_offset++;
+			break;
+
+		default:  // opaque pixel
+			if (cursor >= count)
+				return true;
+			mask[cursor] = 0x10 | (*data & 0x0f);
+
+			cursor++;
+			x_offset++;
+			break;
+		}
+		if (x_offset >= width)
+		{
+			cursor -= x_offset - width;  // undo overshoot; mask rows are contiguous
+			x_offset = 0;
+		}
+	}
+
+	return true;
 }
 
 // does not clip on left or right edges of surface

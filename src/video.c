@@ -1349,9 +1349,16 @@ void hd_flight_clear(void)
 // (src/sprite.c), which compute the destination palette index per pixel from the
 // glyph byte's low nibble (a 0..15 brightness level). We reproduce that math
 // against the live palette (colors[]) starting from a grayscale brightness map
-// (hdfont_<stem>_NN.dat: R = brightness*17, A = coverage; xBRZ 4x), synthesizing
-// one RGBA texture per distinct (table, index, hue, value, mode) and caching it
-// LRU. Any failure returns NULL, so the caller keeps the classic glyph.
+// (hdfont_<stem>_NN.dat: R = brightness*17, A = coverage; 4x), synthesizing one
+// RGBA texture per distinct (table, index, hue, value, mode) and caching it LRU.
+// Any failure returns NULL, so the caller keeps the classic glyph.
+//
+// The assets are produced by tools/hd_vectorize_font.py, which VECTOR-TRACES the
+// original glyphs: alpha is the sub-pixel coverage of the traced silhouette, and
+// R=G=B is the per-pixel source shade nibble, edge-extended before upsampling. (It
+// replaced the earlier xBRZ upscale of tools/hd_extract_font.py in place -- same
+// filenames, same HDPX layout, same 4x scale. Check hd_font_manifest.json's
+// "format" field to see which generation a data dir actually carries.)
 
 #define HD_FONT_TABLE_COUNT 3          // FONT_SHAPES, SMALL_FONT_SHAPES, TINY_FONT
 #define HD_FONT_GLYPH_MAX   128        // TINY_FONT has 127 glyphs
@@ -1453,6 +1460,10 @@ typedef struct
 	int shadow_mode;
 	int sdx, sdy;
 	bool full;
+	// 4-corner recolored outline baked into the same texture (see
+	// synth_hd_font_outlined); sdx == sdy == the outline distance when set.
+	bool outline;
+	Sint8 outline_value;
 	int ox, oy;
 	SDL_Texture *tex;
 	int w, h;
@@ -1595,7 +1606,7 @@ static SDL_Texture *synth_hd_font_combined(
 			shade[k] = colors[(Uint8)(hue_hi | hd_font_hv_shade(k, value))];
 	}
 
-	// Shadow copies, in HD px (assets are xBRZ 4x, so 1 logical px == 4 HD px).
+	// Shadow copies, in HD px (assets are 4x, so 1 logical px == 4 HD px).
 	int offx[4], offy[4], noff;
 	const int dxh = sdx * 4, dyh = sdy * 4;
 	if (full)
@@ -1681,21 +1692,27 @@ static SDL_Texture *synth_hd_font_combined(
 			}
 
 			// --- knockout + composite (glyph OVER shadow, premultiplied) ---
-			// Knock the shadow out under the glyph: as_eff = as*(1-ag). Then Porter-
-			// Duff "over" (glyph on top): A = ag + as_eff*(1-ag). The shadow is black
-			// so it contributes no color; premultiplied glyph color is G*ag. Where the
-			// glyph is absent (ag==0) A==as, color==black -> the shadow halo is byte-
-			// identical to the old separate shadow quad. Where the shadow is absent
-			// (as==0) A==ag, color==G -> the glyph is byte-identical to a plain glyph.
-			// Only in the overlap does the shadow's pull-to-black relax, which is the fix.
+			// Knock the shadow out under the glyph (as_eff = as*(1-ag)) so the glyph's
+			// anti-aliased edge blends toward the GLYPH color instead of being pulled
+			// to black -- but apply that knockout to the COLOR MIX ONLY. Coverage must
+			// stay the full Porter-Duff "over" alpha, A = ag + as_eff: deflating it by
+			// a second (1-ag) made the glyph/outline seam translucent (up to 25% at a
+			// half-covered edge pixel), so a light background showed through it as a
+			// hairline gap in the outline.
+			// Where the glyph is absent (ag==0) A==as and color==black -> the shadow
+			// halo is byte-identical to the old separate shadow quad. Where the shadow
+			// is absent (as==0) A==ag==A_mix and color==G -> byte-identical to a plain
+			// glyph. Only in the overlap does the shadow's pull-to-black relax.
 			float as_eff = as * (1.f - ag);
-			float A = ag + as_eff * (1.f - ag);
+			float A = ag + as_eff;                    // true coverage
+			float A_mix = ag + as_eff * (1.f - ag);   // knockout-weighted color mix
 			size_t dp = ((size_t)Y * W + X) * 4;
 			if (A <= 0.f)
 				continue;  // calloc already zeroed
-			rgba[dp + 0] = (Uint8)lrintf(Gr * ag / A);
-			rgba[dp + 1] = (Uint8)lrintf(Gg * ag / A);
-			rgba[dp + 2] = (Uint8)lrintf(Gb * ag / A);
+			// ag <= A_mix, so the unpremultiplied color can never exceed G.
+			rgba[dp + 0] = (Uint8)lrintf(Gr * ag / A_mix);
+			rgba[dp + 1] = (Uint8)lrintf(Gg * ag / A_mix);
+			rgba[dp + 2] = (Uint8)lrintf(Gb * ag / A_mix);
 			rgba[dp + 3] = (Uint8)lrintf(A * 255.f);
 		}
 	}
@@ -1723,8 +1740,239 @@ static SDL_Texture *synth_hd_font_combined(
 	return tex;
 }
 
+// Bilinear sample of the outline union (nonzero == covered) at continuous classic
+// coordinates, treating cells as unit squares centred on integer coordinates.
+static float hd_outline_sample(const Uint8 *cov, int w, int h, float u, float v)
+{
+	const int x0 = (int)floorf(u), y0 = (int)floorf(v);
+	const float fx = u - (float)x0, fy = v - (float)y0;
+
+	float acc = 0.f;
+	for (int dy = 0; dy <= 1; ++dy)
+	{
+		for (int dx = 0; dx <= 1; ++dx)
+		{
+			const int x = x0 + dx, y = y0 + dy;
+			if (x < 0 || y < 0 || x >= w || y >= h || cov[(size_t)y * w + x] == 0)
+				continue;
+			acc += (dx ? fx : 1.f - fx) * (dy ? fy : 1.f - fy);
+		}
+	}
+	return acc;
+}
+
+// Outline shade for an HD pixel: the union cell it lands in, or -- where the
+// rounding has pulled coverage in from a neighbour -- the nearest covered cell.
+static Uint8 hd_outline_shade(const Uint8 *cov, int w, int h, int cx, int cy)
+{
+	static const int nx[8] = { 1, -1,  0,  0,  1, -1,  1, -1 };
+	static const int ny[8] = { 0,  0,  1, -1,  1, -1, -1,  1 };
+
+	if (cx < 0) cx = 0;
+	if (cy < 0) cy = 0;
+	if (cx >= w) cx = w - 1;
+	if (cy >= h) cy = h - 1;
+
+	if (cov[(size_t)cy * w + cx] != 0)
+		return cov[(size_t)cy * w + cx] & 0x0f;
+
+	for (int i = 0; i < 8; ++i)
+	{
+		const int x = cx + nx[i], y = cy + ny[i];
+		if (x >= 0 && y >= 0 && x < w && y < h && cov[(size_t)y * w + x] != 0)
+			return cov[(size_t)y * w + x] & 0x0f;
+	}
+	return 0;
+}
+
+// Synthesize ONE truecolor texture containing the glyph over a recolored 4-corner
+// outline -- the classic {(-d,-d),(+d,+d),(+d,-d),(-d,+d)} blit_sprite_hv passes of
+// the title menu (src/tyrian2.c).
+//
+// The outline's SHAPE is unioned at CLASSIC resolution, from the sprite's exact
+// mask, and only then upscaled. That ordering is the whole fix: the classic passes
+// are opaque hard-edged copies, so their union leaves the 1px background channels
+// between and inside letters fully open. Unioning the anti-aliased HD asset instead
+// (which is what drawing the four copies as separate HD quads does) both fattens
+// each copy by ~half a logical pixel and, because the traced silhouette differs
+// from the hard classic mask by ~7% of glyph area at the 50% threshold, closes
+// those channels except for a ragged sliver -- read on screen as a hairline gap in
+// the outline. Later offsets overwrite earlier ones, matching the classic pass order.
+//
+// The upscale is bilinear-with-a-sharpened-ramp rather than nearest, which restores
+// the rounded corners and soft edges of the HD look: at a straight edge the 50%
+// crossing sits exactly on the classic pixel boundary (so the outline neither
+// fattens nor thins), while convex corners round off and the ramp anti-aliases.
+//
+// The glyph itself stays the smooth HD asset, composited on top with the shadow
+// knockout of synth_hd_font_combined (outline knocked out under the glyph for the
+// color mix, full coverage kept for alpha).
+#define HD_OUTLINE_SHARPNESS 3.0f
+
+static SDL_Texture *synth_hd_font_outlined(
+	unsigned int table, unsigned int index, Uint8 hue, Sint8 value, Sint8 outline_value, int dist,
+	int *out_w, int *out_h, int *out_ox, int *out_oy)
+{
+	const HDFontBrightness *b = load_hd_font_brightness(table, index);
+	if (b == NULL || !sprite_exists(table, index))
+		return NULL;
+
+	const int cw = sprite(table, index)->width, ch = sprite(table, index)->height;
+	const int bw = b->w, bh = b->h;
+
+	// The outline rasterizer maps HD px -> classic px by /4, so the asset must be
+	// the exact 4x upscale of the sprite. Anything else -> classic fallback.
+	if (dist < 1 || cw <= 0 || ch <= 0 || bw != cw * 4 || bh != ch * 4)
+		return NULL;
+
+	Uint8 *mask = malloc((size_t)cw * ch);
+	if (mask == NULL)
+		return NULL;
+	if (!sprite_shade_mask(table, index, mask))
+	{
+		free(mask);
+		return NULL;
+	}
+
+	SDL_Color shade[16], outline_shade[16];
+	const Uint8 hue_hi = (Uint8)(hue << 4);
+	for (int k = 0; k < 16; ++k)
+	{
+		shade[k] = colors[(Uint8)(hue_hi | hd_font_hv_shade(k, value))];
+		outline_shade[k] = colors[(Uint8)(hue_hi | hd_font_hv_shade(k, outline_value))];
+	}
+
+	// Union the four copies at CLASSIC resolution, in classic pass order (later
+	// copies overwrite earlier ones where they overlap).
+	const int ow = cw + 2 * dist, oh = ch + 2 * dist;
+
+	Uint8 *outline = calloc((size_t)ow * oh, 1);
+	if (outline == NULL)
+	{
+		free(mask);
+		return NULL;
+	}
+
+	static const int offx[4] = { -1,  1,  1, -1 };
+	static const int offy[4] = { -1,  1, -1,  1 };
+	for (int i = 0; i < 4; ++i)
+	{
+		for (int y = 0; y < ch; ++y)
+		{
+			for (int x = 0; x < cw; ++x)
+			{
+				const Uint8 m = mask[(size_t)y * cw + x];
+				if (m == 0)
+					continue;
+				const int ox = x + offx[i] * dist + dist, oy = y + offy[i] * dist + dist;
+				outline[(size_t)oy * ow + ox] = m;
+			}
+		}
+	}
+
+	free(mask);
+
+	const int d = dist * 4;
+	const int W = bw + 2 * d, H = bh + 2 * d;
+	const int gx = d, gy = d;  // glyph placement within the canvas
+
+	Uint8 *rgba = calloc((size_t)W * H, 4);
+	if (rgba == NULL)
+	{
+		free(outline);
+		return NULL;
+	}
+
+	for (int Y = 0; Y < H; ++Y)
+	{
+		for (int X = 0; X < W; ++X)
+		{
+			// --- glyph sample (top layer), anti-aliased HD asset ---
+			float ag = 0.f, Gr = 0.f, Gg = 0.f, Gb = 0.f;
+			const int sxg = X - gx, syg = Y - gy;
+			if (sxg >= 0 && sxg < bw && syg >= 0 && syg < bh)
+			{
+				const size_t sp = (size_t)syg * bw + sxg;
+				const Uint8 cov = b->pixels[sp * 4 + 3];
+				if (cov != 0)
+				{
+					const Uint8 rchan = b->pixels[sp * 4 + 0];
+					float pos = (rchan / 255.0f) * 15.0f;
+					int lo = (int)pos;
+					if (lo > 14)
+						lo = 14;
+					const int hi = lo + 1;
+					const float t = pos - (float)lo;
+					Gr = shade[lo].r + (shade[hi].r - shade[lo].r) * t;
+					Gg = shade[lo].g + (shade[hi].g - shade[lo].g) * t;
+					Gb = shade[lo].b + (shade[hi].b - shade[lo].b) * t;
+					ag = cov / 255.f;
+				}
+			}
+
+			// --- outline sample (bottom layer): the classic-resolution union,
+			// upscaled with a sharpened bilinear ramp (rounded corners, AA edges) ---
+			const float u = (X + 0.5f) / 4.f - 0.5f, v = (Y + 0.5f) / 4.f - 0.5f;
+			float as = (hd_outline_sample(outline, ow, oh, u, v) - 0.5f) * HD_OUTLINE_SHARPNESS + 0.5f;
+			if (as < 0.f)
+				as = 0.f;
+			else if (as > 1.f)
+				as = 1.f;
+
+			float Or = 0.f, Og = 0.f, Ob = 0.f;
+			if (as > 0.f)
+			{
+				const SDL_Color c = outline_shade[hd_outline_shade(outline, ow, oh, X / 4, Y / 4)];
+				Or = c.r;
+				Og = c.g;
+				Ob = c.b;
+			}
+
+			// Knockout + composite, as in synth_hd_font_combined: the outline is
+			// knocked out under the glyph for the COLOR mix only, so the glyph's
+			// anti-aliased edge blends toward the glyph color rather than being
+			// pulled into the outline color, while alpha keeps full coverage.
+			const float as_eff = as * (1.f - ag);
+			const float A = ag + as_eff;
+			const float A_mix = ag + as_eff * (1.f - ag);
+			if (A <= 0.f)
+				continue;  // calloc already zeroed
+			const size_t dp = ((size_t)Y * W + X) * 4;
+			rgba[dp + 0] = (Uint8)lrintf((Gr * ag + Or * as_eff) / A_mix);
+			rgba[dp + 1] = (Uint8)lrintf((Gg * ag + Og * as_eff) / A_mix);
+			rgba[dp + 2] = (Uint8)lrintf((Gb * ag + Ob * as_eff) / A_mix);
+			rgba[dp + 3] = (Uint8)lrintf(A * 255.f);
+		}
+	}
+
+	free(outline);
+
+	SDL_Texture *tex = SDL_CreateTexture(main_window_renderer, SDL_PIXELFORMAT_RGBA32,
+		SDL_TEXTUREACCESS_STATIC, W, H);
+	if (tex == NULL)
+	{
+		free(rgba);
+		return NULL;
+	}
+	if (SDL_UpdateTexture(tex, NULL, rgba, W * 4) != 0)
+	{
+		SDL_DestroyTexture(tex);
+		free(rgba);
+		return NULL;
+	}
+	SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+	free(rgba);
+
+	*out_w = W;
+	*out_h = H;
+	*out_ox = -dist;
+	*out_oy = -dist;
+	return tex;
+}
+
 static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, Uint8 hue, Sint8 value, int mode,
-	int shadow_mode, int sdx, int sdy, bool full, int *out_w, int *out_h, int *out_ox, int *out_oy)
+	int shadow_mode, int sdx, int sdy, bool full, bool outline, Sint8 outline_value,
+	int *out_w, int *out_h, int *out_ox, int *out_oy)
 {
 	// DARK / BLACK glyphs ignore hue+value; normalize the key so they dedupe.
 	if (mode == HD_FONT_MODE_DARK || mode == HD_FONT_MODE_BLACK)
@@ -1733,13 +1981,15 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 		value = 0;
 	}
 	// Normalize the shadow spec for plain glyphs so they dedupe regardless of the
-	// (unused) offset arguments.
-	if (shadow_mode < 0)
+	// (unused) offset arguments. An outlined glyph keeps sdx/sdy as its distance.
+	if (shadow_mode < 0 && !outline)
 	{
 		shadow_mode = -1;
 		sdx = sdy = 0;
 		full = false;
 	}
+	if (!outline)
+		outline_value = 0;
 
 	++hd_font_cache_clock;
 
@@ -1748,7 +1998,8 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 		HDFontCacheEntry *e = &hd_font_cache[i];
 		if (e->used && e->table == table && e->index == index &&
 		    e->hue == hue && e->value == value && e->mode == mode &&
-		    e->shadow_mode == shadow_mode && e->sdx == sdx && e->sdy == sdy && e->full == full)
+		    e->shadow_mode == shadow_mode && e->sdx == sdx && e->sdy == sdy && e->full == full &&
+		    e->outline == outline && e->outline_value == outline_value)
 		{
 			e->last_touch = hd_font_cache_clock;
 			*out_w = e->w;
@@ -1760,9 +2011,11 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 	}
 
 	int gw = 0, gh = 0, ox = 0, oy = 0;
-	SDL_Texture *tex = (shadow_mode < 0)
-		? synth_hd_font_glyph(table, index, hue, value, mode, &gw, &gh)
-		: synth_hd_font_combined(table, index, hue, value, mode, shadow_mode, sdx, sdy, full, &gw, &gh, &ox, &oy);
+	SDL_Texture *tex = outline
+		? synth_hd_font_outlined(table, index, hue, value, outline_value, sdx, &gw, &gh, &ox, &oy)
+		: (shadow_mode < 0)
+			? synth_hd_font_glyph(table, index, hue, value, mode, &gw, &gh)
+			: synth_hd_font_combined(table, index, hue, value, mode, shadow_mode, sdx, sdy, full, &gw, &gh, &ox, &oy);
 	if (tex == NULL)
 		return NULL;
 
@@ -1799,6 +2052,8 @@ static SDL_Texture *load_hd_font_glyph(unsigned int table, unsigned int index, U
 	hd_font_cache[slot].sdx = sdx;
 	hd_font_cache[slot].sdy = sdy;
 	hd_font_cache[slot].full = full;
+	hd_font_cache[slot].outline = outline;
+	hd_font_cache[slot].outline_value = outline_value;
 	hd_font_cache[slot].ox = ox;
 	hd_font_cache[slot].oy = oy;
 	hd_font_cache[slot].tex = tex;
@@ -1854,13 +2109,14 @@ bool hd_font_active(SDL_Surface *screen)
 // Queues one HD glyph texture (already synthesized). Returns false if the glyph is
 // out of range, the asset is missing, or the queue is full.
 static bool hd_font_queue_glyph(unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode,
-	Uint8 hue, Sint8 value, int shadow_mode, int sdx, int sdy, bool full)
+	Uint8 hue, Sint8 value, int shadow_mode, int sdx, int sdy, bool full, bool outline, Sint8 outline_value)
 {
 	if (table >= HD_FONT_TABLE_COUNT || index >= HD_FONT_GLYPH_MAX)
 		return false;
 
 	int gw = 0, gh = 0, ox = 0, oy = 0;
-	SDL_Texture *tex = load_hd_font_glyph(table, index, hue, value, (int)mode, shadow_mode, sdx, sdy, full, &gw, &gh, &ox, &oy);
+	SDL_Texture *tex = load_hd_font_glyph(table, index, hue, value, (int)mode, shadow_mode, sdx, sdy, full,
+		outline, outline_value, &gw, &gh, &ox, &oy);
 	if (tex == NULL)
 		return false;
 
@@ -1878,21 +2134,23 @@ static bool hd_font_queue_glyph(unsigned int table, unsigned int index, int lx, 
 	e->tex = tex;
 	e->lx = lx + ox;  // combined textures may extend up/left of the draw position
 	e->ly = ly + oy;
-	e->lw = gw / 4;  // HD assets are xBRZ 4x; logical footprint == classic glyph size
+	e->lw = gw / 4;  // HD assets are 4x; logical footprint == classic glyph size
 	e->lh = gh / 4;
 	return true;
 }
 
-// TINY_FONT flat glyphs (the pure straight-stroke shapes, e.g. '4') are
-// corner-softened in tools/hd_extract_font.py so their HD assets carry the same
-// anti-aliased convex corners as their gradient neighbours; the tiny font can
-// therefore use the HD path uniformly (no per-glyph brightness disparity).
+// Every glyph's HD asset carries true anti-aliased coverage -- the vector trace
+// derives alpha from a supersampled fill of the presence mask, so the flat
+// straight-stroke shapes (e.g. '4') get the same soft convex corners as their
+// gradient neighbours without the per-glyph corner-softening the older xBRZ
+// extractor needed. The tiny font can therefore use the HD path uniformly (no
+// per-glyph brightness disparity).
 bool hd_font_emit(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly, HDFontMode mode, Uint8 hue, Sint8 value)
 {
 	if (!hd_font_active(screen))
 		return false;
 
-	return hd_font_queue_glyph(table, index, lx, ly, mode, hue, value, -1, 0, 0, false);
+	return hd_font_queue_glyph(table, index, lx, ly, mode, hue, value, -1, 0, 0, false, false, 0);
 }
 
 // Emit a glyph composited with its own drop shadow / outline as a SINGLE quad (see
@@ -1905,7 +2163,20 @@ bool hd_font_emit_shadowed(SDL_Surface *screen, unsigned int table, unsigned int
 	if (!hd_font_active(screen))
 		return false;
 
-	return hd_font_queue_glyph(table, index, lx, ly, glyph_mode, hue, value, (int)shadow_mode, sdx, sdy, full);
+	return hd_font_queue_glyph(table, index, lx, ly, glyph_mode, hue, value, (int)shadow_mode, sdx, sdy, full, false, 0);
+}
+
+// Emit a glyph composited with a recolored 4-corner outline as a SINGLE quad (see
+// synth_hd_font_outlined). lx,ly is the MAIN glyph's draw position. Returns false
+// -> caller must draw the classic outline + glyph passes.
+bool hd_font_emit_outlined(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly,
+	Uint8 hue, Sint8 value, Sint8 outline_value, int dist)
+{
+	if (!hd_font_active(screen))
+		return false;
+
+	return hd_font_queue_glyph(table, index, lx, ly, HD_FONT_MODE_HV, hue, value, -1, dist, dist, false,
+		true, outline_value);
 }
 
 // Present-time HD glyph hook for the procedural HD HUD panel (src/hd_hud.c). The
@@ -1921,7 +2192,7 @@ bool hd_hud_queue_glyph(unsigned int table, unsigned int index, int lx, int ly, 
 	if (!hd_mode)
 		return false;
 
-	return hd_font_queue_glyph(table, index, lx, ly, HD_FONT_MODE_HV, hue, value, -1, 0, 0, false);
+	return hd_font_queue_glyph(table, index, lx, ly, HD_FONT_MODE_HV, hue, value, -1, 0, 0, false, false, 0);
 }
 
 // Draws (and drains) the HD font queue as the topmost UI layer, mapping each

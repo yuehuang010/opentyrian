@@ -75,6 +75,10 @@ static inline Uint16 get_sprite_height(unsigned int table, unsigned int index)
 	return (sprite_exists(table, index) ? sprite(table, index)->height : 0);
 }
 
+// Decodes a sprite into width*height bytes: 0 where transparent, else
+// (0x10 | brightness nibble) -- the same low nibble blit_sprite_hv() recolors by.
+bool sprite_shade_mask(unsigned int table, unsigned int index, Uint8 *mask);
+
 void load_sprites_file(unsigned int table, const char *filename);
 void load_sprites(unsigned int table, FILE *f);
 void free_sprites(unsigned int table);

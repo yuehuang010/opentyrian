@@ -3687,11 +3687,10 @@ bool titleScreen(void)
 			const int x = xCenter - wMenuItem[i] / 2;
 			const int y = yMenuItems + hMenuItem * i;
 
-			drawFontHv(VGAScreen, x - 1, y - 1, menuText[i], FONT_NORMAL, 15, -10);
-			drawFontHv(VGAScreen, x + 1, y + 1, menuText[i], FONT_NORMAL, 15, -10);
-			drawFontHv(VGAScreen, x + 1, y - 1, menuText[i], FONT_NORMAL, 15, -10);
-			drawFontHv(VGAScreen, x - 1, y + 1, menuText[i], FONT_NORMAL, 15, -10);
-			drawFontHv(VGAScreen, x,     y,     menuText[i], FONT_NORMAL, 15, -3);
+			// Outline + glyph in one call: in HD mode this composites them into a
+			// single quad, so the outline copies union instead of accumulating
+			// alpha over the 1px background channels between and inside letters.
+			drawFontHvOutline(VGAScreen, x, y, menuText[i], FONT_NORMAL, 15, -3, -10, 1);
 		}
 
 		// Highlight selected menu item.

@@ -31,7 +31,6 @@
 #include "fonthand.h"
 #include "keyboard.h"
 #include "mouse.h"
-#include "network.h"
 #include "nortsong.h"
 #include "opentyr.h"
 #include "palette.h"
@@ -52,21 +51,20 @@ bool gameplaySelect(void)
 	// menu item for it.
 	enum MenuItemIndex
 	{
-		MENU_ITEM_1_PLAYER_FULL_GAME = 0,
+		MENU_ITEM_CAMPAIGN = 0,
 		MENU_ITEM_ARCADE,
-		MENU_ITEM_NETWORK,
 		MENU_ITEM_COUNT,
 	};
 
-	// The tyrian.hdt data file ships no "Arcade" string -- gameplay_name[2]/[3]
-	// are the old "1 Player Arcade"/"2 Player Arcade" labels -- so the merged row
-	// uses a local literal, exactly as titleScreen() overrides menuText[4] with
-	// "Setup" (tyrian2.c).
+	// The tyrian.hdt data file has no strings for this menu's current wording --
+	// gameplay_name[] holds the old "1 Player Full Game"/"1 Player Arcade"/...
+	// labels -- so header and rows use local literals, exactly as titleScreen()
+	// overrides menuText[4] with "Setup" (tyrian2.c).
+	const char *const menuHeaderText = "Game Mode";
 	const char *const menuItemText[MENU_ITEM_COUNT] =
 	{
-		gameplay_name[1],  // 1 Player Full Game
+		"Campaign",
 		"Arcade",
-		gameplay_name[4],  // Network (drawn disabled)
 	};
 
 	if (shopSpriteSheet.data == NULL)
@@ -75,7 +73,7 @@ bool gameplaySelect(void)
 	bool restart = true;
 
 	const size_t menuItemsCount = MENU_ITEM_COUNT;
-	size_t selectedIndex = MENU_ITEM_1_PLAYER_FULL_GAME;
+	size_t selectedIndex = MENU_ITEM_CAMPAIGN;
 
 	const int xCenter = 320 / 2;
 	const int yMenuHeader = 20;
@@ -110,7 +108,7 @@ bool gameplaySelect(void)
 
 		// Draw header to VGAScreen each frame so it renders through the HD font
 		// path (text baked into VGAScreen2 stays classic; see hd_font_active).
-		drawFontHvShadowAligned(VGAScreen, xCenter, yMenuHeader, gameplay_name[0], FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
+		drawFontHvShadowAligned(VGAScreen, xCenter, yMenuHeader, menuHeaderText, FONT_LARGE, ALIGN_CENTER, 15, -3, false, 2);
 
 		// Draw menu items.
 		for (size_t i = 0; i < menuItemsCount; ++i)
@@ -122,9 +120,8 @@ bool gameplaySelect(void)
 			const int y = yMenuItems + dyMenuItems * i;
 
 			const bool selected = i == selectedIndex;
-			const bool disabled = i == MENU_ITEM_NETWORK;
 
-			drawFontHvShadow(VGAScreen, x, y, text, FONT_NORMAL, 15, -4 + (selected ? 2 : 0) + (disabled ? -4 : 0), false, 2);
+			drawFontHvShadow(VGAScreen, x, y, text, FONT_NORMAL, 15, -4 + (selected ? 2 : 0), false, 2);
 		}
 
 		if (restart)
@@ -233,7 +230,7 @@ bool gameplaySelect(void)
 		{
 			switch (selectedIndex)
 			{
-			case MENU_ITEM_1_PLAYER_FULL_GAME:
+			case MENU_ITEM_CAMPAIGN:
 			case MENU_ITEM_ARCADE:
 			{
 				JE_playSampleNum(S_SELECT);
@@ -247,11 +244,6 @@ bool gameplaySelect(void)
 				twoPlayerMode = false;
 				hd_clear_backdrop();
 				return true;
-			}
-			case MENU_ITEM_NETWORK:
-			{
-				JE_playSampleNum(S_SPRING);
-				break;
 			}
 			default:
 				break;

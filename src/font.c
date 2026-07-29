@@ -209,6 +209,83 @@ void drawFontHvFullShadow(SDL_Surface *surface, int x, int y, const char *text, 
 	}
 }
 
+/**
+ * \brief Draws text with a recolored outline at the four diagonal corners.
+ *
+ * The classic form is four \c drawFontHv() passes at (±dist, ±dist) shaded with
+ * \p outlineValue, then the glyph itself -- the title menu's own text style (see
+ * titleScreen() in src/tyrian2.c).
+ *
+ * A '~' in the text is not drawn but instead toggles highlighting which
+ * increases \c value by 4.
+ *
+ * @param surface destination surface
+ * @param x initial x-position in pixels
+ * @param y initial upper y-position in pixels
+ * @param text text to be drawn
+ * @param font style/size of text
+ * @param hue hue component of both the text and outline color
+ * @param value value component of the text color
+ * @param outlineValue value component of the outline color
+ * @param dist distance in pixels of each outline copy from the text
+ */
+void drawFontHvOutline(SDL_Surface *surface, int x, int y, const char *text, Font font, Uint8 hue, Sint8 value, Sint8 outlineValue, int dist)
+{
+	// Classic: four independent recolored passes + the opaque glyph. Byte-identical
+	// when HD is inactive.
+	if (!hd_font_active(surface))
+	{
+		drawFontHv(surface, x - dist, y - dist, text, font, hue, outlineValue);
+		drawFontHv(surface, x + dist, y + dist, text, font, hue, outlineValue);
+		drawFontHv(surface, x + dist, y - dist, text, font, hue, outlineValue);
+		drawFontHv(surface, x - dist, y + dist, text, font, hue, outlineValue);
+		drawFontHv(surface, x, y, text, font, hue, value);
+		return;
+	}
+
+	// HD: composite each glyph over its own outline as ONE quad. Drawn as five
+	// separate anti-aliased quads instead, the four outline copies accumulate alpha
+	// and swallow the 1px background channels the classic passes leave open,
+	// stranding a hairline sliver in the middle of the outline.
+	bool highlight = false;
+
+	for (; *text != '\0'; ++text)
+	{
+		int sprite_id = fontMap[(unsigned char)*text];
+
+		switch (*text)
+		{
+		case ' ':
+			x += 6;
+			break;
+
+		case '~':
+			highlight = !highlight;
+			if (highlight)
+				value += 4;
+			else
+				value -= 4;
+			break;
+
+		default:
+			if (sprite_id != -1 && sprite_exists(font, sprite_id))
+			{
+				if (!hd_font_emit_outlined(surface, font, sprite_id, x, y, hue, value, outlineValue, dist))
+				{
+					blit_sprite_hv(surface, x - dist, y - dist, font, sprite_id, hue, outlineValue);
+					blit_sprite_hv(surface, x + dist, y + dist, font, sprite_id, hue, outlineValue);
+					blit_sprite_hv(surface, x + dist, y - dist, font, sprite_id, hue, outlineValue);
+					blit_sprite_hv(surface, x - dist, y + dist, font, sprite_id, hue, outlineValue);
+					blit_sprite_hv(surface, x, y, font, sprite_id, hue, value);
+				}
+
+				x += sprite(font, sprite_id)->width + 1;
+			}
+			break;
+		}
+	}
+}
+
 void drawFontHvFullShadowAligned(SDL_Surface *surface, int x, int y, const char *text, Font font, FontAlignment alignment, Uint8 hue, Sint8 value, bool black, int shadowDist)
 {
 	switch (alignment)

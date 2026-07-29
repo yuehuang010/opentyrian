@@ -158,6 +158,17 @@ bool hd_font_active(SDL_Surface *screen);
 bool hd_font_emit_shadowed(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly,
 	HDFontMode glyph_mode, Uint8 hue, Sint8 value, HDFontMode shadow_mode, int sdx, int sdy, bool full);
 
+// Emit a glyph composited with a recolored 4-corner outline -- copies at
+// {(-d,-d),(+d,+d),(+d,-d),(-d,+d)} shaded (hue, outline_value) -- as a SINGLE HD
+// quad. Unlike the shadow above, the outline is built from the sprite's exact
+// CLASSIC silhouette (sprite_coverage_mask), not the anti-aliased HD asset: the
+// classic multi-pass form draws opaque copies whose union leaves 1px background
+// channels open between and inside letters, and reproducing that needs the exact
+// mask -- the HD asset's anti-aliased silhouette punches hairline holes in the
+// union instead. Returns false -> caller must draw the classic outline + glyph passes.
+bool hd_font_emit_outlined(SDL_Surface *screen, unsigned int table, unsigned int index, int lx, int ly,
+	Uint8 hue, Sint8 value, Sint8 outline_value, int dist);
+
 // Set while text must paint persistent classic pixels even though it targets
 // VGAScreenSeg outside the flight loop -- e.g. the level-start HUD text, which is
 // drawn once before hd_flight_active goes true and must survive every present of
